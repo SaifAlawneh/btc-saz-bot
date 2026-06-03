@@ -1,17 +1,17 @@
 import os
 import asyncio
 import logging
+import requests
 from datetime import datetime
-import yfinance as yf
 import pandas as pd
 import numpy as np
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 import ta
 
 # ==================== CONFIG ====================
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8892334042:AAEGw0XzDMrB-benCgbK7BMMrJ8ljOEtP6s")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "@btc_signals_saz")
-INTERVAL_MINUTES = 60                # كل كم دقيقة يبعت إشارة
+INTERVAL_MINUTES = 60
 
 logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -20,14 +20,32 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# ==================== جلب البيانات ====================
-def get_btc_data(interval="15m", period="5d"):
-    """جلب بيانات BTC/USD من Yahoo Finance"""
+# ==================== جلب البيانات من Binance ====================
+def get_btc_data(interval="15m", limit=300):
+    """جلب بيانات BTC/USDT من Binance API مجاناً"""
     try:
-        ticker = yf.Ticker("BTC-USD")
-        df = ticker.history(period=period, interval=interval)
-        if df.empty:
-            raise ValueError("No data returned")
+        url = f"https://api.binance.com/api/v3/klines"
+        params = {
+            "symbol": "BTCUSDT",
+            "interval": interval,
+            "limit": limit
+        }
+        response = requests.get(url, params=params, timeout=10)
+        data = response.json()
+
+        df = pd.DataFrame(data, columns=[
+            'timestamp', 'Open', 'High', 'Low', 'Close', 'Volume',
+            'close_time', 'quote_volume', 'trades', 'taker_buy_base',
+            'taker_buy_quote', 'ignore'
+        ])
+
+        df['Open']   = pd.to_numeric(df['Open'])
+        df['High']   = pd.to_numeric(df['High'])
+        df['Low']    = pd.to_numeric(df['Low'])
+        df['Close']  = pd.to_numeric(df['Close'])
+        df['Volume'] = pd.to_numeric(df['Volume'])
+        df.index = pd.to_datetime(df['timestamp'], unit='ms')
+
         return df
     except Exception as e:
         logger.error(f"خطأ في جلب البيانات ({interval}): {e}")
@@ -40,13 +58,11 @@ def calculate_indicators(df):
     high  = df['High']
     low   = df['Low']
 
-    # Trend
     df['EMA9']   = ta.trend.EMAIndicator(close, window=9).ema_indicator()
     df['EMA21']  = ta.trend.EMAIndicator(close, window=21).ema_indicator()
     df['EMA50']  = ta.trend.EMAIndicator(close, window=50).ema_indicator()
     df['EMA200'] = ta.trend.EMAIndicator(close, window=200).ema_indicator()
 
-    # Momentum
     df['RSI']  = ta.momentum.RSIIndicator(close, window=14).rsi()
     macd = ta.trend.MACD(close, window_fast=12, window_slow=26, window_sign=9)
     df['MACD']        = macd.macd()
@@ -57,33 +73,27 @@ def calculate_indicators(df):
     df['Stoch_K'] = stoch.stoch()
     df['Stoch_D'] = stoch.stoch_signal()
 
-    # Volatility
     bb = ta.volatility.BollingerBands(close, window=20, window_dev=2)
     df['BB_Upper'] = bb.bollinger_hband()
     df['BB_Lower'] = bb.bollinger_lband()
     df['BB_Mid']   = bb.bollinger_mavg()
-    df['BB_Width'] = (df['BB_Upper'] - df['BB_Lower']) / df['BB_Mid']  # squeeze detector
     df['ATR'] = ta.volatility.AverageTrueRange(high, low, close, window=14).average_true_range()
 
-    # Volume
-    df['OBV']    = ta.volume.OnBalanceVolumeIndicator(close, df['Volume']).on_balance_volume()
     df['Volume_MA'] = df['Volume'].rolling(20).mean()
 
-    # Pivot Points
     df['Pivot'] = (high.shift(1) + low.shift(1) + close.shift(1)) / 3
     df['R1'] = 2 * df['Pivot'] - low.shift(1)
     df['S1'] = 2 * df['Pivot'] - high.shift(1)
     df['R2'] = df['Pivot'] + (high.shift(1) - low.shift(1))
     df['S2'] = df['Pivot'] - (high.shift(1) - low.shift(1))
     df['R3'] = high.shift(1) + 2 * (df['Pivot'] - low.shift(1))
-    df['S3'] = low.shift(1)  - 2 * (high.shift(1) - df['Pivot'])
+    df['S3'] = low.shift(1) - 2 * (high.shift(1) - df['Pivot'])
 
     return df
 
 
-# ==================== تحليل فريم واحد ====================
+# ==================== تحليل فريم ====================
 def analyze_timeframe(df, label):
-    """يحلل فريم واحد ويرجع direction + score + تفاصيل"""
     df = calculate_indicators(df)
     last = df.iloc[-1]
     price = last['Close']
@@ -92,7 +102,6 @@ def analyze_timeframe(df, label):
     score_sell = 0
     details    = []
 
-    # --- RSI ---
     rsi = last['RSI']
     if rsi < 30:
         score_buy += 25; details.append(f"RSI تشبع بيعي ({rsi:.0f}) 🟢")
@@ -103,37 +112,31 @@ def analyze_timeframe(df, label):
     elif rsi > 55:
         score_sell += 12; details.append(f"RSI منطقة بيع ({rsi:.0f})")
 
-    # --- MACD ---
     if last['MACD'] > last['MACD_Signal'] and last['MACD_Hist'] > 0:
         score_buy += 20; details.append("MACD إيجابي ↗️")
     elif last['MACD'] < last['MACD_Signal'] and last['MACD_Hist'] < 0:
         score_sell += 20; details.append("MACD سلبي ↘️")
 
-    # --- EMA Stack ---
     if last['EMA9'] > last['EMA21'] > last['EMA50']:
         score_buy += 20; details.append("EMAs مرتبة صعوداً 📈")
     elif last['EMA9'] < last['EMA21'] < last['EMA50']:
         score_sell += 20; details.append("EMAs مرتبة هبوطاً 📉")
 
-    # --- Price vs EMA200 ---
     if price > last['EMA200']:
         score_buy += 15; details.append("فوق EMA200 ✅")
     else:
         score_sell += 15; details.append("تحت EMA200 ⚠️")
 
-    # --- Bollinger Bands ---
     if price <= last['BB_Lower']:
         score_buy += 15; details.append("عند Band السفلي 🟢")
     elif price >= last['BB_Upper']:
         score_sell += 15; details.append("عند Band العلوي 🔴")
 
-    # --- Stochastic ---
     if last['Stoch_K'] < 20:
         score_buy += 10; details.append("Stoch تشبع بيعي")
     elif last['Stoch_K'] > 80:
         score_sell += 10; details.append("Stoch تشبع شرائي")
 
-    # --- Volume Confirmation ---
     if last['Volume'] > last['Volume_MA'] * 1.5:
         if score_buy > score_sell:
             score_buy += 10; details.append("حجم تداول مرتفع 💥")
@@ -152,11 +155,9 @@ def analyze_timeframe(df, label):
 
 # ==================== Price Action ====================
 def detect_patterns(df):
-    """كشف أنماط الشموع"""
     patterns = []
     c  = df.iloc[-1]
     p1 = df.iloc[-2]
-    p2 = df.iloc[-3]
 
     body        = abs(c['Close'] - c['Open'])
     candle_size = c['High'] - c['Low']
@@ -166,69 +167,38 @@ def detect_patterns(df):
     if candle_size == 0:
         return patterns
 
-    # Bullish Engulfing
     if (p1['Close'] < p1['Open'] and c['Close'] > c['Open'] and
             c['Close'] > p1['Open'] and c['Open'] < p1['Close']):
         patterns.append(("BUY", "Bullish Engulfing 🕯️", 80))
 
-    # Bearish Engulfing
     if (p1['Close'] > p1['Open'] and c['Close'] < c['Open'] and
             c['Close'] < p1['Open'] and c['Open'] > p1['Close']):
         patterns.append(("SELL", "Bearish Engulfing 🕯️", 80))
 
-    # Hammer
     if lower_wick > 2 * body and upper_wick < body * 0.5 and c['Close'] > c['Open']:
         patterns.append(("BUY", "Hammer 🔨", 72))
 
-    # Shooting Star
     if upper_wick > 2 * body and lower_wick < body * 0.5 and c['Close'] < c['Open']:
         patterns.append(("SELL", "Shooting Star ⭐", 72))
 
-    # Doji
     if body < 0.05 * candle_size:
         patterns.append(("NEUTRAL", "Doji ⚖️ - تردد", 50))
-
-    # Three White Soldiers
-    if (all(df.iloc[i]['Close'] > df.iloc[i]['Open'] for i in [-3, -2, -1]) and
-            df.iloc[-1]['Close'] > df.iloc[-2]['Close'] > df.iloc[-3]['Close']):
-        patterns.append(("BUY", "Three White Soldiers 🪖🪖🪖", 85))
-
-    # Three Black Crows
-    if (all(df.iloc[i]['Close'] < df.iloc[i]['Open'] for i in [-3, -2, -1]) and
-            df.iloc[-1]['Close'] < df.iloc[-2]['Close'] < df.iloc[-3]['Close']):
-        patterns.append(("SELL", "Three Black Crows 🐦🐦🐦", 85))
-
-    # Morning Star
-    if (p2['Close'] < p2['Open'] and
-            abs(p1['Close'] - p1['Open']) < 0.3 * abs(p2['Close'] - p2['Open']) and
-            c['Close'] > c['Open'] and c['Close'] > (p2['Open'] + p2['Close']) / 2):
-        patterns.append(("BUY", "Morning Star 🌅", 78))
-
-    # Evening Star
-    if (p2['Close'] > p2['Open'] and
-            abs(p1['Close'] - p1['Open']) < 0.3 * abs(p2['Close'] - p2['Open']) and
-            c['Close'] < c['Open'] and c['Close'] < (p2['Open'] + p2['Close']) / 2):
-        patterns.append(("SELL", "Evening Star 🌇", 78))
 
     return patterns
 
 
-# ==================== Multi-Timeframe Analysis ====================
+# ==================== Multi-Timeframe ====================
 def multi_timeframe_analysis():
-    """تحليل 3 فريمات وإيجاد التوافق"""
-
-    # جلب البيانات للفريمات الثلاثة
     frames = {
-        "Scalping (15m) ⚡": get_btc_data("15m", "3d"),
-        "Intraday (1h) 🕐":  get_btc_data("1h",  "10d"),
-        "Swing (1d) 📅":     get_btc_data("1d",  "90d"),
+        "Scalping (15m) ⚡": get_btc_data("15m", 300),
+        "Intraday (1h) 🕐":  get_btc_data("1h",  300),
+        "Swing (1d) 📅":     get_btc_data("1d",  300),
     }
 
-    results     = {}
-    all_buy     = 0
-    all_sell    = 0
+    results      = {}
     price_latest = None
     atr_latest   = None
+    pa_patterns  = []
 
     for label, df in frames.items():
         if df is None or len(df) < 55:
@@ -249,12 +219,6 @@ def multi_timeframe_analysis():
             "s1": last['S1'], "s2": last['S2'], "s3": last['S3'],
         }
 
-        if direction == "BUY":
-            all_buy += conf
-        elif direction == "SELL":
-            all_sell += conf
-
-        # استخدم أحدث سعر (15m)
         if label.startswith("Scalping"):
             price_latest = last['Close']
             atr_latest   = last['ATR']
@@ -263,7 +227,6 @@ def multi_timeframe_analysis():
     if not results:
         return None
 
-    # قرار نهائي بناءً على التوافق
     buy_count  = sum(1 for r in results.values() if r['direction'] == "BUY")
     sell_count = sum(1 for r in results.values() if r['direction'] == "SELL")
 
@@ -285,7 +248,7 @@ def multi_timeframe_analysis():
         "results": results,
         "price": price_latest,
         "atr": atr_latest,
-        "pa_patterns": pa_patterns if 'pa_patterns' in locals() else [],
+        "pa_patterns": pa_patterns,
         "buy_count": buy_count,
         "sell_count": sell_count,
     }
@@ -298,7 +261,6 @@ def calculate_targets(analysis):
     direction = analysis['final']
     r         = analysis['results']
 
-    # استخدم Pivot Points من الـ Swing (1d) إذا موجود
     swing_key = next((k for k in r if "Swing" in k), None)
     res = r[swing_key] if swing_key else list(r.values())[0]
 
@@ -307,12 +269,6 @@ def calculate_targets(analysis):
         tp1 = round(price + 1.0 * atr, 0)
         tp2 = round(price + 2.2 * atr, 0)
         tp3 = round(price + 4.0 * atr, 0)
-
-        # اضبط على Pivot R levels إذا قريبة (±0.5%)
-        for level, attr in [(res['r1'], 'tp1'), (res['r2'], 'tp2'), (res['r3'], 'tp3')]:
-            if level and abs(level - locals()[attr]) / price < 0.005:
-                locals()[attr] = round(level, 0)
-
     else:
         sl  = round(price + 1.5 * atr, 0)
         tp1 = round(price - 1.0 * atr, 0)
@@ -343,14 +299,13 @@ def build_message(analysis):
     else:
         emoji = "🔴"; dir_ar = "بيع SELL ⬇️"
 
-    conf      = analysis['base_conf']
-    conf_bar  = "█" * (conf // 10) + "░" * (10 - conf // 10)
-    price_fmt = f"${t['entry']:,.0f}"
+    conf     = analysis['base_conf']
+    conf_bar = "█" * (conf // 10) + "░" * (10 - conf // 10)
 
-    msg = f"""{emoji}{emoji} إشارة بيتكوين | BTC/USD {emoji}{emoji}
+    msg = f"""{emoji}{emoji} إشارة بيتكوين | BTC/USDT {emoji}{emoji}
 ━━━━━━━━━━━━━━━━━━━━━
 📊 الاتجاه: {dir_ar}
-💰 سعر الدخول: {price_fmt}
+💰 سعر الدخول: ${t['entry']:,.0f}
 🕐 التوقيت: {now}
 
 ━━━━ 🎯 الأهداف ━━━━
@@ -426,9 +381,6 @@ async def analyze_now(update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 f"⚪ لا توجد إشارة واضحة الآن\n"
                 f"₿ سعر BTC: {price}\n"
-                f"🔴 {analysis['results'].get('Swing (1d) 📅', {}).get('direction', '')} | "
-                f"🕐 {analysis['results'].get('Intraday (1h) 🕐', {}).get('direction', '')} | "
-                f"⚡ {analysis['results'].get('Scalping (15m) ⚡', {}).get('direction', '')}\n"
                 f"⏳ الفريمات متعارضة - انتظر توافق أوضح"
             )
     except Exception as e:
@@ -438,22 +390,19 @@ async def analyze_now(update, context: ContextTypes.DEFAULT_TYPE):
 
 async def status(update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        df = get_btc_data("1h", "2d")
-        if df is not None:
-            price  = df['Close'].iloc[-1]
-            open_  = df['Close'].iloc[0]
-            change = price - open_
-            pct    = (change / open_) * 100
-            arrow  = "📈" if change > 0 else "📉"
-            await update.message.reply_text(
-                f"₿ BTC/USD الآن\n\n"
-                f"💰 السعر: ${price:,.0f}\n"
-                f"{arrow} التغيير (24h): ${change:+,.0f} ({pct:+.2f}%)\n"
-                f"🕐 آخر تحديث: {datetime.now().strftime('%H:%M')}\n"
-                f"⏰ إشارات تلقائية كل {INTERVAL_MINUTES} دقيقة"
-            )
-        else:
-            await update.message.reply_text("⚠️ فشل جلب السعر")
+        url = "https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT"
+        data = requests.get(url, timeout=10).json()
+        price  = float(data['lastPrice'])
+        change = float(data['priceChange'])
+        pct    = float(data['priceChangePercent'])
+        arrow  = "📈" if change > 0 else "📉"
+        await update.message.reply_text(
+            f"₿ BTC/USDT الآن\n\n"
+            f"💰 السعر: ${price:,.0f}\n"
+            f"{arrow} التغيير (24h): ${change:+,.0f} ({pct:+.2f}%)\n"
+            f"🕐 آخر تحديث: {datetime.now().strftime('%H:%M')}\n"
+            f"⏰ إشارات تلقائية كل {INTERVAL_MINUTES} دقيقة"
+        )
     except Exception as e:
         await update.message.reply_text(f"❌ خطأ: {e}")
 
