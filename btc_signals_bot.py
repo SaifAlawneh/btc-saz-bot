@@ -18,6 +18,21 @@ logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=lo
 logger = logging.getLogger(__name__)
 user_languages   = {}
 active_btc_trade = {}
+# ==================== Cache بسيط ====================
+_cache = {}
+CACHE_TTL = 600  # 10 دقائق
+
+def get_cached(key):
+    if key in _cache:
+        data, ts = _cache[key]
+        if (datetime.now(timezone.utc).timestamp() - ts) < CACHE_TTL:
+            return data
+    return None
+
+def set_cache(key, data):
+    _cache[key] = (data, datetime.now(timezone.utc).timestamp())
+
+
 
 GREETINGS = ["مرحبا","هاي","هلا","اهلا","أهلا","السلام","صباح","مساء","كيف","شلونك",
              "hello","hi","hey","good","howdy","sup","morning","evening"]
@@ -290,6 +305,11 @@ def gmt_now():
 
 # ==================== البيانات ====================
 def get_data(asset="BTC", days=30, interval="hourly"):
+    cache_key = asset + "_" + str(days) + "_" + interval
+    cached = get_cached(cache_key)
+    if cached is not None:
+        logger.info("Cache hit: " + cache_key)
+        return cached
     try:
         coin = "bitcoin" if asset == "BTC" else "tether-gold"
         r = requests.get(
@@ -304,7 +324,9 @@ def get_data(asset="BTC", days=30, interval="hourly"):
         df['High'] = df['Close'].rolling(3).max()
         df['Low']  = df['Close'].rolling(3).min()
         df['Open'] = df['Close'].shift(1)
-        return df.dropna()
+        result = df.dropna()
+        set_cache(cache_key, result)
+        return result
     except Exception as e:
         logger.error(asset + " Error: " + str(e))
         return None
