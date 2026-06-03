@@ -1,1 +1,1 @@
-worker: python abu_mahra_bot.py
+worker: python btc_signals_bot.py
