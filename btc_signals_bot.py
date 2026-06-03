@@ -561,7 +561,31 @@ def full_analysis(asset="BTC", uid=0):
     elif buy_c == 2: final="BUY";  conf_txt=t(uid,"partial_confluence"); base_conf=74
     elif sel_c == 3: final="SELL"; conf_txt=t(uid,"full_confluence");    base_conf=92
     elif sel_c == 2: final="SELL"; conf_txt=t(uid,"partial_confluence"); base_conf=74
-    else: return {"final": "NEUTRAL", "asset": asset, "confluence_txt": t(uid,"no_confluence")}
+    else:
+        # حتى لو NEUTRAL نرجع تحليل كامل للعرض
+        main2 = results.get("1h") or list(results.values())[0]
+        fib_l2, fib_e2, sh2, sl2 = calculate_fibonacci(df_1h) if (df_1h is not None and len(df_1h)>=20) else ({},{},0,0)
+        nf2, fk2, dp2 = find_nearest_fib(main2['price'], fib_l2, "NEUTRAL") if fib_l2 else (main2['price'],"50.0",0)
+        kf2 = ["📐 Fib "+k+"%:  $"+"{:,.2f}".format(v) for k,v in sorted(fib_l2.items(), key=lambda x: float(x[0]))][:5]
+        fl2 = []
+        icons2 = {"1h":t(uid,"frame_1h"),"4h":t(uid,"frame_4h"),"1d":t(uid,"frame_1d")}
+        for k,r in results.items():
+            icon = "🟢" if r['direction']=="BUY" else "🔴"
+            fl2.append(icon+" "+icons2.get(k,"")+": "+r['direction']+" ("+str(r['conf'])+"%)")
+        return {
+            "final":"NEUTRAL","asset":asset,
+            "confluence_txt":t(uid,"no_confluence"),"base_conf":0,
+            "price":main2['price'],"tp1":0,"tp2":0,"tp3":0,"sl":0,"rr":0,"atr":main2['atr'],
+            "risk_pct":50,"risk_label":t(uid,"risk_med"),"risk_msg":t(uid,"risk_med_msg"),
+            "frame_lines":fl2,"ind_details":main2['details'],
+            "rsi":main2['rsi'],"support":main2['support'],"resistance":main2['resistance'],
+            "macd_bull":main2['macd_bull'],"ema_bull":main2['ema_bull'],
+            "ema_bear":main2['ema_bear'],"bb_zone":main2['bb_zone'],
+            "fib_levels":fib_l2,"fib_ext":fib_e2,"key_fibs":kf2,
+            "nearest_fib":nf2,"fib_key":fk2,
+            "swing_h":sh2,"swing_l":sl2,
+            "leverage_ar":"","leverage_en":"","tf_ar":"","tf_en":"","hold_ar":"","hold_en":"",
+        }
 
     # استخدم فريم الساعة كأساس للسعر والـ ATR
     main  = results.get("1h") or list(results.values())[0]
@@ -844,10 +868,8 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(t(uid,"loading_analysis"))
         try:
             res = full_analysis(asset, uid)
-            if not res:
+            if not res or 'key_fibs' not in res:
                 await query.message.reply_text(t(uid,"failed")); return
-            if res.get('final') == 'NEUTRAL' or 'key_fibs' not in res:
-                await query.message.reply_text(t(uid,"no_signal")); return
             await query.message.reply_text(build_analysis_msg(res, uid))
         except Exception as e:
             await query.message.reply_text(t(uid,"error") + str(e))
