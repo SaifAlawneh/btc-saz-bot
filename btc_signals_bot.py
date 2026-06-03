@@ -309,7 +309,7 @@ def get_data(asset="BTC", days=30, interval="hourly"):
     """
     يجيب البيانات من Twelve Data (دقيق) أو CoinGecko (fallback)
     """
-    cache_key = asset + "_" + str(days) + "_" + interval
+    cache_key = str(asset).upper() + "_" + str(days) + "_" + interval
     cached = get_cached(cache_key)
     if cached is not None:
         logger.info("Cache hit: " + cache_key)
@@ -656,7 +656,7 @@ def full_analysis(asset="BTC", uid=0):
     # تحويل الساعي لـ 4H
     if df_4h is not None and len(df_4h) > 0:
         try:
-            df_4h = df_4h.resample('4H').agg({
+            df_4h = df_4h.resample('4h').agg({
                 'Open':'first','High':'max','Low':'min',
                 'Close':'last','Volume':'sum'
             }).dropna()
