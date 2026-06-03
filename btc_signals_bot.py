@@ -16,8 +16,8 @@ MIN_CONFIDENCE    = 68
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
-user_languages = {}
-active_btc_trade = {}  # فقط BTC للمراقبة
+user_languages   = {}
+active_btc_trade = {}
 
 GREETINGS = ["مرحبا","هاي","هلا","اهلا","أهلا","السلام","صباح","مساء","كيف","شلونك",
              "hello","hi","hey","good","howdy","sup","morning","evening"]
@@ -32,14 +32,8 @@ REPLIES_EN = [
     "Hi! 🤖 Want a trade or analysis? Choose 👇",
     "Hey! 😊 Press any button to start 👇",
 ]
-CONFUSED_AR = [
-    "ما فهمت 😅 استخدم الأزرار 👇",
-    "🤔 اختر من القائمة 👇",
-]
-CONFUSED_EN = [
-    "Didn't get that 😅 Use the buttons 👇",
-    "🤔 Choose from the menu 👇",
-]
+CONFUSED_AR = ["ما فهمت 😅 استخدم الأزرار 👇", "🤔 اختر من القائمة 👇"]
+CONFUSED_EN = ["Didn't get that 😅 Use the buttons 👇", "🤔 Choose from the menu 👇"]
 
 import random
 
@@ -54,11 +48,11 @@ TEXTS = {
 🥇 الذهب  XAU/USD
 
 ✨ مميزاتي:
-▫️ صفقات قصيرة (Scalp) دقيقة
+▫️ صفقات مبنية على فريم الساعة
+▫️ Fibonacci + ATR للأهداف
+▫️ مستويات دعم ومقاومة دقيقة
 ▫️ إشارات تلقائية كل 30 دقيقة
-▫️ مراقبة BTC وتحديث SL/TP تلقائياً
-▫️ تحليل 3 فريمات زمنية
-▫️ درجة الثقة والمخاطرة
+▫️ مراقبة BTC وتحديث SL/TP
 ━━━━━━━━━━━━━━━━━━━━
 ⚠️ للأغراض التعليمية فقط""",
 
@@ -77,12 +71,13 @@ TEXTS = {
         "error":     "❌ خطأ: ",
         "no_signal": "⚪ لا توجد فرصة واضحة الآن\nانتظر إشارة أقوى 🕐",
 
-        "trade_header":    "⚡ صفقة قصيرة (Scalp) - أبو مهرة",
+        "trade_header":    "⚡ صفقة ساعة (1H Scalp) - أبو مهرة",
         "auto_header":     "🔔 إشارة تلقائية - أبو مهرة",
         "update_header":   "🔄 تحديث صفقة BTC - أبو مهرة",
         "analysis_header": "📊 تحليل السوق - أبو مهرة",
 
         "entry":     "💰 سعر الدخول",
+        "fib_entry": "📍 مستوى Fib للدخول",
         "direction": "📌 نوع الصفقة",
         "buy":       "شراء  BUY ⬆️",
         "sell":      "بيع  SELL ⬇️",
@@ -92,14 +87,15 @@ TEXTS = {
         "tp3": "الهدف الثالث  TP3",
         "sl":  "وقف الخسارة  SL",
         "rr":  "⚖️ العائد / المخاطرة",
+        "fib_section":   "📐 مستويات Fibonacci",
         "leverage":  "🔧 الرافعة المقترحة",
         "timeframe": "⏱️ الفريم",
         "hold_time": "⏳ المدة",
         "support":    "🟢 دعم",
         "resistance": "🔴 مقاومة",
         "confluence": "🔗 توافق الفريمات",
-        "frame_15m": "⚡ 15د",
         "frame_1h":  "🕐 ساعة",
+        "frame_4h":  "🕓 4 ساعات",
         "frame_1d":  "📅 يومي",
         "full_confluence":    "🔥 توافق كامل على 3 فريمات!",
         "partial_confluence": "✅ توافق على فريمين",
@@ -115,14 +111,12 @@ TEXTS = {
         "risk_high_msg": "حجم صغير فقط — مخاطرة عالية",
         "footer":      "⚠️ للأغراض التعليمية فقط\n📚 تداول بمسؤولية دائماً",
         "updated_gmt": "🕐 آخر تحديث (GMT)",
-
         "update_tp1_hit":  "✅ الهدف الأول تم! تم نقل SL للدخول",
         "update_tp2_hit":  "✅✅ الهدف الثاني تم! تم نقل SL للـ TP1",
         "update_near_sl":  "⚠️ تحذير: السعر اقترب من وقف الخسارة",
         "update_sl_moved": "📊 تم تحريك وقف الخسارة للأمان",
         "update_tp3_hit":  "🏆 الهدف الثالث تم! صفقة BTC مغلقة بنجاح 🎉",
         "current_price":   "💵 السعر الحالي",
-
         "trend_bull":    "📈 الاتجاه: صاعد",
         "trend_bear":    "📉 الاتجاه: هابط",
         "trend_neutral": "➡️ الاتجاه: محايد",
@@ -144,10 +138,11 @@ TEXTS = {
         "change_24h":   "التغيير 24h",
         "about_text": """ℹ️ عن بوت أبو مهرة 🐎
 
-⚡ صفقات قصيرة (Scalp) فقط
+⏱️ فريم الساعة (1H) كأساس للصفقات
+📐 Fibonacci + ATR للأهداف
 📡 إشارات تلقائية كل 30 دقيقة
 🔄 مراقبة BTC وتحديث SL/TP كل 5 دقائق
-🔬 المؤشرات: RSI, MACD, EMA, BB, Stoch, ATR, Pivot
+🔬 المؤشرات: RSI, MACD, EMA, BB, Stoch, ATR, Fibonacci
 ⚙️ توافق 3 فريمات — إشارة عند توافق فريمين+
 ⚠️ للأغراض التعليمية فقط""",
         "ind_rsi_oversold":   "RSI تشبع بيعي",
@@ -173,11 +168,11 @@ Specializing in:
 🥇 Gold  XAU/USD
 
 ✨ Features:
-▫️ Scalp trade signals
+▫️ 1H timeframe based signals
+▫️ Fibonacci + ATR targets
+▫️ Precise support & resistance
 ▫️ Auto signals every 30 minutes
 ▫️ BTC live SL/TP monitoring
-▫️ 3 timeframe confluence
-▫️ Confidence & risk scoring
 ━━━━━━━━━━━━━━━━━━━━
 ⚠️ For educational purposes only""",
 
@@ -196,12 +191,13 @@ Specializing in:
         "error":     "❌ Error: ",
         "no_signal": "⚪ No clear opportunity right now\nWaiting for stronger signal 🕐",
 
-        "trade_header":    "⚡ Scalp Trade - Abu Mahra",
+        "trade_header":    "⚡ 1H Scalp Trade - Abu Mahra",
         "auto_header":     "🔔 Auto Signal - Abu Mahra",
         "update_header":   "🔄 BTC Trade Update - Abu Mahra",
         "analysis_header": "📊 Market Analysis - Abu Mahra",
 
         "entry":     "💰 Entry Price",
+        "fib_entry": "📍 Fib Entry Level",
         "direction": "📌 Trade Type",
         "buy":       "BUY ⬆️",
         "sell":      "SELL ⬇️",
@@ -211,14 +207,15 @@ Specializing in:
         "tp3": "Third Target   TP3",
         "sl":  "Stop Loss      SL",
         "rr":  "⚖️ Reward / Risk",
+        "fib_section":   "📐 Fibonacci Levels",
         "leverage":  "🔧 Suggested Leverage",
         "timeframe": "⏱️ Timeframe",
         "hold_time": "⏳ Hold Time",
         "support":    "🟢 Support",
         "resistance": "🔴 Resistance",
         "confluence": "🔗 Timeframe Confluence",
-        "frame_15m": "⚡ 15m",
-        "frame_1h":  "🕐 1h",
+        "frame_1h":  "🕐 1H",
+        "frame_4h":  "🕓 4H",
         "frame_1d":  "📅 Daily",
         "full_confluence":    "🔥 Full confluence on 3 timeframes!",
         "partial_confluence": "✅ Confluence on 2 timeframes",
@@ -234,14 +231,12 @@ Specializing in:
         "risk_high_msg": "Small size only — High risk",
         "footer":      "⚠️ For educational purposes only\n📚 Always trade responsibly",
         "updated_gmt": "🕐 Last update (GMT)",
-
         "update_tp1_hit":  "✅ TP1 reached! SL moved to entry",
         "update_tp2_hit":  "✅✅ TP2 reached! SL moved to TP1",
         "update_near_sl":  "⚠️ Warning: Price approaching Stop Loss",
         "update_sl_moved": "📊 Stop Loss moved to safety",
         "update_tp3_hit":  "🏆 TP3 reached! BTC trade closed successfully 🎉",
         "current_price":   "💵 Current Price",
-
         "trend_bull":    "📈 Trend: Bullish",
         "trend_bear":    "📉 Trend: Bearish",
         "trend_neutral": "➡️ Trend: Neutral",
@@ -263,10 +258,11 @@ Specializing in:
         "change_24h":   "24h Change",
         "about_text": """ℹ️ About Abu Mahra Bot 🐎
 
-⚡ Scalp trades only
+⏱️ 1H timeframe as base
+📐 Fibonacci + ATR targets
 📡 Auto signals every 30 minutes
 🔄 BTC live SL/TP monitoring every 5 minutes
-🔬 Indicators: RSI, MACD, EMA, BB, Stoch, ATR, Pivot
+🔬 Indicators: RSI, MACD, EMA, BB, Stoch, ATR, Fibonacci
 ⚙️ 3 timeframe confluence — signals on 2+ agreement
 ⚠️ For educational purposes only""",
         "ind_rsi_oversold":   "RSI Oversold",
@@ -293,7 +289,7 @@ def gmt_now():
 
 
 # ==================== البيانات ====================
-def get_data(asset="BTC", days=7, interval="hourly"):
+def get_data(asset="BTC", days=30, interval="hourly"):
     try:
         coin = "bitcoin" if asset == "BTC" else "tether-gold"
         r = requests.get(
@@ -332,111 +328,256 @@ def get_prices():
         return None
 
 
+# ==================== Fibonacci ====================
+def calculate_fibonacci(df):
+    """
+    يحسب مستويات Fibonacci من آخر موجة سعرية (swing high/low)
+    يستخدم آخر 50 شمعة للبحث عن القمة والقاع
+    """
+    window = min(50, len(df))
+    recent = df.tail(window)
+    swing_high = float(recent['High'].max())
+    swing_low  = float(recent['Low'].min())
+    diff = swing_high - swing_low
+
+    # مستويات الارتداد (Retracement)
+    levels = {
+        "0.0":   round(swing_high, 2),
+        "23.6":  round(swing_high - 0.236 * diff, 2),
+        "38.2":  round(swing_high - 0.382 * diff, 2),
+        "50.0":  round(swing_high - 0.500 * diff, 2),
+        "61.8":  round(swing_high - 0.618 * diff, 2),
+        "78.6":  round(swing_high - 0.786 * diff, 2),
+        "100.0": round(swing_low, 2),
+    }
+
+    # مستويات الامتداد (Extension) للأهداف
+    extensions = {
+        "127.2": round(swing_low - 0.272 * diff, 2),
+        "161.8": round(swing_low - 0.618 * diff, 2),
+        "200.0": round(swing_low - 1.000 * diff, 2),
+    }
+
+    return levels, extensions, swing_high, swing_low
+
+
+def find_nearest_fib(price, levels, direction):
+    """يجد أقرب مستوى Fibonacci للسعر الحالي"""
+    fib_values = list(levels.values())
+    nearest = min(fib_values, key=lambda x: abs(x - price))
+    fib_key  = [k for k, v in levels.items() if v == nearest][0]
+    dist_pct = abs(nearest - price) / price * 100
+    return nearest, fib_key, dist_pct
+
+
+def get_fib_targets(price, levels, extensions, direction, atr):
+    """
+    يحسب الأهداف بناءً على:
+    1. مستويات Fibonacci (الأولوية)
+    2. ATR كحد أدنى للمسافة (للتأكد من منطقية الهدف)
+    """
+    fib_vals = sorted(levels.values())
+
+    if direction == "BUY":
+        # SL: تحت أقرب دعم Fib + ATR buffer
+        sl_fib = max([v for v in fib_vals if v < price], default=price - atr)
+        sl = round(min(sl_fib - 0.2*atr, price - 0.8*atr), 2)
+
+        # TP1: أقرب مقاومة Fib فوق السعر (بحد أدنى 0.5 ATR)
+        tp1_candidates = [v for v in fib_vals if v > price + 0.5*atr]
+        tp1 = round(tp1_candidates[0] if tp1_candidates else price + 0.8*atr, 2)
+
+        # TP2: المستوى التالي أو 1.5 ATR
+        tp2_candidates = [v for v in fib_vals if v > tp1 + 0.3*atr]
+        tp2_fib = tp2_candidates[0] if tp2_candidates else price + 1.8*atr
+        tp2 = round(max(tp2_fib, price + 1.5*atr), 2)
+
+        # TP3: Extension 127.2% أو 3 ATR
+        ext_vals = sorted(extensions.values(), reverse=True)
+        tp3_candidates = [v for v in ext_vals if v > tp2 + 0.5*atr]
+        tp3 = round(tp3_candidates[0] if tp3_candidates else price + 3.0*atr, 2)
+
+    else:  # SELL
+        sl_fib = min([v for v in fib_vals if v > price], default=price + atr)
+        sl = round(max(sl_fib + 0.2*atr, price + 0.8*atr), 2)
+
+        tp1_candidates = [v for v in reversed(fib_vals) if v < price - 0.5*atr]
+        tp1 = round(tp1_candidates[0] if tp1_candidates else price - 0.8*atr, 2)
+
+        tp2_candidates = [v for v in reversed(fib_vals) if v < tp1 - 0.3*atr]
+        tp2_fib = tp2_candidates[0] if tp2_candidates else price - 1.8*atr
+        tp2 = round(min(tp2_fib, price - 1.5*atr), 2)
+
+        ext_vals_sell = sorted(extensions.values())
+        tp3_candidates = [v for v in ext_vals_sell if v < tp2 - 0.5*atr]
+        tp3 = round(tp3_candidates[0] if tp3_candidates else price - 3.0*atr, 2)
+
+    rr = round(abs(tp2-price) / abs(sl-price), 2) if abs(sl-price) > 0 else 0
+    return sl, tp1, tp2, tp3, rr
+
+
 # ==================== التحليل ====================
 def calc_indicators(df):
     c = df['Close']; h = df['High']; l = df['Low']
     df['EMA9']  = ta.trend.EMAIndicator(c, window=9).ema_indicator()
     df['EMA21'] = ta.trend.EMAIndicator(c, window=21).ema_indicator()
     df['EMA50'] = ta.trend.EMAIndicator(c, window=50).ema_indicator()
+    df['EMA200']= ta.trend.EMAIndicator(c, window=200).ema_indicator()
     df['RSI']   = ta.momentum.RSIIndicator(c, window=14).rsi()
     macd = ta.trend.MACD(c)
     df['MACD']  = macd.macd()
     df['MACD_S']= macd.macd_signal()
+    df['MACD_H']= macd.macd_diff()
     bb = ta.volatility.BollingerBands(c)
     df['BB_U'] = bb.bollinger_hband()
     df['BB_L'] = bb.bollinger_lband()
     df['ATR']  = ta.volatility.AverageTrueRange(h, l, c, window=14).average_true_range()
     stoch = ta.momentum.StochasticOscillator(h, l, c)
     df['Stoch'] = stoch.stoch()
+    df['Stoch_S']= stoch.stoch_signal()
+    # Pivot Points
     df['Pivot'] = (h.shift(1) + l.shift(1) + c.shift(1)) / 3
     df['R1'] = 2 * df['Pivot'] - l.shift(1)
     df['S1'] = 2 * df['Pivot'] - h.shift(1)
+    df['R2'] = df['Pivot'] + (h.shift(1) - l.shift(1))
+    df['S2'] = df['Pivot'] - (h.shift(1) - l.shift(1))
     return df
 
 def analyze_frame(df, uid=0):
     df = calc_indicators(df)
-    last = df.iloc[-1]
+    last  = df.iloc[-1]
     price = last['Close']
     sb = ss = 0
     details = []
     rsi = last['RSI']
-    if rsi < 30:   sb += 25; details.append(t(uid,'ind_rsi_oversold') + " (" + str(round(rsi,0)) + ") 🟢")
-    elif rsi < 45: sb += 12; details.append(t(uid,'ind_rsi_buy') + " (" + str(round(rsi,0)) + ")")
-    elif rsi > 70: ss += 25; details.append(t(uid,'ind_rsi_overbought') + " (" + str(round(rsi,0)) + ") 🔴")
-    elif rsi > 55: ss += 12; details.append(t(uid,'ind_rsi_sell') + " (" + str(round(rsi,0)) + ")")
-    if last['MACD'] > last['MACD_S']: sb += 20; details.append(t(uid,'ind_macd_pos'))
-    else: ss += 20; details.append(t(uid,'ind_macd_neg'))
-    if last['EMA9'] > last['EMA21'] > last['EMA50']:   sb += 20; details.append(t(uid,'ind_ema_up'))
-    elif last['EMA9'] < last['EMA21'] < last['EMA50']: ss += 20; details.append(t(uid,'ind_ema_down'))
+
+    # RSI
+    if rsi < 30:   sb += 25; details.append(t(uid,'ind_rsi_oversold') + " (" + str(round(rsi,1)) + ") 🟢")
+    elif rsi < 45: sb += 12; details.append(t(uid,'ind_rsi_buy') + " (" + str(round(rsi,1)) + ")")
+    elif rsi > 70: ss += 25; details.append(t(uid,'ind_rsi_overbought') + " (" + str(round(rsi,1)) + ") 🔴")
+    elif rsi > 55: ss += 12; details.append(t(uid,'ind_rsi_sell') + " (" + str(round(rsi,1)) + ")")
+
+    # MACD
+    if last['MACD'] > last['MACD_S'] and last['MACD_H'] > 0:
+        sb += 20; details.append(t(uid,'ind_macd_pos'))
+    elif last['MACD'] < last['MACD_S'] and last['MACD_H'] < 0:
+        ss += 20; details.append(t(uid,'ind_macd_neg'))
+
+    # EMA Stack
+    if last['EMA9'] > last['EMA21'] > last['EMA50']:
+        sb += 20; details.append(t(uid,'ind_ema_up'))
+    elif last['EMA9'] < last['EMA21'] < last['EMA50']:
+        ss += 20; details.append(t(uid,'ind_ema_down'))
+
+    # EMA200 - اتجاه عام
+    if price > last['EMA200']:
+        sb += 10
+    else:
+        ss += 10
+
+    # Bollinger
     if price <= last['BB_L']:   sb += 15; details.append(t(uid,'ind_bb_low'))
     elif price >= last['BB_U']: ss += 15; details.append(t(uid,'ind_bb_high'))
-    if last['Stoch'] < 20:   sb += 10; details.append(t(uid,'ind_stoch_low'))
-    elif last['Stoch'] > 80: ss += 10; details.append(t(uid,'ind_stoch_high'))
+
+    # Stochastic
+    if last['Stoch'] < 20 and last['Stoch_S'] < 20:
+        sb += 10; details.append(t(uid,'ind_stoch_low'))
+    elif last['Stoch'] > 80 and last['Stoch_S'] > 80:
+        ss += 10; details.append(t(uid,'ind_stoch_high'))
+
     direction = "BUY" if sb > ss else "SELL"
     total = sb + ss
-    conf = round(max(sb, ss) / total * 100) if total > 0 else 50
+    conf  = round(max(sb, ss) / total * 100) if total > 0 else 50
+
     return {
         "direction": direction, "conf": conf, "sb": sb, "ss": ss,
-        "rsi": round(rsi, 1), "price": round(price, 2), "atr": round(last['ATR'], 2),
+        "rsi": round(rsi, 1), "price": round(price, 2),
+        "atr": round(last['ATR'], 2),
         "details": details[:4],
-        "support": round(last['S1'], 2), "resistance": round(last['R1'], 2),
+        "support":    round(last['S1'], 2),
+        "resistance": round(last['R1'], 2),
         "macd_bull": last['MACD'] > last['MACD_S'],
         "ema_bull": last['EMA9'] > last['EMA21'] > last['EMA50'],
         "ema_bear": last['EMA9'] < last['EMA21'] < last['EMA50'],
-        "bb_zone": "low" if price <= last['BB_L'] else "high" if price >= last['BB_U'] else "mid",
+        "bb_zone":  "low" if price <= last['BB_L'] else "high" if price >= last['BB_U'] else "mid",
     }
 
-def scalp_analysis(asset="BTC", uid=0):
-    frames = {
-        "15m": get_data(asset, days=3,  interval="hourly"),
-        "1h":  get_data(asset, days=7,  interval="hourly"),
-        "1d":  get_data(asset, days=30, interval="daily"),
-    }
+
+def full_analysis(asset="BTC", uid=0):
+    """
+    تحليل 3 فريمات: 1H (أساس) + 4H + 1D
+    مع Fibonacci + ATR للأهداف
+    """
+    # جلب البيانات - فريم الساعة كأساس
+    df_1h = get_data(asset, days=14,  interval="hourly")
+    df_4h = get_data(asset, days=30,  interval="hourly")   # نأخذ hourly ونعيد تجميعه
+    df_1d = get_data(asset, days=90,  interval="daily")
+
+    # تحويل الساعي لـ 4H
+    if df_4h is not None and len(df_4h) > 0:
+        try:
+            df_4h = df_4h.resample('4H').agg({
+                'Open':'first','High':'max','Low':'min',
+                'Close':'last','Volume':'sum'
+            }).dropna()
+        except:
+            df_4h = None
+
+    frames = {"1h": df_1h, "4h": df_4h, "1d": df_1d}
     results = {}
     for label, df in frames.items():
         if df is not None and len(df) >= 20:
             results[label] = analyze_frame(df, uid)
+
     if len(results) < 2:
         return None
 
     buy_c = sum(1 for r in results.values() if r['direction'] == "BUY")
     sel_c = sum(1 for r in results.values() if r['direction'] == "SELL")
 
-    if buy_c == 3:   final = "BUY";  conf_txt = t(uid,"full_confluence");    base_conf = 92
-    elif buy_c == 2: final = "BUY";  conf_txt = t(uid,"partial_confluence"); base_conf = 74
-    elif sel_c == 3: final = "SELL"; conf_txt = t(uid,"full_confluence");    base_conf = 92
-    elif sel_c == 2: final = "SELL"; conf_txt = t(uid,"partial_confluence"); base_conf = 74
+    if buy_c == 3:   final="BUY";  conf_txt=t(uid,"full_confluence");    base_conf=92
+    elif buy_c == 2: final="BUY";  conf_txt=t(uid,"partial_confluence"); base_conf=74
+    elif sel_c == 3: final="SELL"; conf_txt=t(uid,"full_confluence");    base_conf=92
+    elif sel_c == 2: final="SELL"; conf_txt=t(uid,"partial_confluence"); base_conf=74
     else: return {"final": "NEUTRAL", "confluence_txt": t(uid,"no_confluence")}
 
-    main  = results.get("1h") or results.get("15m") or list(results.values())[0]
+    # استخدم فريم الساعة كأساس للسعر والـ ATR
+    main  = results.get("1h") or list(results.values())[0]
     price = main['price']
     atr   = main['atr']
 
-    if final == "BUY":
-        sl  = round(price - 0.8*atr, 2)
-        tp1 = round(price + 0.6*atr, 2)
-        tp2 = round(price + 1.3*atr, 2)
-        tp3 = round(price + 2.2*atr, 2)
+    # ====== حساب Fibonacci ======
+    if df_1h is not None and len(df_1h) >= 20:
+        fib_levels, fib_ext, swing_h, swing_l = calculate_fibonacci(df_1h)
     else:
-        sl  = round(price + 0.8*atr, 2)
-        tp1 = round(price - 0.6*atr, 2)
-        tp2 = round(price - 1.3*atr, 2)
-        tp3 = round(price - 2.2*atr, 2)
+        fib_levels, fib_ext, swing_h, swing_l = {}, {}, price*1.02, price*0.98
 
-    rr = round(abs(tp2-price) / abs(sl-price), 2) if abs(sl-price) > 0 else 0
+    # إيجاد أقرب مستوى Fib للسعر الحالي
+    nearest_fib, fib_key, dist_pct = find_nearest_fib(price, fib_levels, final)
+
+    # ====== الأهداف: Fibonacci + ATR ======
+    sl, tp1, tp2, tp3, rr = get_fib_targets(price, fib_levels, fib_ext, final, atr)
+
+    # درجة المخاطرة
     risk = 100 - base_conf
     if main['rsi'] < 25 or main['rsi'] > 75: risk += 10
+    if dist_pct > 2: risk += 5  # لو بعيد عن Fib مهم
     risk = min(risk, 99)
-    if risk < 30:   rl = t(uid,"risk_low");  rm = t(uid,"risk_low_msg")
-    elif risk < 55: rl = t(uid,"risk_med");  rm = t(uid,"risk_med_msg")
-    else:           rl = t(uid,"risk_high"); rm = t(uid,"risk_high_msg")
+    if risk < 30:   rl=t(uid,"risk_low");  rm=t(uid,"risk_low_msg")
+    elif risk < 55: rl=t(uid,"risk_med");  rm=t(uid,"risk_med_msg")
+    else:           rl=t(uid,"risk_high"); rm=t(uid,"risk_high_msg")
 
     lang = user_languages.get(uid, "ar")
     frame_lines = []
-    icons = {"15m": t(uid,"frame_15m"), "1h": t(uid,"frame_1h"), "1d": t(uid,"frame_1d")}
+    icons = {"1h": t(uid,"frame_1h"), "4h": t(uid,"frame_4h"), "1d": t(uid,"frame_1d")}
     for k, r in results.items():
         icon = "🟢" if r['direction'] == "BUY" else "🔴"
         frame_lines.append(icon + " " + icons.get(k,'') + ": " + r['direction'] + " (" + str(r['conf']) + "%)")
+
+    # أهم مستويات Fib للعرض
+    key_fibs = []
+    for pct, val in sorted(fib_levels.items(), key=lambda x: float(x[0])):
+        key_fibs.append("📐 Fib " + pct + "%:  $" + "{:,.2f}".format(val))
 
     return {
         "final": final, "asset": asset,
@@ -445,13 +586,18 @@ def scalp_analysis(asset="BTC", uid=0):
         "sl": sl, "rr": rr, "atr": atr,
         "risk_pct": risk, "risk_label": rl, "risk_msg": rm,
         "frame_lines": frame_lines, "ind_details": main['details'],
-        "rsi": main['rsi'], "support": main['support'], "resistance": main['resistance'],
+        "rsi": main['rsi'],
+        "support": main['support'], "resistance": main['resistance'],
         "macd_bull": main['macd_bull'], "ema_bull": main['ema_bull'],
         "ema_bear": main['ema_bear'], "bb_zone": main['bb_zone'],
+        "fib_levels": fib_levels, "fib_ext": fib_ext,
+        "key_fibs": key_fibs[:5],
+        "nearest_fib": nearest_fib, "fib_key": fib_key,
+        "swing_h": swing_h, "swing_l": swing_l,
         "leverage_ar": "10x — 15x\n⚠️ لا تتجاوز 15x للمبتدئين",
         "leverage_en": "10x — 15x\n⚠️ Max 15x for beginners",
-        "tf_ar": "15 دقيقة — ساعة", "tf_en": "15min — 1 hour",
-        "hold_ar": "دقائق حتى ساعات قليلة", "hold_en": "Minutes to a few hours",
+        "tf_ar": "1 ساعة", "tf_en": "1 Hour",
+        "hold_ar": "2 — 8 ساعات", "hold_en": "2 — 8 Hours",
     }
 
 
@@ -475,6 +621,7 @@ def build_trade_msg(res, uid=0, auto=False):
         "━━━━━━━━━━━━━━━━━━━━━━━━",
         t(uid,'direction') + ":  " + dir_txt,
         t(uid,'entry') + ":  $" + "{:,.2f}".format(res['price']),
+        t(uid,'fib_entry') + ":  Fib " + res['fib_key'] + "% ($" + "{:,.2f}".format(res['nearest_fib']) + ")",
         "",
         "━━━━  " + t(uid,'targets_section') + "  ━━━━",
         "✅  " + t(uid,'tp1') + "  »  $" + "{:,.2f}".format(res['tp1']),
@@ -482,6 +629,11 @@ def build_trade_msg(res, uid=0, auto=False):
         "✅  " + t(uid,'tp3') + "  »  $" + "{:,.2f}".format(res['tp3']),
         "🛑  " + t(uid,'sl')  + "  »   $" + "{:,.2f}".format(res['sl']),
         t(uid,'rr') + ":  1:" + str(res['rr']),
+        "",
+        "━━━━  " + t(uid,'fib_section') + "  ━━━━",
+    ]
+    lines += res['key_fibs']
+    lines += [
         "",
         "━━━━  " + t(uid,'leverage') + "  ━━━━",
         leverage,
@@ -519,11 +671,9 @@ def build_trade_msg(res, uid=0, auto=False):
 
 
 def build_update_msg(trade, current_price, update_type, uid=0):
-    ai      = "₿"
-    an      = "BTC/USD"
     dir_txt = t(uid,"buy") if trade['direction'] == "BUY" else t(uid,"sell")
     lines = [
-        "🔄  " + ai + " " + an + "  •  " + t(uid,'update_header'),
+        "🔄  ₿ BTC/USD  •  " + t(uid,'update_header'),
         "━━━━━━━━━━━━━━━━━━━━━━━━",
         t(uid,'direction') + ":  " + dir_txt,
         t(uid,'entry') + ":  $" + "{:,.2f}".format(trade['entry']),
@@ -552,6 +702,7 @@ def build_analysis_msg(res, uid=0):
         trend = t(uid,"trend_bear"); summary = t(uid,"summary_bear")
     else:
         trend = t(uid,"trend_neutral"); summary = t(uid,"summary_neutral")
+
     rsi     = res['rsi']
     rsi_txt = t(uid,"rsi_oversold") if rsi < 30 else t(uid,"rsi_overbought") if rsi > 70 else t(uid,"rsi_neutral")
     macd_txt= t(uid,"macd_bull") if res['macd_bull'] else t(uid,"macd_bear")
@@ -566,6 +717,11 @@ def build_analysis_msg(res, uid=0):
         "💵 " + t(uid,'entry') + ":  $" + "{:,.2f}".format(res['price']),
         t(uid,'support') + ":  $" + "{:,.2f}".format(res['support']),
         t(uid,'resistance') + ":  $" + "{:,.2f}".format(res['resistance']),
+        "",
+        "━━━━  " + t(uid,'fib_section') + "  ━━━━",
+    ]
+    lines += res['key_fibs']
+    lines += [
         "",
         "━━━━  " + t(uid,'confluence') + "  ━━━━",
     ]
@@ -620,12 +776,10 @@ async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text or ""
     kb   = main_keyboard(uid) if uid in user_languages else lang_keyboard()
     lang = user_languages.get(uid, "ar")
-
     if any(g in text.lower() for g in GREETINGS):
         reply = random.choice(REPLIES_AR if lang == "ar" else REPLIES_EN)
     else:
         reply = random.choice(CONFUSED_AR if lang == "ar" else CONFUSED_EN)
-
     await update.message.reply_text(reply, reply_markup=kb)
 
 
@@ -648,11 +802,10 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
         asset = data.split('_')[1]
         await query.message.reply_text(t(uid,"loading_trade"))
         try:
-            res = scalp_analysis(asset, uid)
+            res = full_analysis(asset, uid)
             if not res or res['final'] == "NEUTRAL":
                 await query.message.reply_text(t(uid,"no_signal")); return
             await query.message.reply_text(build_trade_msg(res, uid))
-            # مراقبة BTC فقط
             if asset == "BTC":
                 active_btc_trade['data'] = {
                     "asset": "BTC", "direction": res['final'],
@@ -661,7 +814,6 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                     "atr": res['atr'], "tp1_hit": False, "tp2_hit": False,
                     "chat_id": query.message.chat_id,
                 }
-                logger.info("📌 BTC صفقة مفتوحة - " + res['final'] + " @ " + str(res['price']))
         except Exception as e:
             await query.message.reply_text(t(uid,"error") + str(e))
 
@@ -669,7 +821,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
         asset = data.split('_')[1]
         await query.message.reply_text(t(uid,"loading_analysis"))
         try:
-            res = scalp_analysis(asset, uid)
+            res = full_analysis(asset, uid)
             if not res:
                 await query.message.reply_text(t(uid,"failed")); return
             await query.message.reply_text(build_analysis_msg(res, uid))
@@ -702,14 +854,16 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(t(uid,"about_text"))
 
 
-# ==================== إشارات تلقائية كل 30 دقيقة ====================
+# ==================== إشارات تلقائية ====================
 async def auto_signals(context):
     try:
         for asset in ["BTC", "GOLD"]:
-            res = scalp_analysis(asset, 0)
+            res = full_analysis(asset, 0)
             if res and res['final'] != "NEUTRAL" and res['base_conf'] >= MIN_CONFIDENCE:
-                await context.bot.send_message(chat_id=CHANNEL_ID, text=build_trade_msg(res, 0, auto=True))
-                # مراقبة BTC فقط
+                await context.bot.send_message(
+                    chat_id=CHANNEL_ID,
+                    text=build_trade_msg(res, 0, auto=True)
+                )
                 if asset == "BTC":
                     active_btc_trade['data'] = {
                         "asset": "BTC", "direction": res['final'],
@@ -723,38 +877,29 @@ async def auto_signals(context):
         logger.error("❌ Auto: " + str(e))
 
 
-# ==================== مراقبة BTC فقط كل 5 دقائق ====================
+# ==================== مراقبة BTC فقط ====================
 async def monitor_btc(context):
     if 'data' not in active_btc_trade:
         return
-
     trade = active_btc_trade['data']
     try:
         current = get_btc_price()
-        if not current:
-            return
+        if not current: return
 
-        entry     = trade['entry']
-        sl        = trade['sl']
-        tp1       = trade['tp1']
-        tp2       = trade['tp2']
-        tp3       = trade['tp3']
-        atr       = trade['atr']
-        direction = trade['direction']
-        chat_id   = trade['chat_id']
-        uid       = 0
+        entry=trade['entry']; sl=trade['sl']
+        tp1=trade['tp1']; tp2=trade['tp2']; tp3=trade['tp3']
+        atr=trade['atr']; direction=trade['direction']
+        chat_id=trade['chat_id']; uid=0
         update_msg = None
 
         if direction == "BUY":
             if not trade['tp1_hit'] and current >= tp1:
-                trade['tp1_hit'] = True
-                trade['sl'] = entry
+                trade['tp1_hit'] = True; trade['sl'] = entry
                 update_msg = t(uid,"update_tp1_hit")
             elif not trade['tp2_hit'] and current >= tp2:
-                trade['tp2_hit'] = True
-                trade['sl'] = tp1
+                trade['tp2_hit'] = True; trade['sl'] = tp1
                 update_msg = t(uid,"update_tp2_hit")
-            elif current <= sl * 1.003:
+            elif current <= sl * 1.002:
                 update_msg = t(uid,"update_near_sl")
             elif trade['tp1_hit'] and current > tp1 + 0.5*atr:
                 new_sl = round(current - 0.8*atr, 2)
@@ -764,17 +909,14 @@ async def monitor_btc(context):
             if current >= tp3:
                 update_msg = t(uid,"update_tp3_hit")
                 active_btc_trade.clear()
-
-        else:  # SELL
+        else:
             if not trade['tp1_hit'] and current <= tp1:
-                trade['tp1_hit'] = True
-                trade['sl'] = entry
+                trade['tp1_hit'] = True; trade['sl'] = entry
                 update_msg = t(uid,"update_tp1_hit")
             elif not trade['tp2_hit'] and current <= tp2:
-                trade['tp2_hit'] = True
-                trade['sl'] = tp1
+                trade['tp2_hit'] = True; trade['sl'] = tp1
                 update_msg = t(uid,"update_tp2_hit")
-            elif current >= sl * 0.997:
+            elif current >= sl * 0.998:
                 update_msg = t(uid,"update_near_sl")
             elif trade['tp1_hit'] and current < tp1 - 0.5*atr:
                 new_sl = round(current + 0.8*atr, 2)
@@ -790,13 +932,12 @@ async def monitor_btc(context):
                 chat_id=chat_id,
                 text=build_update_msg(trade, current, update_msg, uid)
             )
-            logger.info("🔄 BTC Update: " + update_msg)
+            logger.info("🔄 BTC Update: " + str(update_msg))
 
     except Exception as e:
-        logger.error("❌ Monitor BTC: " + str(e))
+        logger.error("❌ Monitor: " + str(e))
 
 
-# ==================== تشغيل ====================
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
@@ -804,7 +945,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.job_queue.run_repeating(auto_signals, interval=AUTO_INTERVAL_MIN*60, first=30)
     app.job_queue.run_repeating(monitor_btc,  interval=MONITOR_MIN*60,       first=60)
-    logger.info("🐎 Abu Mahra Bot - BTC Monitor Edition!")
+    logger.info("🐎 Abu Mahra Bot - Fibonacci Edition!")
     app.run_polling()
 
 if __name__ == "__main__":
