@@ -9,7 +9,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 import ta
 
 # ==================== CONFIG ====================
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8892334042:AAEGw0XzDMrB-benCgbK7BMMrJ8ljOEtP6s")
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "@btc_signals_saz")
 INTERVAL_MINUTES = 60
 
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 # ==================== جلب البيانات من Binance ====================
-def get_btc_data(interval="15m", limit=300):
+def get_btc_data(interval="15m", limit=500):
     """جلب بيانات BTC/USDT من Binance API مجاناً"""
     try:
         url = f"https://api.binance.com/api/v3/klines"
@@ -190,8 +190,8 @@ def detect_patterns(df):
 # ==================== Multi-Timeframe ====================
 def multi_timeframe_analysis():
     frames = {
-        "Scalping (15m) ⚡": get_btc_data("15m", 300),
-        "Intraday (1h) 🕐":  get_btc_data("1h",  300),
+        "Scalping (15m) ⚡": get_btc_data("15m", 500),
+        "Intraday (1h) 🕐":  get_btc_data("1h",  500),
         "Swing (1d) 📅":     get_btc_data("1d",  300),
     }
 
@@ -201,7 +201,7 @@ def multi_timeframe_analysis():
     pa_patterns  = []
 
     for label, df in frames.items():
-        if df is None or len(df) < 55:
+        if df is None or len(df) < 30:
             logger.warning(f"بيانات غير كافية: {label}")
             continue
 
