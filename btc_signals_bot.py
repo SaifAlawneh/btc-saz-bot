@@ -581,6 +581,18 @@ def calc_indicators(df):
     df['S1'] = 2 * df['Pivot'] - h.shift(1)
     df['R2'] = df['Pivot'] + (h.shift(1) - l.shift(1))
     df['S2'] = df['Pivot'] - (h.shift(1) - l.shift(1))
+    # Ichimoku Cloud
+    high_9  = h.rolling(window=9).max()
+    low_9   = l.rolling(window=9).min()
+    high_26 = h.rolling(window=26).max()
+    low_26  = l.rolling(window=26).min()
+    high_52 = h.rolling(window=52).max()
+    low_52  = l.rolling(window=52).min()
+    df['Tenkan']  = (high_9  + low_9)  / 2   # Conversion Line
+    df['Kijun']   = (high_26 + low_26) / 2   # Base Line
+    df['SpanA']   = ((df['Tenkan'] + df['Kijun']) / 2).shift(26)   # Leading Span A
+    df['SpanB']   = ((high_52 + low_52) / 2).shift(26)              # Leading Span B
+    df['Chikou']  = c.shift(-26)                                     # Lagging Span
     return df
 
 def analyze_frame(df, uid=0):
@@ -625,6 +637,28 @@ def analyze_frame(df, uid=0):
     elif last['Stoch'] > 80 and last['Stoch_S'] > 80:
         ss += 10; details.append(t(uid,'ind_stoch_high'))
 
+    # Ichimoku signals
+    try:
+        tenkan = last['Tenkan']; kijun = last['Kijun']
+        span_a = last['SpanA'];  span_b = last['SpanB']
+        cloud_top = max(span_a, span_b) if not (pd.isna(span_a) or pd.isna(span_b)) else None
+        cloud_bot = min(span_a, span_b) if not (pd.isna(span_a) or pd.isna(span_b)) else None
+        ichi_bull = False; ichi_bear = False
+
+        if cloud_top and cloud_bot:
+            if price > cloud_top and tenkan > kijun:
+                sb += 15; ichi_bull = True
+                details.append("☁️ Ichimoku: فوق السحابة + TK صاعد")
+            elif price < cloud_bot and tenkan < kijun:
+                ss += 15; ichi_bear = True
+                details.append("☁️ Ichimoku: تحت السحابة + TK هابط")
+            elif cloud_top > cloud_bot:
+                sb += 5   # سحابة خضراء
+            else:
+                ss += 5   # سحابة حمراء
+    except:
+        ichi_bull = False; ichi_bear = False
+
     direction = "BUY" if sb > ss else "SELL"
     total = sb + ss
     conf  = round(max(sb, ss) / total * 100) if total > 0 else 50
@@ -640,6 +674,7 @@ def analyze_frame(df, uid=0):
         "ema_bull": last['EMA9'] > last['EMA21'] > last['EMA50'],
         "ema_bear": last['EMA9'] < last['EMA21'] < last['EMA50'],
         "bb_zone":  "low" if price <= last['BB_L'] else "high" if price >= last['BB_U'] else "mid",
+        "ichi_bull": ichi_bull, "ichi_bear": ichi_bear,
     }
 
 
@@ -779,9 +814,16 @@ def build_trade_msg(res, uid=0, auto=False):
     tf       = res['tf_ar']       if lang == "ar" else res['tf_en']
     hold     = res['hold_ar']     if lang == "ar" else res['hold_en']
 
+    # Ichimoku status
+    ichi_status = ""
+    if res.get('frame_lines'):
+        pass  # will show in confluence
+
     lines = [
-        emoji*3 + "  " + ai + " " + an + "  " + emoji*3,
-        header,
+        "┌─────────────────────────┐",
+        "│  " + emoji*2 + "  " + ai + " " + an + "  " + emoji*2 + "  │",
+        "└─────────────────────────┘",
+        "📋 " + header,
         "━━━━━━━━━━━━━━━━━━━━━━━━",
         t(uid,'direction') + ":  " + dir_txt,
         t(uid,'entry') + ":  $" + "{:,.2f}".format(res['price']),
@@ -1102,13 +1144,85 @@ async def monitor_btc(context):
         logger.error("❌ Monitor: " + str(e))
 
 
+
+# ==================== تنبيهات ذكية ====================
+async def send_smart_alerts(context):
+    """يبعث تنبيهات ذكية عند مستويات مهمة"""
+    try:
+        for asset in ["BTC", "GOLD"]:
+            df = get_data(asset, days=7, interval="hourly")
+            if df is None or len(df) < 30:
+                continue
+
+            df = calc_indicators(df)
+            last  = df.iloc[-1]
+            price = last['Close']
+            rsi   = last['RSI']
+            atr   = last['ATR']
+
+            # حساب Fibonacci
+            fib_levels, _, _, _ = calculate_fibonacci(df)
+            ai = "₿ BTC/USD" if asset == "BTC" else "🥇 XAU/USD"
+            alerts = []
+
+            # تنبيه RSI
+            if rsi < 28:
+                alerts.append("🔴 RSI في تشبع بيعي قوي (" + str(round(rsi,1)) + ") — فرصة شراء محتملة!")
+            elif rsi > 72:
+                alerts.append("🔴 RSI في تشبع شرائي قوي (" + str(round(rsi,1)) + ") — احتمال انعكاس!")
+
+            # تنبيه Fib
+            for pct, level in fib_levels.items():
+                dist = abs(price - level) / price * 100
+                if dist < 0.3:  # قريب من مستوى Fib بنسبة 0.3%
+                    direction_txt = "فوق" if price > level else "تحت"
+                    alerts.append("📐 السعر عند مستوى Fib " + pct + "% ($" + "{:,.2f}".format(level) + ") — مستوى مهم!")
+                    break
+
+            # تنبيه Ichimoku
+            try:
+                tenkan = last['Tenkan']; kijun = last['Kijun']
+                if abs(tenkan - kijun) / price * 100 < 0.2:
+                    alerts.append("☁️ Ichimoku: Tenkan و Kijun على وشك التقاطع — انتبه!")
+            except:
+                pass
+
+            # تنبيه Bollinger Squeeze
+            bb_width = (last['BB_U'] - last['BB_L']) / last['BB_U'] * 100
+            if bb_width < 2:
+                alerts.append("💥 Bollinger Squeeze — حركة قوية قادمة قريباً!")
+
+            if alerts:
+                msg_lines = [
+                    "⚡ تنبيه ذكي — " + ai,
+                    "━━━━━━━━━━━━━━━━━━━━━━━━",
+                    "💵 السعر الحالي: $" + "{:,.2f}".format(price),
+                    "",
+                ]
+                for a in alerts:
+                    msg_lines.append("▫️ " + a)
+                msg_lines += [
+                    "",
+                    "🕐 " + gmt_now(),
+                    "⚠️ للأغراض التعليمية فقط",
+                ]
+                await context.bot.send_message(
+                    chat_id=CHANNEL_ID,
+                    text=chr(10).join(msg_lines)
+                )
+                logger.info("⚡ Smart Alert sent: " + asset)
+
+    except Exception as e:
+        logger.error("❌ Smart Alerts: " + str(e))
+
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.job_queue.run_repeating(auto_signals, interval=AUTO_INTERVAL_MIN*60, first=30)
-    app.job_queue.run_repeating(monitor_btc,  interval=MONITOR_MIN*60,       first=60)
+    app.job_queue.run_repeating(monitor_btc,    interval=MONITOR_MIN*60,       first=60)
+    app.job_queue.run_repeating(send_smart_alerts, interval=45*60,                first=120)  # كل 45 دقيقة
     logger.info("🐎 Abu Mahra Bot - Fibonacci Edition!")
     app.run_polling()
 
