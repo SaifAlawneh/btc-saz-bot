@@ -8,8 +8,9 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 import ta
 
-BOT_TOKEN  = os.environ.get("BOT_TOKEN",  "YOUR_BOT_TOKEN_HERE")
-CHANNEL_ID = os.environ.get("CHANNEL_ID", "@btc_signals_saz")
+BOT_TOKEN      = os.environ.get("BOT_TOKEN",  "YOUR_BOT_TOKEN_HERE")
+CHANNEL_ID     = os.environ.get("CHANNEL_ID", "@btc_signals_saz")
+TWELVEDATA_KEY = os.environ.get("TWELVEDATA_KEY", "")
 AUTO_INTERVAL_MIN = 30
 MONITOR_MIN       = 5
 MIN_CONFIDENCE    = 68
@@ -305,11 +306,67 @@ def gmt_now():
 
 # ==================== البيانات ====================
 def get_data(asset="BTC", days=30, interval="hourly"):
+    """
+    يجيب البيانات من Twelve Data (دقيق) أو CoinGecko (fallback)
+    """
     cache_key = asset + "_" + str(days) + "_" + interval
     cached = get_cached(cache_key)
     if cached is not None:
         logger.info("Cache hit: " + cache_key)
         return cached
+
+    # حدد الرمز والفريم لـ Twelve Data
+    symbol = "BTC/USD" if asset == "BTC" else "XAU/USD"
+
+    # تحويل الفريم
+    if interval == "hourly":
+        td_interval = "1h"
+        outputsize = min(days * 24, 500)
+    elif interval == "daily":
+        td_interval = "1day"
+        outputsize = min(days, 500)
+    else:
+        td_interval = "1h"
+        outputsize = 200
+
+    # جرب Twelve Data أولاً
+    if TWELVEDATA_KEY:
+        try:
+            r = requests.get(
+                "https://api.twelvedata.com/time_series",
+                params={
+                    "symbol": symbol,
+                    "interval": td_interval,
+                    "outputsize": outputsize,
+                    "apikey": TWELVEDATA_KEY,
+                    "format": "JSON"
+                },
+                timeout=15
+            )
+            data = r.json()
+            if "values" in data and len(data["values"]) > 0:
+                rows = []
+                for v in reversed(data["values"]):
+                    rows.append({
+                        "timestamp": pd.to_datetime(v["datetime"]),
+                        "Open":   float(v["open"]),
+                        "High":   float(v["high"]),
+                        "Low":    float(v["low"]),
+                        "Close":  float(v["close"]),
+                        "Volume": float(v.get("volume", 0)),
+                    })
+                df = pd.DataFrame(rows)
+                df = df.set_index("timestamp")
+                result = df.dropna()
+                set_cache(cache_key, result)
+                logger.info("Twelve Data OK: " + symbol + " " + td_interval)
+                return result
+            else:
+                logger.warning("Twelve Data no values: " + str(data.get("message","")))
+        except Exception as e:
+            logger.warning("Twelve Data failed: " + str(e))
+
+    # Fallback: CoinGecko
     try:
         coin = "bitcoin" if asset == "BTC" else "tether-gold"
         r = requests.get(
@@ -317,30 +374,91 @@ def get_data(asset="BTC", days=30, interval="hourly"):
             params={"vs_currency": "usd", "days": days, "interval": interval},
             timeout=15)
         data = r.json()
-        df = pd.DataFrame(data['prices'], columns=['timestamp', 'Close'])
-        df['Volume'] = [v[1] for v in data['total_volumes']]
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-        df = df.set_index('timestamp')
-        df['High'] = df['Close'].rolling(3).max()
-        df['Low']  = df['Close'].rolling(3).min()
-        df['Open'] = df['Close'].shift(1)
+        df = pd.DataFrame(data["prices"], columns=["timestamp", "Close"])
+        df["Volume"] = [v[1] for v in data["total_volumes"]]
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+        df = df.set_index("timestamp")
+        df["High"] = df["Close"].rolling(3).max()
+        df["Low"]  = df["Close"].rolling(3).min()
+        df["Open"] = df["Close"].shift(1)
         result = df.dropna()
         set_cache(cache_key, result)
+        logger.info("CoinGecko fallback OK: " + asset)
         return result
     except Exception as e:
         logger.error(asset + " Error: " + str(e))
         return None
 
 def get_btc_price():
+    """يجيب سعر BTC الحالي من Twelve Data أو CoinGecko"""
+    if TWELVEDATA_KEY:
+        try:
+            r = requests.get(
+                "https://api.twelvedata.com/price",
+                params={"symbol": "BTC/USD", "apikey": TWELVEDATA_KEY},
+                timeout=10)
+            data = r.json()
+            if "price" in data:
+                return float(data["price"])
+        except:
+            pass
     try:
         r = requests.get(
             "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd",
             timeout=10)
-        return float(r.json()['bitcoin']['usd'])
+        return float(r.json()["bitcoin"]["usd"])
     except:
         return None
 
 def get_prices():
+    """يجيب أسعار BTC والذهب مع التغيير 24h"""
+    result = {"bitcoin": {}, "tether-gold": {}}
+
+    if TWELVEDATA_KEY:
+        try:
+            # BTC price
+            r1 = requests.get(
+                "https://api.twelvedata.com/price",
+                params={"symbol": "BTC/USD", "apikey": TWELVEDATA_KEY},
+                timeout=10)
+            btc_price = float(r1.json().get("price", 0))
+
+            # Gold price
+            r2 = requests.get(
+                "https://api.twelvedata.com/price",
+                params={"symbol": "XAU/USD", "apikey": TWELVEDATA_KEY},
+                timeout=10)
+            gold_price = float(r2.json().get("price", 0))
+
+            # BTC 24h change
+            r3 = requests.get(
+                "https://api.twelvedata.com/time_series",
+                params={"symbol": "BTC/USD", "interval": "1day", "outputsize": 2, "apikey": TWELVEDATA_KEY},
+                timeout=10)
+            btc_data = r3.json().get("values", [])
+            btc_change = 0
+            if len(btc_data) >= 2:
+                prev = float(btc_data[1]["close"])
+                btc_change = round((btc_price - prev) / prev * 100, 2) if prev > 0 else 0
+
+            # Gold 24h change
+            r4 = requests.get(
+                "https://api.twelvedata.com/time_series",
+                params={"symbol": "XAU/USD", "interval": "1day", "outputsize": 2, "apikey": TWELVEDATA_KEY},
+                timeout=10)
+            gold_data = r4.json().get("values", [])
+            gold_change = 0
+            if len(gold_data) >= 2:
+                prev_g = float(gold_data[1]["close"])
+                gold_change = round((gold_price - prev_g) / prev_g * 100, 2) if prev_g > 0 else 0
+
+            result["bitcoin"]      = {"usd": btc_price,  "usd_24h_change": btc_change}
+            result["tether-gold"]  = {"usd": gold_price, "usd_24h_change": gold_change}
+            return result
+        except Exception as e:
+            logger.warning("Twelve Data prices failed: " + str(e))
+
+    # Fallback CoinGecko
     try:
         r = requests.get(
             "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,tether-gold&vs_currencies=usd&include_24hr_change=true",
