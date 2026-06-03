@@ -561,7 +561,7 @@ def full_analysis(asset="BTC", uid=0):
     elif buy_c == 2: final="BUY";  conf_txt=t(uid,"partial_confluence"); base_conf=74
     elif sel_c == 3: final="SELL"; conf_txt=t(uid,"full_confluence");    base_conf=92
     elif sel_c == 2: final="SELL"; conf_txt=t(uid,"partial_confluence"); base_conf=74
-    else: return {"final": "NEUTRAL", "confluence_txt": t(uid,"no_confluence")}
+    else: return {"final": "NEUTRAL", "asset": asset, "confluence_txt": t(uid,"no_confluence")}
 
     # استخدم فريم الساعة كأساس للسعر والـ ATR
     main  = results.get("1h") or list(results.values())[0]
@@ -846,6 +846,8 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             res = full_analysis(asset, uid)
             if not res:
                 await query.message.reply_text(t(uid,"failed")); return
+            if res.get('final') == 'NEUTRAL' or 'key_fibs' not in res:
+                await query.message.reply_text(t(uid,"no_signal")); return
             await query.message.reply_text(build_analysis_msg(res, uid))
         except Exception as e:
             await query.message.reply_text(t(uid,"error") + str(e))
