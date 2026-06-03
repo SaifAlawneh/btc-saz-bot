@@ -1,3 +1,4 @@
+import os
 import asyncio
 import logging
 from datetime import datetime
@@ -8,8 +9,8 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 import ta
 
 # ==================== CONFIG ====================
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"   # ← توكن البوت من BotFather
-CHANNEL_ID = "@your_channel"         # ← ID القناة أو chat_id
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8892334042:AAEGw0XzDMrB-benCgbK7BMMrJ8ljOEtP6s")
+CHANNEL_ID = os.environ.get("CHANNEL_ID", "@btc_signals_saz")
 INTERVAL_MINUTES = 60                # كل كم دقيقة يبعت إشارة
 
 logging.basicConfig(
