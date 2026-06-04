@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 user_languages   = {}
 active_btc_trade = {}
 
+ALLOWED_USERS = {8490817794, 1548286220}
+
 
 
 
@@ -836,6 +838,9 @@ def lang_keyboard():
 # ==================== هاندلرز ====================
 async def start(update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
+    if uid not in ALLOWED_USERS:
+        await update.message.reply_text("⛔ هذا البوت خاص")
+        return
     if uid not in user_languages:
         await update.message.reply_text(
             "🐎 Abu Mahra Bot\n\nاختر لغتك / Choose your language:",
@@ -846,6 +851,7 @@ async def start(update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
     uid  = update.effective_user.id
     text = update.message.text or ""
+    if uid not in ALLOWED_USERS: return
     kb   = main_keyboard(uid) if uid in user_languages else lang_keyboard()
     lang = user_languages.get(uid, "ar")
     if any(g in text.lower() for g in GREETINGS):
@@ -859,6 +865,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
     uid   = query.from_user.id
     data  = query.data
     await query.answer()
+    if uid not in ALLOWED_USERS: return
 
     if data == 'lang_ar':
         user_languages[uid] = "ar"
