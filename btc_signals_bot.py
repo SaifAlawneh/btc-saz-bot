@@ -642,6 +642,15 @@ def full_analysis(asset="BTC", uid=0):
     df_4h = get_data(asset, days=30,  interval="hourly")
     df_1d = get_data(asset, days=90,  interval="daily")
     df_1w = get_data(asset, days=365, interval="daily")
+
+    # Session Filter
+    session, session_score = get_current_session()
+    # Asian session: اشتراط توافق 3 فريمات
+    if session == "ASIAN" and (buy_c if "buy_c" in dir() else 0) < 3 and (sel_c if "sel_c" in dir() else 0) < 3:
+        pass  # سيتم التحقق بعد حساب buy_c/sel_c
+
+    # Correlation Filter
+    gold_corr = get_gold_btc_correlation(asset)
     if df_4h is not None and len(df_4h) > 0:
         try:
             df_4h = df_4h.resample('4h').agg({
@@ -657,6 +666,10 @@ def full_analysis(asset="BTC", uid=0):
         return None
     buy_c = sum(1 for r in results.values() if r['direction'] == "BUY")
     sel_c = sum(1 for r in results.values() if r['direction'] == "SELL")
+    # Session Filter: Asian session تشترط توافق 3 فريمات
+    if session == "ASIAN" and buy_c < 3 and sel_c < 3:
+        return None
+
     if buy_c == 3:   final="BUY";  conf_txt=t(uid,"full_confluence");    frames_conf=85
     elif buy_c == 2: final="BUY";  conf_txt=t(uid,"partial_confluence"); frames_conf=65
     elif sel_c == 3: final="SELL"; conf_txt=t(uid,"full_confluence");    frames_conf=85
@@ -722,6 +735,36 @@ def full_analysis(asset="BTC", uid=0):
     # في VOLATILE — اشتراط توافق 3 فريمات
     if regime == "VOLATILE" and (buy_c < 3 and sel_c < 3):
         return None
+
+    # ==================== RSI Divergence ====================
+    divergence = "NONE"
+    try:
+        if df_1h is not None and "RSI" in calc_indicators(df_1h.tail(30).copy()).columns:
+            df_div = calc_indicators(df_1h.tail(30).copy())
+            divergence = detect_rsi_divergence(df_div)
+            # Bearish Divergence تعزز SELL
+            if divergence == "BEARISH" and final == "SELL":
+                base_conf = min(base_conf + 8, 89)
+            # Bullish Divergence تعزز BUY
+            elif divergence == "BULLISH" and final == "BUY":
+                base_conf = min(base_conf + 8, 89)
+            # Divergence معاكسة تخفض الثقة
+            elif divergence == "BEARISH" and final == "BUY":
+                base_conf = max(base_conf - 10, 50)
+            elif divergence == "BULLISH" and final == "SELL":
+                base_conf = max(base_conf - 10, 50)
+    except: pass
+
+    # ==================== Order Blocks & Liquidity ====================
+    bull_obs, bear_obs = find_order_blocks(df_1h) if df_1h is not None else ([], [])
+    buy_liq, sell_liq  = find_liquidity_zones(df_1h) if df_1h is not None else ([], [])
+
+    # Correlation Filter
+    if asset == "BTC":
+        if gold_corr == "BEAR" and final == "BUY" and buy_c < 3:
+            return None  # الذهب هابط والـ BTC بيع؟ خطر
+        if gold_corr == "BULL" and final == "SELL" and sel_c < 3:
+            return None  # الذهب صاعد والبوت يبيع؟ خطر
 
     # ==================== Monthly Bias ====================
     monthly_bias = get_monthly_bias(df_1d)
@@ -800,6 +843,11 @@ def full_analysis(asset="BTC", uid=0):
         "final": final, "asset": asset, "weekly_trend": weekly_trend,
         "regime": regime, "regime_strength": regime_strength,
         "monthly_bias": monthly_bias,
+        "divergence": divergence,
+        "session": session, "session_score": session_score,
+        "gold_corr": gold_corr,
+        "bull_obs": bull_obs, "bear_obs": bear_obs,
+        "buy_liq": buy_liq, "sell_liq": sell_liq,
         "confluence_txt": conf_txt, "base_conf": base_conf,
         "price": price, "entry_low": entry_low, "entry_high": entry_high, "tp1": tp1, "tp2": tp2, "tp3": tp3,
         "sl": sl, "rr": rr, "atr": atr,
@@ -865,6 +913,30 @@ def build_trade_msg(res, uid=0, auto=False):
     mb = res.get("monthly_bias", "NEUTRAL")
     mb_txt = "📈 شهري: صاعد" if mb=="BULL" else "📉 شهري: هابط" if mb=="BEAR" else "➡️ شهري: محايد"
     lines.append("  " + mb_txt)
+    # Session
+    sess = res.get("session", "")
+    sess_map = {"OVERLAP":"🔥 London+NY","LONDON":"🇬🇧 London","NY":"🗽 NY","ASIAN":"🌏 Asian"}
+    if sess: lines.append("  ⏰ " + sess_map.get(sess, sess))
+    # Divergence
+    div = res.get("divergence", "NONE")
+    if div == "BEARISH": lines.append("  📉 RSI Divergence هابط ⚠️")
+    elif div == "BULLISH": lines.append("  📈 RSI Divergence صاعد ✅")
+    # Gold Correlation
+    gc = res.get("gold_corr", "NEUTRAL")
+    if gc != "NEUTRAL":
+        gc_txt = "🥇 ذهب: صاعد (إيجابي)" if gc=="BULL" else "🥇 ذهب: هابط (سلبي)"
+        lines.append("  " + gc_txt)
+    # Order Blocks
+    is_sell = res["final"] == "SELL"
+    obs = res.get("bear_obs" if is_sell else "bull_obs", [])
+    if obs:
+        ob = obs[-1]
+        ob_label = "🔴 OB مقاومة" if is_sell else "🟢 OB دعم"
+        lines.append("  " + ob_label + ": $" + "{:,.0f}".format(ob["low"]) + " — $" + "{:,.0f}".format(ob["high"]))
+    # Liquidity
+    liq = res.get("sell_liq" if is_sell else "buy_liq", [])
+    if liq:
+        lines.append("  💧 Liquidity: $" + "{:,.0f}".format(liq[0]))
     for fl in res['frame_lines']:
         lines.append("  " + fl)
     lines.append("  " + res['confluence_txt'])
@@ -1699,6 +1771,153 @@ def get_monthly_bias(df_daily):
             return "BULL"
         elif last_close < prev_close < two_prev:
             return "BEAR"
+        return "NEUTRAL"
+    except:
+        return "NEUTRAL"
+
+
+# ==================== RSI Divergence ====================
+def detect_rsi_divergence(df, lookback=20):
+    """
+    Bullish Divergence: السعر Lower Low بس RSI Higher Low = انعكاس صعودي محتمل
+    Bearish Divergence: السعر Higher High بس RSI Lower High = انعكاس هبوطي محتمل
+    """
+    try:
+        if len(df) < lookback + 5:
+            return "NONE"
+        recent = df.tail(lookback)
+        prices = recent["Close"].values
+        rsi    = recent["RSI"].values
+
+        # إيجاد القمم والقيعان
+        price_hh = prices[-1] > max(prices[:-5])   # Higher High في السعر
+        price_ll = prices[-1] < min(prices[:-5])    # Lower Low في السعر
+        rsi_hh   = rsi[-1]   > max(rsi[:-5])        # Higher High في RSI
+        rsi_lh   = rsi[-1]   < max(rsi[:-5])        # Lower High في RSI
+        rsi_hl   = rsi[-1]   > min(rsi[:-5])        # Higher Low في RSI
+        rsi_ll2  = rsi[-1]   < min(rsi[:-5])        # Lower Low في RSI
+
+        # Bearish Divergence: سعر أعلى بس RSI أقل
+        if price_hh and rsi_lh and rsi[-1] > 55:
+            return "BEARISH"
+        # Bullish Divergence: سعر أقل بس RSI أعلى
+        if price_ll and rsi_hl and rsi[-1] < 45:
+            return "BULLISH"
+        return "NONE"
+    except:
+        return "NONE"
+
+
+# ==================== Order Blocks ====================
+def find_order_blocks(df, lookback=50):
+    """
+    Order Block = آخر شمعة هبوطية قبل حركة صعودية قوية (Bullish OB)
+    أو آخر شمعة صعودية قبل حركة هبوطية قوية (Bearish OB)
+    """
+    try:
+        if len(df) < lookback:
+            return [], []
+        recent = df.tail(lookback).copy()
+        bullish_obs = []
+        bearish_obs = []
+
+        for i in range(2, len(recent) - 2):
+            candle = recent.iloc[i]
+            next3  = recent.iloc[i+1:i+3]
+
+            # Bullish OB: شمعة حمراء (هبوطية) يليها 2+ شمعات خضراء قوية
+            if candle["Close"] < candle["Open"]:
+                if all(next3["Close"] > next3["Open"]) and                    next3["Close"].max() > candle["Open"] * 1.005:
+                    bullish_obs.append({
+                        "high": float(candle["Open"]),
+                        "low":  float(candle["Close"]),
+                        "time": str(candle.name)
+                    })
+
+            # Bearish OB: شمعة خضراء (صعودية) يليها 2+ شمعات حمراء قوية
+            if candle["Close"] > candle["Open"]:
+                if all(next3["Close"] < next3["Open"]) and                    next3["Close"].min() < candle["Open"] * 0.995:
+                    bearish_obs.append({
+                        "high": float(candle["Close"]),
+                        "low":  float(candle["Open"]),
+                        "time": str(candle.name)
+                    })
+
+        return bullish_obs[-3:], bearish_obs[-3:]
+    except:
+        return [], []
+
+
+# ==================== Liquidity Zones ====================
+def find_liquidity_zones(df, lookback=50):
+    """
+    Liquidity = أماكن تجمع الـ Stop Loss
+    فوق القمم السابقة (Buy Side Liquidity) = هدف للسوق قبل الهبوط
+    تحت القيعان السابقة (Sell Side Liquidity) = هدف للسوق قبل الصعود
+    """
+    try:
+        if len(df) < lookback:
+            return [], []
+        recent   = df.tail(lookback)
+        highs    = recent["High"].values
+        lows     = recent["Low"].values
+        buy_liq  = []  # فوق القمم
+        sell_liq = []  # تحت القيعان
+
+        for i in range(2, len(highs) - 2):
+            # قمة محلية = Buy Side Liquidity
+            if highs[i] > highs[i-1] and highs[i] > highs[i+1] and                highs[i] > highs[i-2] and highs[i] > highs[i+2]:
+                buy_liq.append(round(float(highs[i]), 2))
+            # قاع محلي = Sell Side Liquidity
+            if lows[i] < lows[i-1] and lows[i] < lows[i+1] and                lows[i] < lows[i-2] and lows[i] < lows[i+2]:
+                sell_liq.append(round(float(lows[i]), 2))
+
+        return sorted(buy_liq)[-3:], sorted(sell_liq)[:3]
+    except:
+        return [], []
+
+
+# ==================== Session Filter ====================
+def get_current_session():
+    """
+    Asian:  00:00 - 08:00 GMT  (ضعيف للـ scalping)
+    London: 08:00 - 16:00 GMT  (قوي جداً)
+    NY:     13:00 - 21:00 GMT  (قوي جداً)
+    Overlap: 13:00 - 16:00 GMT (الأقوى)
+    """
+    try:
+        hour = datetime.now(timezone.utc).hour
+        if 13 <= hour < 16:
+            return "OVERLAP", 100   # London + NY overlap = الأقوى
+        elif 8 <= hour < 16:
+            return "LONDON", 85
+        elif 13 <= hour < 21:
+            return "NY", 85
+        else:
+            return "ASIAN", 40      # ضعيف
+    except:
+        return "UNKNOWN", 60
+
+
+# ==================== Correlation Filter ====================
+def get_gold_btc_correlation(asset="BTC"):
+    """
+    يتحقق من correlation بين BTC والذهب
+    - إذا الذهب صاعد قوي = BTC عادةً يتبع (risk-on)
+    - إذا الذهب هابط = احتمال ضغط على BTC
+    """
+    try:
+        if asset != "BTC":
+            return "NEUTRAL"
+        gold_data = get_data("GOLD", days=3, interval="hourly")
+        if gold_data is None or len(gold_data) < 10:
+            return "NEUTRAL"
+        recent_gold = gold_data.tail(10)["Close"]
+        gold_change = (float(recent_gold.iloc[-1]) - float(recent_gold.iloc[0])) / float(recent_gold.iloc[0]) * 100
+        if gold_change > 0.5:
+            return "BULL"   # الذهب صاعد = إيجابي للـ BTC
+        elif gold_change < -0.5:
+            return "BEAR"   # الذهب هابط = سلبي للـ BTC
         return "NEUTRAL"
     except:
         return "NEUTRAL"
