@@ -836,14 +836,6 @@ def lang_keyboard():
 # ==================== هاندلرز ====================
 async def start(update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    if not is_allowed(uid):
-        lang = user_languages.get(uid, "ar")
-        await update.message.reply_text(
-            "⛔ ليس لديك صلاحية استخدام هذا البوت\n\nابعث /myid للحصول على ID تبعك وأرسله للمسؤول"
-            if lang == "ar" else
-            "⛔ You don't have access to this bot\n\nSend /myid to get your ID"
-        )
-        return
     if uid not in user_languages:
         await update.message.reply_text(
             "🐎 Abu Mahra Bot\n\nاختر لغتك / Choose your language:",
@@ -854,9 +846,6 @@ async def start(update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
     uid  = update.effective_user.id
     text = update.message.text or ""
-    if not is_allowed(uid): return
-    if not is_allowed(uid):
-        return
     kb   = main_keyboard(uid) if uid in user_languages else lang_keyboard()
     lang = user_languages.get(uid, "ar")
     if any(g in text.lower() for g in GREETINGS):
@@ -870,9 +859,6 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
     uid   = query.from_user.id
     data  = query.data
     await query.answer()
-    if not is_allowed(uid):
-        await query.message.reply_text("⛔ ليس لديك صلاحية استخدام هذا البوت")
-        return
 
     if data == 'lang_ar':
         user_languages[uid] = "ar"
