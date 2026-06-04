@@ -360,34 +360,39 @@ def get_data(asset="BTC", days=30, interval="hourly"):
         limit = 500
 
     # ==================== Binance (مجاني + real-time) ====================
-    try:
-        r = requests.get(
-            "https://api.binance.com/api/v3/klines",
-            params={
-                "symbol": "BTCUSDT",
-                "interval": bn_interval,
-                "limit": limit,
-            },
-            timeout=15
-        )
-        data = r.json()
-        if isinstance(data, list) and len(data) > 0:
-            rows = []
-            for k in data:
-                rows.append({
-                    "timestamp": pd.to_datetime(k[0], unit="ms"),
-                    "Open":   float(k[1]),
-                    "High":   float(k[2]),
-                    "Low":    float(k[3]),
-                    "Close":  float(k[4]),
-                    "Volume": float(k[5]),
-                })
-            df = pd.DataFrame(rows).set_index("timestamp").dropna()
-            set_cache(cache_key, df)
-            logger.info("Binance OK: " + bn_interval + " " + str(len(df)) + " candles")
-            return df
-    except Exception as e:
-        logger.warning("Binance failed: " + str(e))
+    binance_urls = [
+        "https://api.binance.com/api/v3/klines",
+        "https://api1.binance.com/api/v3/klines",
+        "https://api2.binance.com/api/v3/klines",
+        "https://api3.binance.com/api/v3/klines",
+    ]
+    for bn_url in binance_urls:
+        try:
+            r = requests.get(
+                bn_url,
+                params={"symbol": "BTCUSDT", "interval": bn_interval, "limit": limit},
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=15
+            )
+            data = r.json()
+            if isinstance(data, list) and len(data) > 0:
+                rows = []
+                for k in data:
+                    rows.append({
+                        "timestamp": pd.to_datetime(k[0], unit="ms"),
+                        "Open":   float(k[1]),
+                        "High":   float(k[2]),
+                        "Low":    float(k[3]),
+                        "Close":  float(k[4]),
+                        "Volume": float(k[5]),
+                    })
+                df = pd.DataFrame(rows).set_index("timestamp").dropna()
+                set_cache(cache_key, df)
+                logger.info("Binance OK: " + bn_url + " " + str(len(df)) + " candles")
+                return df
+        except Exception as e:
+            logger.warning("Binance failed " + bn_url + ": " + str(e))
+            continue
 
     # ==================== Fallback: CoinGecko ====================
     try:
@@ -415,18 +420,21 @@ def get_data(asset="BTC", days=30, interval="hourly"):
 
 def get_btc_price():
     """السعر الحالي من Binance (real-time)"""
-    # Binance أولاً
-    try:
-        r = requests.get(
-            "https://api.binance.com/api/v3/ticker/price",
-            params={"symbol": "BTCUSDT"},
-            timeout=10
-        )
-        data = r.json()
-        if "price" in data:
-            return float(data["price"])
-    except:
-        pass
+    # Binance أولاً — جرب عدة endpoints
+    for bn_url in ["https://api.binance.com","https://api1.binance.com","https://api2.binance.com"]:
+        try:
+            r = requests.get(
+                bn_url + "/api/v3/ticker/price",
+                params={"symbol": "BTCUSDT"},
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=10
+            )
+            data = r.json()
+            if "price" in data:
+                logger.info("Binance price OK: " + bn_url)
+                return float(data["price"])
+        except:
+            continue
     # Fallback: CoinGecko
     try:
         r = requests.get(
