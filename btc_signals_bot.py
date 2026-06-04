@@ -52,7 +52,7 @@ ALLOWED_USERS = {8490817794, 1548286220}
 
 
 _cache = {}
-CACHE_TTL = 600
+CACHE_TTL = 1200  # 20 دقيقة
 
 def get_cached(key):
     if key in _cache:
@@ -339,72 +339,63 @@ def gmt_now():
 
 # ==================== البيانات ====================
 def get_data(asset="BTC", days=30, interval="hourly"):
+    """
+    مصدر البيانات الرئيسي: Binance (مجاني + real-time)
+    Fallback: CoinGecko
+    """
     cache_key = str(asset).upper() + "_" + str(days) + "_" + interval
     cached = get_cached(cache_key)
     if cached is not None:
         return cached
 
-    symbol = "BTC/USD" if asset == "BTC" else "XAU/USD"
+    # تحويل الفريم لـ Binance
     if interval == "hourly":
-        td_interval = "1h"
-        outputsize = min(days * 24, 500)
+        bn_interval = "1h"
+        limit = min(days * 24, 1000)
     elif interval == "daily":
-        td_interval = "1day"
-        outputsize = min(days, 500)
+        bn_interval = "1d"
+        limit = min(days, 1000)
     else:
-        td_interval = "1h"
-        outputsize = 200
+        bn_interval = "1h"
+        limit = 500
 
-    if TWELVEDATA_KEY:
-        try:
-            r = requests.get(
-                "https://api.twelvedata.com/time_series",
-                params={"symbol": symbol, "interval": td_interval,
-                        "outputsize": outputsize, "apikey": TWELVEDATA_KEY, "format": "JSON"},
-                timeout=15)
-            data = r.json()
-            if "values" in data and len(data["values"]) > 0:
-                rows = []
-                for v in reversed(data["values"]):
-                    rows.append({"timestamp": pd.to_datetime(v["datetime"]),
-                                 "Open": float(v["open"]), "High": float(v["high"]),
-                                 "Low": float(v["low"]), "Close": float(v["close"]),
-                                 "Volume": float(v.get("volume", 0))})
-                df = pd.DataFrame(rows).set_index("timestamp").dropna()
-                set_cache(cache_key, df)
-                return df
-        except Exception as e:
-            logger.warning("Twelve Data failed: " + str(e))
+    # ==================== Binance (مجاني + real-time) ====================
+    try:
+        r = requests.get(
+            "https://api.binance.com/api/v3/klines",
+            params={
+                "symbol": "BTCUSDT",
+                "interval": bn_interval,
+                "limit": limit,
+            },
+            timeout=15
+        )
+        data = r.json()
+        if isinstance(data, list) and len(data) > 0:
+            rows = []
+            for k in data:
+                rows.append({
+                    "timestamp": pd.to_datetime(k[0], unit="ms"),
+                    "Open":   float(k[1]),
+                    "High":   float(k[2]),
+                    "Low":    float(k[3]),
+                    "Close":  float(k[4]),
+                    "Volume": float(k[5]),
+                })
+            df = pd.DataFrame(rows).set_index("timestamp").dropna()
+            set_cache(cache_key, df)
+            logger.info("Binance OK: " + bn_interval + " " + str(len(df)) + " candles")
+            return df
+    except Exception as e:
+        logger.warning("Binance failed: " + str(e))
 
-    # Fallback: للذهب نجرب Twelve Data بـ outputsize أصغر
-    if asset != "BTC" and TWELVEDATA_KEY:
-        try:
-            r = requests.get(
-                "https://api.twelvedata.com/time_series",
-                params={"symbol": "XAU/USD", "interval": td_interval,
-                        "outputsize": min(outputsize, 200),
-                        "apikey": TWELVEDATA_KEY, "format": "JSON"},
-                timeout=20)
-            data = r.json()
-            if "values" in data and len(data["values"]) > 0:
-                rows = []
-                for v in reversed(data["values"]):
-                    rows.append({"timestamp": pd.to_datetime(v["datetime"]),
-                                 "Open": float(v["open"]), "High": float(v["high"]),
-                                 "Low": float(v["low"]), "Close": float(v["close"]),
-                                 "Volume": float(v.get("volume", 0))})
-                df = pd.DataFrame(rows).set_index("timestamp").dropna()
-                set_cache(cache_key, df)
-                logger.info("Twelve Data fallback OK: XAU/USD")
-                return df
-        except Exception as e:
-            logger.warning("Twelve Data fallback failed: " + str(e))
-
-    # Fallback: CoinGecko للبيتكوين
+    # ==================== Fallback: CoinGecko ====================
     try:
         r = requests.get(
             "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart",
-            params={"vs_currency": "usd", "days": days, "interval": interval}, timeout=15)
+            params={"vs_currency": "usd", "days": days, "interval": interval},
+            timeout=15
+        )
         data = r.json()
         df = pd.DataFrame(data["prices"], columns=["timestamp", "Close"])
         df["Volume"] = [v[1] for v in data["total_volumes"]]
@@ -418,50 +409,55 @@ def get_data(asset="BTC", days=30, interval="hourly"):
         logger.info("CoinGecko fallback OK: BTC")
         return result
     except Exception as e:
-        logger.error("BTC CoinGecko Error: " + str(e))
+        logger.error("BTC all sources failed: " + str(e))
 
     return None
 
 def get_btc_price():
-    if TWELVEDATA_KEY:
-        try:
-            r = requests.get("https://api.twelvedata.com/price",
-                             params={"symbol": "BTC/USD", "apikey": TWELVEDATA_KEY}, timeout=10)
-            data = r.json()
-            if "price" in data:
-                return float(data["price"])
-        except:
-            pass
+    """السعر الحالي من Binance (real-time)"""
+    # Binance أولاً
     try:
         r = requests.get(
-            "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd", timeout=10)
+            "https://api.binance.com/api/v3/ticker/price",
+            params={"symbol": "BTCUSDT"},
+            timeout=10
+        )
+        data = r.json()
+        if "price" in data:
+            return float(data["price"])
+    except:
+        pass
+    # Fallback: CoinGecko
+    try:
+        r = requests.get(
+            "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd",
+            timeout=10
+        )
         return float(r.json()["bitcoin"]["usd"])
     except:
         return None
 
 def get_prices():
-    result = {"bitcoin": {}}
-    if TWELVEDATA_KEY:
-        try:
-            r1 = requests.get("https://api.twelvedata.com/price",
-                              params={"symbol": "BTC/USD", "apikey": TWELVEDATA_KEY}, timeout=10)
-            btc_price = float(r1.json().get("price", 0))
-            r3 = requests.get("https://api.twelvedata.com/time_series",
-                              params={"symbol": "BTC/USD", "interval": "1day",
-                                      "outputsize": 2, "apikey": TWELVEDATA_KEY}, timeout=10)
-            btc_data = r3.json().get("values", [])
-            btc_change = 0
-            if len(btc_data) >= 2:
-                prev = float(btc_data[1]["close"])
-                btc_change = round((btc_price - prev) / prev * 100, 2) if prev > 0 else 0
-            result["bitcoin"] = {"usd": btc_price, "usd_24h_change": btc_change}
-            return result
-        except Exception as e:
-            logger.warning("Twelve Data prices failed: " + str(e))
+    """أسعار BTC من Binance"""
+    try:
+        # السعر الحالي
+        r1 = requests.get(
+            "https://api.binance.com/api/v3/ticker/24hr",
+            params={"symbol": "BTCUSDT"},
+            timeout=10
+        )
+        data = r1.json()
+        btc_price  = float(data["lastPrice"])
+        btc_change = round(float(data["priceChangePercent"]), 2)
+        return {"bitcoin": {"usd": btc_price, "usd_24h_change": btc_change}}
+    except:
+        pass
+    # Fallback: CoinGecko
     try:
         r = requests.get(
             "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true",
-            timeout=10)
+            timeout=10
+        )
         return r.json()
     except:
         return None
