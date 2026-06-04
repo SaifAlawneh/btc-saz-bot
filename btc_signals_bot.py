@@ -1158,8 +1158,10 @@ def build_analysis_msg(res, uid=0):
 # ==================== لوحات المفاتيح ====================
 def main_keyboard(uid):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(t(uid,"btn_btc"),  callback_data='trade_BTC'),
-         InlineKeyboardButton(t(uid,"btn_analysis_btc"),  callback_data='analysis_BTC')],
+        [InlineKeyboardButton(t(uid,"btn_btc"),   callback_data='trade_BTC'),
+         InlineKeyboardButton(t(uid,"btn_gold"),  callback_data='trade_GOLD')],
+        [InlineKeyboardButton(t(uid,"btn_analysis_btc"),  callback_data='analysis_BTC'),
+         InlineKeyboardButton(t(uid,"btn_analysis_gold"), callback_data='analysis_GOLD')],
         [InlineKeyboardButton(t(uid,"btn_prices"),  callback_data='prices'),
          InlineKeyboardButton(t(uid,"btn_trades"),  callback_data='open_trades')],
         [InlineKeyboardButton(t(uid,"btn_stats"),   callback_data='stats'),
