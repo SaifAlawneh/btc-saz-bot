@@ -378,25 +378,52 @@ def get_data(asset="BTC", days=30, interval="hourly"):
         except Exception as e:
             logger.warning("Twelve Data failed: " + str(e))
 
-    try:
-        coin = "bitcoin" if asset == "BTC" else "tether-gold"
-        r = requests.get(
-            "https://api.coingecko.com/api/v3/coins/" + coin + "/market_chart",
-            params={"vs_currency": "usd", "days": days, "interval": interval}, timeout=15)
-        data = r.json()
-        df = pd.DataFrame(data["prices"], columns=["timestamp", "Close"])
-        df["Volume"] = [v[1] for v in data["total_volumes"]]
-        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-        df = df.set_index("timestamp")
-        df["High"] = df["Close"].rolling(3).max()
-        df["Low"]  = df["Close"].rolling(3).min()
-        df["Open"] = df["Close"].shift(1)
-        result = df.dropna()
-        set_cache(cache_key, result)
-        return result
-    except Exception as e:
-        logger.error(asset + " Error: " + str(e))
-        return None
+    # Fallback: للذهب نجرب Twelve Data بـ outputsize أصغر
+    if asset != "BTC" and TWELVEDATA_KEY:
+        try:
+            r = requests.get(
+                "https://api.twelvedata.com/time_series",
+                params={"symbol": "XAU/USD", "interval": td_interval,
+                        "outputsize": min(outputsize, 200),
+                        "apikey": TWELVEDATA_KEY, "format": "JSON"},
+                timeout=20)
+            data = r.json()
+            if "values" in data and len(data["values"]) > 0:
+                rows = []
+                for v in reversed(data["values"]):
+                    rows.append({"timestamp": pd.to_datetime(v["datetime"]),
+                                 "Open": float(v["open"]), "High": float(v["high"]),
+                                 "Low": float(v["low"]), "Close": float(v["close"]),
+                                 "Volume": float(v.get("volume", 0))})
+                df = pd.DataFrame(rows).set_index("timestamp").dropna()
+                set_cache(cache_key, df)
+                logger.info("Twelve Data fallback OK: XAU/USD")
+                return df
+        except Exception as e:
+            logger.warning("Twelve Data fallback failed: " + str(e))
+
+    # Fallback: CoinGecko للبيتكوين فقط
+    if asset == "BTC":
+        try:
+            r = requests.get(
+                "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart",
+                params={"vs_currency": "usd", "days": days, "interval": interval}, timeout=15)
+            data = r.json()
+            df = pd.DataFrame(data["prices"], columns=["timestamp", "Close"])
+            df["Volume"] = [v[1] for v in data["total_volumes"]]
+            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+            df = df.set_index("timestamp")
+            df["High"] = df["Close"].rolling(3).max()
+            df["Low"]  = df["Close"].rolling(3).min()
+            df["Open"] = df["Close"].shift(1)
+            result = df.dropna()
+            set_cache(cache_key, result)
+            return result
+        except Exception as e:
+            logger.error("BTC CoinGecko Error: " + str(e))
+
+    logger.error(asset + " all sources failed")
+    return None
 
 def get_btc_price():
     if TWELVEDATA_KEY:
