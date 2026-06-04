@@ -400,27 +400,26 @@ def get_data(asset="BTC", days=30, interval="hourly"):
         except Exception as e:
             logger.warning("Twelve Data fallback failed: " + str(e))
 
-    # Fallback: CoinGecko للبيتكوين فقط
-    if asset == "BTC":
-        try:
-            r = requests.get(
-                "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart",
-                params={"vs_currency": "usd", "days": days, "interval": interval}, timeout=15)
-            data = r.json()
-            df = pd.DataFrame(data["prices"], columns=["timestamp", "Close"])
-            df["Volume"] = [v[1] for v in data["total_volumes"]]
-            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-            df = df.set_index("timestamp")
-            df["High"] = df["Close"].rolling(3).max()
-            df["Low"]  = df["Close"].rolling(3).min()
-            df["Open"] = df["Close"].shift(1)
-            result = df.dropna()
-            set_cache(cache_key, result)
-            return result
-        except Exception as e:
-            logger.error("BTC CoinGecko Error: " + str(e))
+    # Fallback: CoinGecko للبيتكوين
+    try:
+        r = requests.get(
+            "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart",
+            params={"vs_currency": "usd", "days": days, "interval": interval}, timeout=15)
+        data = r.json()
+        df = pd.DataFrame(data["prices"], columns=["timestamp", "Close"])
+        df["Volume"] = [v[1] for v in data["total_volumes"]]
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+        df = df.set_index("timestamp")
+        df["High"] = df["Close"].rolling(3).max()
+        df["Low"]  = df["Close"].rolling(3).min()
+        df["Open"] = df["Close"].shift(1)
+        result = df.dropna()
+        set_cache(cache_key, result)
+        logger.info("CoinGecko fallback OK: BTC")
+        return result
+    except Exception as e:
+        logger.error("BTC CoinGecko Error: " + str(e))
 
-    logger.error(asset + " all sources failed")
     return None
 
 def get_btc_price():
@@ -649,6 +648,227 @@ def analyze_frame(df, uid=0):
         "bb_zone": "low" if price <= last['BB_L'] else "high" if price >= last['BB_U'] else "mid",
         "ichi_bull": ichi_bull, "ichi_bear": ichi_bear,
     }
+
+
+def detect_market_regime(df):
+    """
+    يحدد نوع السوق:
+    - TRENDING_UP: اتجاه صاعد قوي
+    - TRENDING_DOWN: اتجاه هابط قوي
+    - RANGING: سوق جانبي (تجنب إشارات الاتجاه)
+    - VOLATILE: تقلب عالي (تداول بحذر)
+    """
+    try:
+        if df is None or len(df) < 50:
+            return "UNKNOWN", 0
+
+        df2 = calc_indicators(df.tail(100).copy())
+        last = df2.iloc[-1]
+        price = last["Close"]
+
+        # ATR نسبي للتقلب
+        atr_pct = last["ATR"] / price * 100
+
+        # ADX-like: قياس قوة الاتجاه من EMA
+        ema9  = last.get("EMA9",  price)
+        ema21 = last.get("EMA21", price)
+        ema50 = last.get("EMA50", price)
+
+        # مسافة بين EMAs كنسبة مئوية
+        ema_spread = abs(ema9 - ema50) / price * 100
+
+        # Bollinger Band Width
+        bb_width = (last["BB_U"] - last["BB_L"]) / price * 100
+
+        # تحديد النظام
+        if atr_pct > 3.0:
+            regime = "VOLATILE"
+            strength = round(atr_pct * 10)
+        elif ema_spread > 1.5 and ema9 > ema21 > ema50:
+            regime = "TRENDING_UP"
+            strength = round(min(ema_spread * 30, 95))
+        elif ema_spread > 1.5 and ema9 < ema21 < ema50:
+            regime = "TRENDING_DOWN"
+            strength = round(min(ema_spread * 30, 95))
+        elif bb_width < 3.0:
+            regime = "RANGING"
+            strength = round((3.0 - bb_width) * 20)
+        else:
+            regime = "RANGING"
+            strength = 50
+
+        return regime, min(strength, 95)
+
+    except Exception as e:
+        logger.warning("Regime error: " + str(e))
+        return "UNKNOWN", 0
+
+
+
+def detect_rsi_divergence(df, lookback=20):
+    """
+    Bullish Divergence: السعر Lower Low بس RSI Higher Low = انعكاس صعودي محتمل
+    Bearish Divergence: السعر Higher High بس RSI Lower High = انعكاس هبوطي محتمل
+    """
+    try:
+        if len(df) < lookback + 5:
+            return "NONE"
+        recent = df.tail(lookback)
+        prices = recent["Close"].values
+        rsi    = recent["RSI"].values
+
+        # إيجاد القمم والقيعان
+        price_hh = prices[-1] > max(prices[:-5])   # Higher High في السعر
+        price_ll = prices[-1] < min(prices[:-5])    # Lower Low في السعر
+        rsi_hh   = rsi[-1]   > max(rsi[:-5])        # Higher High في RSI
+        rsi_lh   = rsi[-1]   < max(rsi[:-5])        # Lower High في RSI
+        rsi_hl   = rsi[-1]   > min(rsi[:-5])        # Higher Low في RSI
+        rsi_ll2  = rsi[-1]   < min(rsi[:-5])        # Lower Low في RSI
+
+        # Bearish Divergence: سعر أعلى بس RSI أقل
+        if price_hh and rsi_lh and rsi[-1] > 55:
+            return "BEARISH"
+        # Bullish Divergence: سعر أقل بس RSI أعلى
+        if price_ll and rsi_hl and rsi[-1] < 45:
+            return "BULLISH"
+        return "NONE"
+    except:
+        return "NONE"
+
+
+
+def find_order_blocks(df, lookback=50):
+    """
+    Order Block = آخر شمعة هبوطية قبل حركة صعودية قوية (Bullish OB)
+    أو آخر شمعة صعودية قبل حركة هبوطية قوية (Bearish OB)
+    """
+    try:
+        if len(df) < lookback:
+            return [], []
+        recent = df.tail(lookback).copy()
+        bullish_obs = []
+        bearish_obs = []
+
+        for i in range(2, len(recent) - 2):
+            candle = recent.iloc[i]
+            next3  = recent.iloc[i+1:i+3]
+
+            # Bullish OB: شمعة حمراء (هبوطية) يليها 2+ شمعات خضراء قوية
+            if candle["Close"] < candle["Open"]:
+                if all(next3["Close"] > next3["Open"]) and                    next3["Close"].max() > candle["Open"] * 1.005:
+                    bullish_obs.append({
+                        "high": float(candle["Open"]),
+                        "low":  float(candle["Close"]),
+                        "time": str(candle.name)
+                    })
+
+            # Bearish OB: شمعة خضراء (صعودية) يليها 2+ شمعات حمراء قوية
+            if candle["Close"] > candle["Open"]:
+                if all(next3["Close"] < next3["Open"]) and                    next3["Close"].min() < candle["Open"] * 0.995:
+                    bearish_obs.append({
+                        "high": float(candle["Close"]),
+                        "low":  float(candle["Open"]),
+                        "time": str(candle.name)
+                    })
+
+        return bullish_obs[-3:], bearish_obs[-3:]
+    except:
+        return [], []
+
+
+
+def find_liquidity_zones(df, lookback=50):
+    """
+    Liquidity = أماكن تجمع الـ Stop Loss
+    فوق القمم السابقة (Buy Side Liquidity) = هدف للسوق قبل الهبوط
+    تحت القيعان السابقة (Sell Side Liquidity) = هدف للسوق قبل الصعود
+    """
+    try:
+        if len(df) < lookback:
+            return [], []
+        recent   = df.tail(lookback)
+        highs    = recent["High"].values
+        lows     = recent["Low"].values
+        buy_liq  = []  # فوق القمم
+        sell_liq = []  # تحت القيعان
+
+        for i in range(2, len(highs) - 2):
+            # قمة محلية = Buy Side Liquidity
+            if highs[i] > highs[i-1] and highs[i] > highs[i+1] and                highs[i] > highs[i-2] and highs[i] > highs[i+2]:
+                buy_liq.append(round(float(highs[i]), 2))
+            # قاع محلي = Sell Side Liquidity
+            if lows[i] < lows[i-1] and lows[i] < lows[i+1] and                lows[i] < lows[i-2] and lows[i] < lows[i+2]:
+                sell_liq.append(round(float(lows[i]), 2))
+
+        return sorted(buy_liq)[-3:], sorted(sell_liq)[:3]
+    except:
+        return [], []
+
+
+
+def get_current_session():
+    """
+    Asian:  00:00 - 08:00 GMT  (ضعيف للـ scalping)
+    London: 08:00 - 16:00 GMT  (قوي جداً)
+    NY:     13:00 - 21:00 GMT  (قوي جداً)
+    Overlap: 13:00 - 16:00 GMT (الأقوى)
+    """
+    try:
+        hour = datetime.now(timezone.utc).hour
+        if 13 <= hour < 16:
+            return "OVERLAP", 100   # London + NY overlap = الأقوى
+        elif 8 <= hour < 16:
+            return "LONDON", 85
+        elif 13 <= hour < 21:
+            return "NY", 85
+        else:
+            return "ASIAN", 40      # ضعيف
+    except:
+        return "UNKNOWN", 60
+
+
+
+
+
+def get_monthly_bias(df_daily):
+    """يحدد الاتجاه الشهري"""
+    try:
+        if df_daily is None or len(df_daily) < 30:
+            return "NEUTRAL"
+        df_m = df_daily.resample("ME").agg({
+            "Open":"first","High":"max","Low":"min",
+            "Close":"last","Volume":"sum"
+        }).dropna().tail(3)
+        if len(df_m) < 2:
+            return "NEUTRAL"
+        last_close  = float(df_m["Close"].iloc[-1])
+        prev_close  = float(df_m["Close"].iloc[-2])
+        two_prev    = float(df_m["Close"].iloc[0]) if len(df_m) >= 3 else prev_close
+        if last_close > prev_close > two_prev:
+            return "BULL"
+        elif last_close < prev_close < two_prev:
+            return "BEAR"
+        return "NEUTRAL"
+    except:
+        return "NEUTRAL"
+
+
+
+def get_upcoming_event_warning(hours_ahead=6):
+    """يتحقق إذا في حدث اقتصادي مهم خلال X ساعات"""
+    try:
+        now = datetime.now(timezone.utc)
+        for ev in ECONOMIC_CALENDAR:
+            ev_date = datetime.strptime(ev["date"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            # افترض الأحداث الساعة 14:00 GMT (وقت معظم البيانات الأمريكية)
+            ev_datetime = ev_date.replace(hour=14, minute=0)
+            diff_hours = (ev_datetime - now).total_seconds() / 3600
+            if 0 <= diff_hours <= hours_ahead:
+                return ev
+        return None
+    except:
+        return None
+
 
 def full_analysis(asset="BTC", uid=0):
     df_1h = get_data(asset, days=14,  interval="hourly")
@@ -1413,54 +1633,7 @@ async def send_smart_alerts(context):
 
 
 # ==================== أخبار ====================
-def get_news():
-    try:
-        r = requests.get(
-            "https://newsapi.org/v2/everything",
-            params={
-                "q": "bitcoin OR gold OR Federal Reserve OR inflation OR CPI",
-                "language": "en",
-                "sortBy": "publishedAt",
-                "pageSize": 5,
-                "apiKey": NEWS_API_KEY,
-            },
-            timeout=10
-        )
-        data = r.json()
-        if data.get("status") != "ok":
-            return None
-        return data.get("articles", [])
-    except Exception as e:
-        logger.error("News error: " + str(e))
-        return None
 
-async def send_news(context):
-    try:
-        articles = get_news()
-        if not articles:
-            return
-        lines = [
-            "╔══════════════════════════╗",
-            "  📰 أخبار السوق - أبو مهرة",
-            "╚══════════════════════════╝",
-            "",
-        ]
-        for i, a in enumerate(articles[:5], 1):
-            title = a.get("title", "")[:80]
-            source = a.get("source", {}).get("name", "")
-            published = a.get("publishedAt", "")[:10]
-            lines.append(str(i) + ". " + title)
-            lines.append("   📌 " + source + "  |  " + published)
-            lines.append("")
-        lines += [
-            "━" * 24,
-            "🕐 " + gmt_now(),
-            "⚠️ للأغراض التعليمية فقط",
-        ]
-        await context.bot.send_message(chat_id=CHANNEL_ID, text="\n".join(lines))
-        logger.info("News sent")
-    except Exception as e:
-        logger.error("News send error: " + str(e))
 
 
 # ==================== التقويم الاقتصادي ====================
@@ -1596,76 +1769,7 @@ async def send_news(context):
 
 
 # ==================== Market Regime ====================
-def detect_market_regime(df):
-    """
-    يحدد نوع السوق:
-    - TRENDING_UP: اتجاه صاعد قوي
-    - TRENDING_DOWN: اتجاه هابط قوي
-    - RANGING: سوق جانبي (تجنب إشارات الاتجاه)
-    - VOLATILE: تقلب عالي (تداول بحذر)
-    """
-    try:
-        if df is None or len(df) < 50:
-            return "UNKNOWN", 0
-
-        df2 = calc_indicators(df.tail(100).copy())
-        last = df2.iloc[-1]
-        price = last["Close"]
-
-        # ATR نسبي للتقلب
-        atr_pct = last["ATR"] / price * 100
-
-        # ADX-like: قياس قوة الاتجاه من EMA
-        ema9  = last.get("EMA9",  price)
-        ema21 = last.get("EMA21", price)
-        ema50 = last.get("EMA50", price)
-
-        # مسافة بين EMAs كنسبة مئوية
-        ema_spread = abs(ema9 - ema50) / price * 100
-
-        # Bollinger Band Width
-        bb_width = (last["BB_U"] - last["BB_L"]) / price * 100
-
-        # تحديد النظام
-        if atr_pct > 3.0:
-            regime = "VOLATILE"
-            strength = round(atr_pct * 10)
-        elif ema_spread > 1.5 and ema9 > ema21 > ema50:
-            regime = "TRENDING_UP"
-            strength = round(min(ema_spread * 30, 95))
-        elif ema_spread > 1.5 and ema9 < ema21 < ema50:
-            regime = "TRENDING_DOWN"
-            strength = round(min(ema_spread * 30, 95))
-        elif bb_width < 3.0:
-            regime = "RANGING"
-            strength = round((3.0 - bb_width) * 20)
-        else:
-            regime = "RANGING"
-            strength = 50
-
-        return regime, min(strength, 95)
-
-    except Exception as e:
-        logger.warning("Regime error: " + str(e))
-        return "UNKNOWN", 0
-
-
 # ==================== تنبيه الأحداث الاقتصادية ====================
-def get_upcoming_event_warning(hours_ahead=6):
-    """يتحقق إذا في حدث اقتصادي مهم خلال X ساعات"""
-    try:
-        now = datetime.now(timezone.utc)
-        for ev in ECONOMIC_CALENDAR:
-            ev_date = datetime.strptime(ev["date"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
-            # افترض الأحداث الساعة 14:00 GMT (وقت معظم البيانات الأمريكية)
-            ev_datetime = ev_date.replace(hour=14, minute=0)
-            diff_hours = (ev_datetime - now).total_seconds() / 3600
-            if 0 <= diff_hours <= hours_ahead:
-                return ev
-        return None
-    except:
-        return None
-
 async def check_economic_alerts(context):
     """يبعث تحذير قبل ساعة من حدث اقتصادي مهم"""
     try:
@@ -1786,175 +1890,10 @@ async def send_daily_summary(context):
         logger.error("Daily summary error: " + str(e))
 
 
-def get_monthly_bias(df_daily):
-    """يحدد الاتجاه الشهري"""
-    try:
-        if df_daily is None or len(df_daily) < 30:
-            return "NEUTRAL"
-        df_m = df_daily.resample("ME").agg({
-            "Open":"first","High":"max","Low":"min",
-            "Close":"last","Volume":"sum"
-        }).dropna().tail(3)
-        if len(df_m) < 2:
-            return "NEUTRAL"
-        last_close  = float(df_m["Close"].iloc[-1])
-        prev_close  = float(df_m["Close"].iloc[-2])
-        two_prev    = float(df_m["Close"].iloc[0]) if len(df_m) >= 3 else prev_close
-        if last_close > prev_close > two_prev:
-            return "BULL"
-        elif last_close < prev_close < two_prev:
-            return "BEAR"
-        return "NEUTRAL"
-    except:
-        return "NEUTRAL"
-
-
 # ==================== RSI Divergence ====================
-def detect_rsi_divergence(df, lookback=20):
-    """
-    Bullish Divergence: السعر Lower Low بس RSI Higher Low = انعكاس صعودي محتمل
-    Bearish Divergence: السعر Higher High بس RSI Lower High = انعكاس هبوطي محتمل
-    """
-    try:
-        if len(df) < lookback + 5:
-            return "NONE"
-        recent = df.tail(lookback)
-        prices = recent["Close"].values
-        rsi    = recent["RSI"].values
-
-        # إيجاد القمم والقيعان
-        price_hh = prices[-1] > max(prices[:-5])   # Higher High في السعر
-        price_ll = prices[-1] < min(prices[:-5])    # Lower Low في السعر
-        rsi_hh   = rsi[-1]   > max(rsi[:-5])        # Higher High في RSI
-        rsi_lh   = rsi[-1]   < max(rsi[:-5])        # Lower High في RSI
-        rsi_hl   = rsi[-1]   > min(rsi[:-5])        # Higher Low في RSI
-        rsi_ll2  = rsi[-1]   < min(rsi[:-5])        # Lower Low في RSI
-
-        # Bearish Divergence: سعر أعلى بس RSI أقل
-        if price_hh and rsi_lh and rsi[-1] > 55:
-            return "BEARISH"
-        # Bullish Divergence: سعر أقل بس RSI أعلى
-        if price_ll and rsi_hl and rsi[-1] < 45:
-            return "BULLISH"
-        return "NONE"
-    except:
-        return "NONE"
-
-
 # ==================== Order Blocks ====================
-def find_order_blocks(df, lookback=50):
-    """
-    Order Block = آخر شمعة هبوطية قبل حركة صعودية قوية (Bullish OB)
-    أو آخر شمعة صعودية قبل حركة هبوطية قوية (Bearish OB)
-    """
-    try:
-        if len(df) < lookback:
-            return [], []
-        recent = df.tail(lookback).copy()
-        bullish_obs = []
-        bearish_obs = []
-
-        for i in range(2, len(recent) - 2):
-            candle = recent.iloc[i]
-            next3  = recent.iloc[i+1:i+3]
-
-            # Bullish OB: شمعة حمراء (هبوطية) يليها 2+ شمعات خضراء قوية
-            if candle["Close"] < candle["Open"]:
-                if all(next3["Close"] > next3["Open"]) and                    next3["Close"].max() > candle["Open"] * 1.005:
-                    bullish_obs.append({
-                        "high": float(candle["Open"]),
-                        "low":  float(candle["Close"]),
-                        "time": str(candle.name)
-                    })
-
-            # Bearish OB: شمعة خضراء (صعودية) يليها 2+ شمعات حمراء قوية
-            if candle["Close"] > candle["Open"]:
-                if all(next3["Close"] < next3["Open"]) and                    next3["Close"].min() < candle["Open"] * 0.995:
-                    bearish_obs.append({
-                        "high": float(candle["Close"]),
-                        "low":  float(candle["Open"]),
-                        "time": str(candle.name)
-                    })
-
-        return bullish_obs[-3:], bearish_obs[-3:]
-    except:
-        return [], []
-
-
 # ==================== Liquidity Zones ====================
-def find_liquidity_zones(df, lookback=50):
-    """
-    Liquidity = أماكن تجمع الـ Stop Loss
-    فوق القمم السابقة (Buy Side Liquidity) = هدف للسوق قبل الهبوط
-    تحت القيعان السابقة (Sell Side Liquidity) = هدف للسوق قبل الصعود
-    """
-    try:
-        if len(df) < lookback:
-            return [], []
-        recent   = df.tail(lookback)
-        highs    = recent["High"].values
-        lows     = recent["Low"].values
-        buy_liq  = []  # فوق القمم
-        sell_liq = []  # تحت القيعان
-
-        for i in range(2, len(highs) - 2):
-            # قمة محلية = Buy Side Liquidity
-            if highs[i] > highs[i-1] and highs[i] > highs[i+1] and                highs[i] > highs[i-2] and highs[i] > highs[i+2]:
-                buy_liq.append(round(float(highs[i]), 2))
-            # قاع محلي = Sell Side Liquidity
-            if lows[i] < lows[i-1] and lows[i] < lows[i+1] and                lows[i] < lows[i-2] and lows[i] < lows[i+2]:
-                sell_liq.append(round(float(lows[i]), 2))
-
-        return sorted(buy_liq)[-3:], sorted(sell_liq)[:3]
-    except:
-        return [], []
-
-
 # ==================== Session Filter ====================
-def get_current_session():
-    """
-    Asian:  00:00 - 08:00 GMT  (ضعيف للـ scalping)
-    London: 08:00 - 16:00 GMT  (قوي جداً)
-    NY:     13:00 - 21:00 GMT  (قوي جداً)
-    Overlap: 13:00 - 16:00 GMT (الأقوى)
-    """
-    try:
-        hour = datetime.now(timezone.utc).hour
-        if 13 <= hour < 16:
-            return "OVERLAP", 100   # London + NY overlap = الأقوى
-        elif 8 <= hour < 16:
-            return "LONDON", 85
-        elif 13 <= hour < 21:
-            return "NY", 85
-        else:
-            return "ASIAN", 40      # ضعيف
-    except:
-        return "UNKNOWN", 60
-
-
-# ==================== Correlation Filter ====================
-def get_gold_btc_correlation(asset="BTC"):
-    """
-    يتحقق من correlation بين BTC والذهب
-    - إذا الذهب صاعد قوي = BTC عادةً يتبع (risk-on)
-    - إذا الذهب هابط = احتمال ضغط على BTC
-    """
-    try:
-        if asset != "BTC":
-            return "NEUTRAL"
-        gold_data = get_data("GOLD", days=3, interval="hourly")
-        if gold_data is None or len(gold_data) < 10:
-            return "NEUTRAL"
-        recent_gold = gold_data.tail(10)["Close"]
-        gold_change = (float(recent_gold.iloc[-1]) - float(recent_gold.iloc[0])) / float(recent_gold.iloc[0]) * 100
-        if gold_change > 0.5:
-            return "BULL"   # الذهب صاعد = إيجابي للـ BTC
-        elif gold_change < -0.5:
-            return "BEAR"   # الذهب هابط = سلبي للـ BTC
-        return "NEUTRAL"
-    except:
-        return "NEUTRAL"
-
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
@@ -1968,7 +1907,6 @@ def main():
     app.job_queue.run_repeating(send_calendar,     interval=24*60*60,             first=600)
     app.job_queue.run_repeating(check_economic_alerts, interval=30*60,            first=120)
     app.job_queue.run_daily(send_daily_summary, time=__import__("datetime").time(6, 0, 0))
-    app.job_queue.run_repeating(send_news,         interval=4*60*60,              first=300)
     logger.info("🐎 Abu Mahra Bot - Ready!")
     app.run_polling()
 
