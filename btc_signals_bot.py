@@ -20,6 +20,30 @@ logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=lo
 logger = logging.getLogger(__name__)
 user_languages   = {}
 active_btc_trade = {}
+active_trades    = []   # قائمة كل الصفقات المفتوحة
+trade_counter    = 0    # رقم الصفقة
+last_signal_time = {}   # لمنع الـ spam: {"BTC": timestamp, "GOLD": timestamp}
+TRADES_FILE      = "active_trades.json"
+SPAM_COOLDOWN    = 1800  # 30 دقيقة بين كل إشارة وإشارة
+
+def load_trades():
+    try:
+        import json
+        with open(TRADES_FILE) as f:
+            data = json.load(f)
+            return data.get("trades", []), data.get("counter", 0)
+    except:
+        return [], 0
+
+def save_trades():
+    import json
+    with open(TRADES_FILE, "w") as f:
+        json.dump({"trades": active_trades, "counter": trade_counter}, f)
+
+# تحميل الصفقات عند البدء
+_loaded_trades, _loaded_counter = load_trades()
+active_trades.extend(_loaded_trades)
+trade_counter = _loaded_counter
 
 ALLOWED_USERS = {8490817794, 1548286220}
 
@@ -643,6 +667,43 @@ def full_analysis(asset="BTC", uid=0):
     key_fibs = []
     for pct, val in sorted(fib_levels.items(), key=lambda x: float(x[0])):
         key_fibs.append("Fib " + pct + "%  $" + "{:,.2f}".format(val))
+    # ==================== فلتر EMA200 ====================
+    # في BUY: السعر لازم يكون فوق EMA200 أو توافق 3 فريمات
+    # في SELL: السعر لازم يكون تحت EMA200 أو توافق 3 فريمات
+    ema200_ok = True
+    try:
+        ema200_val = df_1h.iloc[-1].get("EMA200", None) if df_1h is not None else None
+        if ema200_val and not pd.isna(ema200_val):
+            if final == "BUY"  and price < ema200_val and buy_c < 3:
+                ema200_ok = False
+            if final == "SELL" and price > ema200_val and sel_c < 3:
+                ema200_ok = False
+    except:
+        pass
+
+    if not ema200_ok:
+        return None
+
+    # ==================== تحقق منطقية الأهداف ====================
+    if final == "BUY":
+        if not (sl < price < tp1 < tp2 < tp3):
+            # أعد حساب بـ ATR بحت
+            sl  = round(price - 1.0*atr, 2)
+            tp1 = round(price + 1.0*atr, 2)
+            tp2 = round(price + 2.0*atr, 2)
+            tp3 = round(price + 3.5*atr, 2)
+    else:
+        if not (tp3 < tp2 < tp1 < price < sl):
+            sl  = round(price + 1.0*atr, 2)
+            tp1 = round(price - 1.0*atr, 2)
+            tp2 = round(price - 2.0*atr, 2)
+            tp3 = round(price - 3.5*atr, 2)
+
+    # ==================== فلتر RR minimum 1.5 ====================
+    rr_check = abs(tp2 - price) / abs(sl - price) if abs(sl - price) > 0 else 0
+    if rr_check < 1.5:
+        return None
+
     return {
         "final": final, "asset": asset,
         "confluence_txt": conf_txt, "base_conf": base_conf,
@@ -884,14 +945,22 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             if not res or res['final'] == "NEUTRAL":
                 await query.message.reply_text(t(uid,"no_signal")); return
             await query.message.reply_text(build_trade_msg(res, uid))
-            if asset == "BTC":
-                active_btc_trade['data'] = {
-                    "asset": "BTC", "direction": res['final'],
-                    "entry": res['price'], "sl": res['sl'],
-                    "tp1": res['tp1'], "tp2": res['tp2'], "tp3": res['tp3'],
-                    "atr": res['atr'], "tp1_hit": False, "tp2_hit": False,
-                    "chat_id": query.message.chat_id,
-                }
+            global trade_counter
+            trade_counter += 1
+            new_trade = {
+                "id": trade_counter,
+                "asset": res['asset'],
+                "direction": res['final'],
+                "entry": res['price'], "sl": res['sl'],
+                "tp1": res['tp1'], "tp2": res['tp2'], "tp3": res['tp3'],
+                "atr": res['atr'], "tp1_hit": False, "tp2_hit": False,
+                "chat_id": query.message.chat_id,
+                "open_time": gmt_now(),
+            }
+            active_trades.append(new_trade)
+            if res['asset'] == "BTC":
+                active_btc_trade['data'] = new_trade
+            save_trades()
         except Exception as e:
             await query.message.reply_text(t(uid,"error") + str(e))
     elif data.startswith('analysis_'):
@@ -940,62 +1009,114 @@ async def auto_signals(context):
             if res and res['final'] != "NEUTRAL" and res['base_conf'] >= MIN_CONFIDENCE:
                 await context.bot.send_message(chat_id=CHANNEL_ID,
                                                text=build_trade_msg(res, 0, auto=True))
+                global trade_counter
+                # spam filter
+                now_ts = datetime.now(timezone.utc).timestamp()
+                last_ts = last_signal_time.get(asset, 0)
+                if (now_ts - last_ts) < SPAM_COOLDOWN:
+                    logger.info("Spam filter: " + asset + " skipped")
+                    continue
+                last_signal_time[asset] = now_ts
+                trade_counter += 1
+                new_trade = {
+                    "id": trade_counter,
+                    "asset": res['asset'],
+                    "direction": res['final'],
+                    "entry": res['price'], "sl": res['sl'],
+                    "tp1": res['tp1'], "tp2": res['tp2'], "tp3": res['tp3'],
+                    "atr": res['atr'], "tp1_hit": False, "tp2_hit": False,
+                    "chat_id": CHANNEL_ID,
+                    "open_time": gmt_now(),
+                }
+                active_trades.append(new_trade)
                 if asset == "BTC":
-                    active_btc_trade['data'] = {
-                        "asset": "BTC", "direction": res['final'],
-                        "entry": res['price'], "sl": res['sl'],
-                        "tp1": res['tp1'], "tp2": res['tp2'], "tp3": res['tp3'],
-                        "atr": res['atr'], "tp1_hit": False, "tp2_hit": False,
-                        "chat_id": CHANNEL_ID,
-                    }
+                    active_btc_trade['data'] = new_trade
+                save_trades()
     except Exception as e:
         logger.error("❌ Auto: " + str(e))
 
 async def monitor_btc(context):
-    if 'data' not in active_btc_trade:
+    if not active_trades:
         return
-    trade = active_btc_trade['data']
     try:
-        current = get_btc_price()
-        if not current: return
-        entry=trade['entry']; sl=trade['sl']
-        tp1=trade['tp1']; tp2=trade['tp2']; tp3=trade['tp3']
-        atr=trade['atr']; direction=trade['direction']
-        chat_id=trade['chat_id']; uid=0
-        update_msg = None
-        if direction == "BUY":
-            if not trade['tp1_hit'] and current >= tp1:
-                trade['tp1_hit'] = True; trade['sl'] = entry
-                update_msg = t(uid,"update_tp1_hit")
-            elif trade['tp1_hit'] and not trade['tp2_hit'] and current >= tp2:
-                trade['tp2_hit'] = True; trade['sl'] = tp1
-                update_msg = t(uid,"update_tp2_hit")
-            elif current <= trade['sl']:
-                update_msg = t(uid,"update_near_sl")
-            elif trade['tp1_hit'] and current > tp1 + 0.5*atr:
-                new_sl = round(current - 0.8*atr, 2)
-                if new_sl > trade['sl']:
-                    trade['sl'] = new_sl; update_msg = t(uid,"update_sl_moved")
-            if current >= tp3:
-                update_msg = t(uid,"update_tp3_hit"); active_btc_trade.clear()
-        else:
-            if not trade['tp1_hit'] and current <= tp1:
-                trade['tp1_hit'] = True; trade['sl'] = entry
-                update_msg = t(uid,"update_tp1_hit")
-            elif trade['tp1_hit'] and not trade['tp2_hit'] and current <= tp2:
-                trade['tp2_hit'] = True; trade['sl'] = tp1
-                update_msg = t(uid,"update_tp2_hit")
-            elif current >= trade['sl']:
-                update_msg = t(uid,"update_near_sl")
-            elif trade['tp1_hit'] and current < tp1 - 0.5*atr:
-                new_sl = round(current + 0.8*atr, 2)
-                if new_sl < trade['sl']:
-                    trade['sl'] = new_sl; update_msg = t(uid,"update_sl_moved")
-            if current <= tp3:
-                update_msg = t(uid,"update_tp3_hit"); active_btc_trade.clear()
-        if update_msg:
-            await context.bot.send_message(chat_id=chat_id,
-                                           text=build_update_msg(trade, current, update_msg, uid))
+        current_btc  = get_btc_price()
+        current_gold = None
+        try:
+            prices = get_prices()
+            if prices:
+                current_gold = prices.get("tether-gold", {}).get("usd")
+        except:
+            pass
+
+        to_remove = []
+        for trade in active_trades:
+            try:
+                asset     = trade.get("asset", "BTC")
+                current   = current_btc if asset == "BTC" else current_gold
+                if not current: continue
+
+                uid       = 0
+                chat_id   = trade['chat_id']
+                direction = trade['direction']
+                atr       = trade['atr']
+                tp1       = trade['tp1']; tp2 = trade['tp2']; tp3 = trade['tp3']
+                trade_id  = trade.get("id", "?")
+                update_msg = None
+                closed     = False
+
+                if direction == "BUY":
+                    if current >= tp3:
+                        update_msg = "🏆 #" + str(trade_id) + " الهدف الثالث تم! صفقة مغلقة بنجاح 🎉"
+                        closed = True
+                    elif not trade['tp1_hit'] and current >= tp1:
+                        trade['tp1_hit'] = True; trade['sl'] = trade['entry']
+                        update_msg = "✅ #" + str(trade_id) + " " + t(uid,"update_tp1_hit")
+                    elif trade['tp1_hit'] and not trade['tp2_hit'] and current >= tp2:
+                        trade['tp2_hit'] = True; trade['sl'] = tp1
+                        update_msg = "✅✅ #" + str(trade_id) + " " + t(uid,"update_tp2_hit")
+                    elif current <= trade['sl']:
+                        update_msg = "🛑 #" + str(trade_id) + " وقف الخسارة تم! صفقة مغلقة"
+                        closed = True
+                    elif trade['tp1_hit'] and current > tp1 + 0.5*atr:
+                        new_sl = round(current - 0.8*atr, 2)
+                        if new_sl > trade['sl']:
+                            trade['sl'] = new_sl
+                            update_msg = "📊 #" + str(trade_id) + " " + t(uid,"update_sl_moved")
+                else:
+                    if current <= tp3:
+                        update_msg = "🏆 #" + str(trade_id) + " الهدف الثالث تم! صفقة مغلقة بنجاح 🎉"
+                        closed = True
+                    elif not trade['tp1_hit'] and current <= tp1:
+                        trade['tp1_hit'] = True; trade['sl'] = trade['entry']
+                        update_msg = "✅ #" + str(trade_id) + " " + t(uid,"update_tp1_hit")
+                    elif trade['tp1_hit'] and not trade['tp2_hit'] and current <= tp2:
+                        trade['tp2_hit'] = True; trade['sl'] = tp1
+                        update_msg = "✅✅ #" + str(trade_id) + " " + t(uid,"update_tp2_hit")
+                    elif current >= trade['sl']:
+                        update_msg = "🛑 #" + str(trade_id) + " وقف الخسارة تم! صفقة مغلقة"
+                        closed = True
+                    elif trade['tp1_hit'] and current < tp1 - 0.5*atr:
+                        new_sl = round(current + 0.8*atr, 2)
+                        if new_sl < trade['sl']:
+                            trade['sl'] = new_sl
+                            update_msg = "📊 #" + str(trade_id) + " " + t(uid,"update_sl_moved")
+
+                if update_msg:
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=build_update_msg(trade, current, update_msg, uid)
+                    )
+                if closed:
+                    to_remove.append(trade)
+
+            except Exception as e:
+                logger.error("Monitor trade error: " + str(e))
+
+        for t_remove in to_remove:
+            active_trades.remove(t_remove)
+        if to_remove:
+            save_trades()
+
     except Exception as e:
         logger.error("❌ Monitor: " + str(e))
 
@@ -1243,7 +1364,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.job_queue.run_repeating(auto_signals,      interval=AUTO_INTERVAL_MIN*60, first=30)
-    app.job_queue.run_repeating(monitor_btc,       interval=MONITOR_MIN*60,       first=60)
+    app.job_queue.run_repeating(monitor_btc,       interval=60,                   first=30)
     app.job_queue.run_repeating(send_smart_alerts, interval=45*60,                first=120)
     app.job_queue.run_repeating(send_news,         interval=4*60*60,              first=300)
     app.job_queue.run_repeating(send_calendar,     interval=24*60*60,             first=600)
