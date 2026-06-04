@@ -1,321 +1,323 @@
 import os
+import time
+import random
 import logging
 import requests
 from datetime import datetime, timezone
+
 import pandas as pd
 import numpy as np
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 import ta
 
-BOT_TOKEN      = os.environ.get("BOT_TOKEN",  "YOUR_BOT_TOKEN_HERE")
-CHANNEL_ID     = os.environ.get("CHANNEL_ID", "@btc_signals_saz")
-TWELVEDATA_KEY = os.environ.get("TWELVEDATA_KEY", "")
-AUTO_INTERVAL_MIN = 30
-MONITOR_MIN       = 5
-MIN_CONFIDENCE    = 68
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+)
 
-logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
-logger = logging.getLogger(__name__)
-user_languages   = {}
-active_btc_trade = {}
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
+CHANNEL_ID = os.environ.get("CHANNEL_ID", "@btc_signals_saz")
+TWELVEDATA_KEY = os.environ.get("TWELVEDATA_KEY", "")
+
+AUTO_INTERVAL_MIN = 30
+MONITOR_MIN = 5
+MIN_CONFIDENCE = 72
+MIN_RR = 1.25
+
+CACHE_TTL = 600
+SIGNAL_COOLDOWN_SEC = 60 * 60 * 2
 
 ALLOWED_USERS = {8490817794, 1548286220}
 
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
 
-
-
-
+user_languages = {}
+active_btc_trade = {}
 _cache = {}
-CACHE_TTL = 600
+_last_signals = {}
 
-def get_cached(key):
-    if key in _cache:
-        data, ts = _cache[key]
-        if (datetime.now(timezone.utc).timestamp() - ts) < CACHE_TTL:
-            return data
-    return None
-
-def set_cache(key, data):
-    _cache[key] = (data, datetime.now(timezone.utc).timestamp())
-
-GREETINGS = ["مرحبا","هاي","هلا","اهلا","أهلا","السلام","صباح","مساء","كيف","شلونك",
-             "hello","hi","hey","good","howdy","sup","morning","evening"]
-REPLIES_AR = [
-    "هلا وغلا! 🐎 أنا بوت أبو مهرة\nاستخدم الأزرار 👇",
-    "أهلاً! 🤖 تبي صفقة أو تحليل؟ اختر 👇",
-    "وعليكم السلام! 🐎 شو أقدر أساعدك؟",
-    "هلا! 😊 اضغط أي زر للبدء 👇",
+GREETINGS = [
+    "مرحبا", "هاي", "هلا", "اهلا", "أهلا", "السلام", "صباح", "مساء", "كيف",
+    "hello", "hi", "hey", "good", "morning", "evening"
 ]
-REPLIES_EN = [
-    "Hello! 🐎 I'm Abu Mahra Bot!\nUse the buttons below 👇",
-    "Hi! 🤖 Want a trade or analysis? Choose 👇",
-    "Hey! 😊 Press any button to start 👇",
-]
-CONFUSED_AR = ["ما فهمت 😅 استخدم الأزرار 👇", "🤔 اختر من القائمة 👇"]
-CONFUSED_EN = ["Didn't get that 😅 Use the buttons 👇", "🤔 Choose from the menu 👇"]
-
-import random
 
 TEXTS = {
     "ar": {
         "choose_lang": "🐎 بوت أبو مهرة\n\nاختر لغتك:",
-        "welcome": """🐎 أهلاً وسهلاً في بوت أبو مهرة!
+        "welcome": """🐎 أهلاً وسهلاً في بوت أبو مهرة Pro
 
 ━━━━━━━━━━━━━━━━━━━━
 متخصص في:
-₿ البيتكوين  BTC/USD
-🥇 الذهب  XAU/USD
+₿ البيتكوين BTC/USD
+🥇 الذهب XAU/USD
 
-✨ مميزاتي:
-▫️ صفقات مبنية على فريم الساعة
-▫️ Fibonacci + ATR للأهداف
-▫️ مستويات دعم ومقاومة دقيقة
-▫️ إشارات تلقائية كل 30 دقيقة
-▫️ مراقبة BTC وتحديث SL/TP
+يعتمد على:
+▫️ توافق الفريمات 1H / 4H / Daily
+▫️ Fibonacci + ATR
+▫️ RSI + MACD + EMA + ADX + Bollinger
+▫️ فلترة جودة الصفقة والمخاطرة
+▫️ تحديثات تلقائية للأهداف ووقف الخسارة
 ━━━━━━━━━━━━━━━━━━━━
-⚠️ للأغراض التعليمية فقط""",
+⚠️ للأغراض التعليمية فقط — ليست توصية مالية""",
 
-        "btn_btc":          "₿ صفقة BTC",
-        "btn_gold":         "🥇 صفقة ذهب",
+        "btn_btc": "₿ صفقة BTC",
+        "btn_gold": "🥇 صفقة الذهب",
         "btn_analysis_btc": "📈 تحليل BTC",
-        "btn_analysis_gold":"📈 تحليل ذهب",
-        "btn_prices":       "💰 الأسعار",
-        "btn_about":        "ℹ️ عن البوت",
-        "btn_lang":         "🌐 اللغة",
+        "btn_analysis_gold": "📈 تحليل الذهب",
+        "btn_prices": "💰 الأسعار",
+        "btn_about": "ℹ️ عن البوت",
+        "btn_lang": "🌐 اللغة",
 
-        "loading_trade":    "⏳ جاري تحليل السوق...",
-        "loading_analysis": "⏳ جاري التحليل...",
-        "loading_prices":   "⏳ جاري جلب الأسعار...",
-        "failed":    "❌ فشل جلب البيانات، حاول بعد دقيقة",
-        "error":     "❌ خطأ: ",
-        "no_signal": "⚪ لا توجد فرصة واضحة الآن\nانتظر إشارة أقوى 🕐",
+        "loading_trade": "⏳ جاري تحليل السوق بعمق...",
+        "loading_analysis": "⏳ جاري بناء التحليل...",
+        "loading_prices": "⏳ جاري جلب الأسعار...",
+        "failed": "❌ فشل جلب البيانات، حاول بعد قليل",
+        "error": "❌ خطأ: ",
+        "no_signal": "⚪ لا توجد صفقة قوية حالياً\nالانتظار أفضل من الدخول الضعيف 🕐",
 
-        "trade_header":    "صفقة ساعة (1H Scalp) - أبو مهرة",
-        "auto_header":     "إشارة تلقائية - أبو مهرة",
-        "update_header":   "تحديث صفقة BTC - أبو مهرة",
-        "analysis_header": "تحليل السوق - أبو مهرة",
+        "trade_header": "صفقة مقترحة على فريم الساعة - أبو مهرة Pro",
+        "auto_header": "صفقة تلقائية مقترحة - أبو مهرة Pro",
+        "update_header": "تحديث الصفقة المقترحة - أبو مهرة",
 
-        "entry":     "الدخول",
-        "fib_entry": "مستوى Fib",
+        "entry": "منطقة الدخول",
+        "ref_price": "السعر المرجعي",
+        "fib_entry": "أقرب مستوى Fib",
         "direction": "نوع الصفقة",
-        "buy":       "شراء  BUY ⬆️",
-        "sell":      "بيع  SELL ⬇️",
-        "targets_section": "الأهداف",
+        "buy": "شراء BUY ⬆️",
+        "sell": "بيع SELL ⬇️",
+
+        "targets_section": "الأهداف المقترحة",
         "tp1": "TP1",
         "tp2": "TP2",
         "tp3": "TP3",
-        "sl":  "SL",
-        "rr":  "العائد / المخاطرة",
-        "fib_section":   "مستويات Fibonacci",
-        "leverage":  "الرافعة المقترحة",
-        "timeframe": "الفريم",
+        "sl": "SL",
+        "rr": "العائد / المخاطرة",
+
+        "fib_section": "مستويات Fibonacci",
+        "risk_note": "ملاحظة المخاطرة",
         "hold_time": "المدة المتوقعة",
-        "support":    "دعم",
+        "support": "دعم",
         "resistance": "مقاومة",
         "confluence": "توافق الفريمات",
-        "frame_1h":  "1H",
-        "frame_4h":  "4H",
-        "frame_1d":  "يومي",
-        "full_confluence":    "🔥 توافق كامل على 3 فريمات!",
-        "partial_confluence": "✅ توافق على فريمين",
-        "no_confluence":      "⚪ لا توافق",
+        "market_regime": "حالة السوق",
+        "quality": "جودة الصفقة",
         "indicators_section": "المؤشرات",
-        "strength_section":   "قوة الإشارة",
-        "risk_section":       "المخاطرة",
-        "risk_low":      "🟢 منخفضة",
-        "risk_med":      "🟡 متوسطة",
-        "risk_high":     "🔴 عالية",
-        "risk_low_msg":  "فرصة جيدة — مخاطرة منخفضة",
-        "risk_med_msg":  "تداول بحذر — مخاطرة متوسطة",
-        "risk_high_msg": "حجم صغير فقط — مخاطرة عالية",
-        "footer":      "⚠️ للأغراض التعليمية فقط",
-        "updated_gmt": "آخر تحديث (GMT)",
-        "update_tp1_hit":  "✅ الهدف الأول تم! تم نقل SL للدخول",
-        "update_tp2_hit":  "✅✅ الهدف الثاني تم! تم نقل SL للـ TP1",
-        "update_near_sl":  "⚠️ تحذير: السعر اقترب من وقف الخسارة",
-        "update_sl_moved": "📊 تم تحريك وقف الخسارة للأمان",
-        "update_tp3_hit":  "🏆 الهدف الثالث تم! صفقة BTC مغلقة بنجاح 🎉",
-        "current_price":   "السعر الحالي",
-        "trend_bull":    "📈 الاتجاه: صاعد",
-        "trend_bear":    "📉 الاتجاه: هابط",
-        "trend_neutral": "➡️ الاتجاه: محايد",
-        "rsi_oversold":   "تشبع بيعي — ضغط شرائي محتمل",
-        "rsi_overbought": "تشبع شرائي — ضغط بيعي محتمل",
-        "rsi_neutral":    "منطقة محايدة",
-        "macd_bull": "MACD: زخم صاعد ↗️",
-        "macd_bear": "MACD: زخم هابط ↘️",
-        "ema_bull":  "EMAs: مرتبة صعوداً 📈",
-        "ema_bear":  "EMAs: مرتبة هبوطاً 📉",
-        "ema_mixed": "EMAs: إشارات مختلطة ↔️",
-        "bb_low":  "بولنجر: عند الدعم السفلي",
-        "bb_high": "بولنجر: عند المقاومة العلوية",
-        "bb_mid":  "بولنجر: منتصف النطاق",
-        "summary_bull":    "✅ الخلاصة: السوق يميل للصعود",
-        "summary_bear":    "✅ الخلاصة: السوق يميل للهبوط",
-        "summary_neutral": "✅ الخلاصة: السوق في منطقة تردد",
-        "prices_title": "💰 الأسعار الحالية",
-        "change_24h":   "التغيير 24h",
-        "about_text": """ℹ️ عن بوت أبو مهرة 🐎
+        "strength_section": "قوة الصفقة",
+        "risk_section": "المخاطرة",
 
-⏱️ فريم الساعة (1H) كأساس للصفقات
-📐 Fibonacci + ATR للأهداف
-📡 إشارات تلقائية كل 30 دقيقة
-🔄 مراقبة BTC وتحديث SL/TP كل 5 دقائق
-🔬 المؤشرات: RSI, MACD, EMA, BB, Stoch, ATR, Fibonacci
-⚙️ توافق 3 فريمات — إشارة عند توافق فريمين+
-⚠️ للأغراض التعليمية فقط""",
-        "ind_rsi_oversold":   "RSI تشبع بيعي",
-        "ind_rsi_buy":        "RSI منطقة شراء",
-        "ind_rsi_overbought": "RSI تشبع شرائي",
-        "ind_rsi_sell":       "RSI منطقة بيع",
-        "ind_macd_pos": "MACD إيجابي ↗️",
-        "ind_macd_neg": "MACD سلبي ↘️",
-        "ind_ema_up":   "EMAs صاعدة 📈",
-        "ind_ema_down": "EMAs هابطة 📉",
-        "ind_bb_low":  "بولنجر: دعم سفلي 🟢",
-        "ind_bb_high": "بولنجر: مقاومة عليا 🔴",
-        "ind_stoch_low":  "Stochastic تشبع بيعي",
-        "ind_stoch_high": "Stochastic تشبع شرائي",
+        "frame_1h": "1H",
+        "frame_4h": "4H",
+        "frame_1d": "يومي",
+
+        "full_confluence": "🔥 توافق كامل على 3 فريمات",
+        "partial_confluence": "✅ توافق قوي على فريمين",
+        "no_confluence": "⚪ لا يوجد توافق كافٍ",
+
+        "risk_low": "🟢 منخفضة",
+        "risk_med": "🟡 متوسطة",
+        "risk_high": "🔴 عالية",
+
+        "risk_low_msg": "إعداد قوي — مع الالتزام بإدارة المخاطر",
+        "risk_med_msg": "إعداد جيد — يحتاج دخول منضبط",
+        "risk_high_msg": "المخاطرة مرتفعة — يفضل الحذر",
+
+        "footer": "⚠️ للأغراض التعليمية فقط — ليست توصية مالية",
+        "updated_gmt": "آخر تحديث GMT",
+
+        "update_tp1_hit": "✅ تم الوصول إلى الهدف الأول",
+        "update_tp2_hit": "✅✅ تم الوصول إلى الهدف الثاني",
+        "update_near_sl": "⚠️ تم الوصول إلى مستوى وقف الخسارة",
+        "update_sl_moved": "📊 تم تحديث مستوى وقف الخسارة",
+        "update_tp3_hit": "🏆 تم الوصول إلى الهدف الثالث بنجاح 🎉",
+
+        "current_price": "السعر الحالي",
+
+        "trend_bull": "📈 الاتجاه يميل للصعود",
+        "trend_bear": "📉 الاتجاه يميل للهبوط",
+        "trend_neutral": "➡️ السوق غير واضح",
+
+        "summary_bull": "✅ الخلاصة: الميل الفني صاعد",
+        "summary_bear": "✅ الخلاصة: الميل الفني هابط",
+        "summary_neutral": "✅ الخلاصة: السوق يحتاج تأكيد إضافي",
+
+        "prices_title": "💰 الأسعار الحالية",
+        "change_24h": "التغيير 24h",
+
+        "about_text": """ℹ️ عن بوت أبو مهرة Pro 🐎
+
+يعتمد على قراءة فنية متعددة الطبقات تشمل:
+▫️ توافق 1H / 4H / Daily
+▫️ Fibonacci + ATR للأهداف
+▫️ RSI, MACD, EMA, ADX, Bollinger, Stochastic
+▫️ فلتر جودة الصفقة
+▫️ فلتر حالة السوق
+▫️ منع تكرار الصفقات المتشابهة
+▫️ تحديث مستويات TP و SL
+
+⚠️ للأغراض التعليمية فقط — ليست توصية مالية""",
     },
+
     "en": {
         "choose_lang": "🐎 Abu Mahra Bot\n\nChoose your language:",
-        "welcome": """🐎 Welcome to Abu Mahra Bot!
+        "welcome": """🐎 Welcome to Abu Mahra Pro Bot
 
 ━━━━━━━━━━━━━━━━━━━━
-Specializing in:
-₿ Bitcoin  BTC/USD
-🥇 Gold  XAU/USD
+Specialized in:
+₿ Bitcoin BTC/USD
+🥇 Gold XAU/USD
 
-✨ Features:
-▫️ 1H timeframe based signals
-▫️ Fibonacci + ATR targets
-▫️ Precise support & resistance
-▫️ Auto signals every 30 minutes
-▫️ BTC live SL/TP monitoring
+Built on:
+▫️ 1H / 4H / Daily confluence
+▫️ Fibonacci + ATR
+▫️ RSI + MACD + EMA + ADX + Bollinger
+▫️ Trade quality and risk filtering
+▫️ Automatic TP/SL level updates
 ━━━━━━━━━━━━━━━━━━━━
-⚠️ For educational purposes only""",
+⚠️ Educational purposes only — not financial advice""",
 
-        "btn_btc":          "₿ BTC Trade",
-        "btn_gold":         "🥇 Gold Trade",
+        "btn_btc": "₿ BTC Trade",
+        "btn_gold": "🥇 Gold Trade",
         "btn_analysis_btc": "📈 BTC Analysis",
-        "btn_analysis_gold":"📈 Gold Analysis",
-        "btn_prices":       "💰 Prices",
-        "btn_about":        "ℹ️ About",
-        "btn_lang":         "🌐 Language",
+        "btn_analysis_gold": "📈 Gold Analysis",
+        "btn_prices": "💰 Prices",
+        "btn_about": "ℹ️ About",
+        "btn_lang": "🌐 Language",
 
-        "loading_trade":    "⏳ Analyzing market...",
-        "loading_analysis": "⏳ Analyzing...",
-        "loading_prices":   "⏳ Fetching prices...",
-        "failed":    "❌ Failed to fetch data, try again in a minute",
-        "error":     "❌ Error: ",
-        "no_signal": "⚪ No clear opportunity right now\nWaiting for stronger signal 🕐",
+        "loading_trade": "⏳ Deep market scan in progress...",
+        "loading_analysis": "⏳ Building analysis...",
+        "loading_prices": "⏳ Fetching prices...",
+        "failed": "❌ Failed to fetch data, try again shortly",
+        "error": "❌ Error: ",
+        "no_signal": "⚪ No strong trade setup right now\nWaiting is better than forcing a weak entry 🕐",
 
-        "trade_header":    "1H Scalp Trade - Abu Mahra",
-        "auto_header":     "Auto Signal - Abu Mahra",
-        "update_header":   "BTC Trade Update - Abu Mahra",
-        "analysis_header": "Market Analysis - Abu Mahra",
+        "trade_header": "Suggested 1H Trade Setup - Abu Mahra Pro",
+        "auto_header": "Suggested Auto Trade Setup - Abu Mahra Pro",
+        "update_header": "Suggested Trade Update - Abu Mahra",
 
-        "entry":     "Entry",
-        "fib_entry": "Fib Level",
+        "entry": "Entry Zone",
+        "ref_price": "Reference Price",
+        "fib_entry": "Nearest Fib",
         "direction": "Trade Type",
-        "buy":       "BUY ⬆️",
-        "sell":      "SELL ⬇️",
-        "targets_section": "Targets",
+        "buy": "BUY ⬆️",
+        "sell": "SELL ⬇️",
+
+        "targets_section": "Suggested Targets",
         "tp1": "TP1",
         "tp2": "TP2",
         "tp3": "TP3",
-        "sl":  "SL",
-        "rr":  "Reward / Risk",
-        "fib_section":   "Fibonacci Levels",
-        "leverage":  "Suggested Leverage",
-        "timeframe": "Timeframe",
-        "hold_time": "Hold Time",
-        "support":    "Support",
+        "sl": "SL",
+        "rr": "Reward / Risk",
+
+        "fib_section": "Fibonacci Levels",
+        "risk_note": "Risk Note",
+        "hold_time": "Expected Hold",
+        "support": "Support",
         "resistance": "Resistance",
         "confluence": "Timeframe Confluence",
-        "frame_1h":  "1H",
-        "frame_4h":  "4H",
-        "frame_1d":  "Daily",
-        "full_confluence":    "🔥 Full confluence on 3 timeframes!",
-        "partial_confluence": "✅ Confluence on 2 timeframes",
-        "no_confluence":      "⚪ No confluence",
+        "market_regime": "Market Regime",
+        "quality": "Trade Quality",
         "indicators_section": "Indicators",
-        "strength_section":   "Signal Strength",
-        "risk_section":       "Risk Level",
-        "risk_low":      "🟢 Low",
-        "risk_med":      "🟡 Medium",
-        "risk_high":     "🔴 High",
-        "risk_low_msg":  "Good opportunity — Low risk",
-        "risk_med_msg":  "Trade carefully — Medium risk",
-        "risk_high_msg": "Small size only — High risk",
-        "footer":      "⚠️ For educational purposes only",
-        "updated_gmt": "Last update (GMT)",
-        "update_tp1_hit":  "✅ TP1 reached! SL moved to entry",
-        "update_tp2_hit":  "✅✅ TP2 reached! SL moved to TP1",
-        "update_near_sl":  "⚠️ Warning: Price approaching Stop Loss",
-        "update_sl_moved": "📊 Stop Loss moved to safety",
-        "update_tp3_hit":  "🏆 TP3 reached! BTC trade closed successfully 🎉",
-        "current_price":   "Current Price",
-        "trend_bull":    "📈 Trend: Bullish",
-        "trend_bear":    "📉 Trend: Bearish",
-        "trend_neutral": "➡️ Trend: Neutral",
-        "rsi_oversold":   "Oversold — Possible buying pressure",
-        "rsi_overbought": "Overbought — Possible selling pressure",
-        "rsi_neutral":    "Neutral zone",
-        "macd_bull": "MACD: Positive momentum ↗️",
-        "macd_bear": "MACD: Negative momentum ↘️",
-        "ema_bull":  "EMAs: Bullish stack 📈",
-        "ema_bear":  "EMAs: Bearish stack 📉",
-        "ema_mixed": "EMAs: Mixed signals ↔️",
-        "bb_low":  "Bollinger: At lower support",
-        "bb_high": "Bollinger: At upper resistance",
-        "bb_mid":  "Bollinger: Middle zone",
-        "summary_bull":    "✅ Summary: Market leaning bullish",
-        "summary_bear":    "✅ Summary: Market leaning bearish",
-        "summary_neutral": "✅ Summary: Market in consolidation",
-        "prices_title": "💰 Current Prices",
-        "change_24h":   "24h Change",
-        "about_text": """ℹ️ About Abu Mahra Bot 🐎
+        "strength_section": "Trade Strength",
+        "risk_section": "Risk",
 
-⏱️ 1H timeframe as base
-📐 Fibonacci + ATR targets
-📡 Auto signals every 30 minutes
-🔄 BTC live SL/TP monitoring every 5 minutes
-🔬 Indicators: RSI, MACD, EMA, BB, Stoch, ATR, Fibonacci
-⚙️ 3 timeframe confluence — signals on 2+ agreement
-⚠️ For educational purposes only""",
-        "ind_rsi_oversold":   "RSI Oversold",
-        "ind_rsi_buy":        "RSI Buy Zone",
-        "ind_rsi_overbought": "RSI Overbought",
-        "ind_rsi_sell":       "RSI Sell Zone",
-        "ind_macd_pos": "MACD Positive ↗️",
-        "ind_macd_neg": "MACD Negative ↘️",
-        "ind_ema_up":   "EMAs Bullish 📈",
-        "ind_ema_down": "EMAs Bearish 📉",
-        "ind_bb_low":  "Bollinger: Lower Support 🟢",
-        "ind_bb_high": "Bollinger: Upper Resistance 🔴",
-        "ind_stoch_low":  "Stochastic Oversold",
-        "ind_stoch_high": "Stochastic Overbought",
-    }
+        "frame_1h": "1H",
+        "frame_4h": "4H",
+        "frame_1d": "Daily",
+
+        "full_confluence": "🔥 Full confluence on 3 timeframes",
+        "partial_confluence": "✅ Strong confluence on 2 timeframes",
+        "no_confluence": "⚪ Not enough confluence",
+
+        "risk_low": "🟢 Low",
+        "risk_med": "🟡 Medium",
+        "risk_high": "🔴 High",
+
+        "risk_low_msg": "Strong setup — respect risk management",
+        "risk_med_msg": "Good setup — requires disciplined entry",
+        "risk_high_msg": "High risk — caution preferred",
+
+        "footer": "⚠️ Educational purposes only — not financial advice",
+        "updated_gmt": "Last update GMT",
+
+        "update_tp1_hit": "✅ TP1 reached",
+        "update_tp2_hit": "✅✅ TP2 reached",
+        "update_near_sl": "⚠️ SL level reached",
+        "update_sl_moved": "📊 SL level updated",
+        "update_tp3_hit": "🏆 TP3 reached successfully 🎉",
+
+        "current_price": "Current Price",
+
+        "trend_bull": "📈 Trend leaning bullish",
+        "trend_bear": "📉 Trend leaning bearish",
+        "trend_neutral": "➡️ Market unclear",
+
+        "summary_bull": "✅ Summary: Technical bias is bullish",
+        "summary_bear": "✅ Summary: Technical bias is bearish",
+        "summary_neutral": "✅ Summary: Market needs more confirmation",
+
+        "prices_title": "💰 Current Prices",
+        "change_24h": "24h Change",
+
+        "about_text": """ℹ️ About Abu Mahra Pro Bot 🐎
+
+Built on multi-layer technical reading:
+▫️ 1H / 4H / Daily confluence
+▫️ Fibonacci + ATR targets
+▫️ RSI, MACD, EMA, ADX, Bollinger, Stochastic
+▫️ Trade quality filter
+▫️ Market regime filter
+▫️ Duplicate trade prevention
+▫️ TP and SL level updates
+
+⚠️ Educational purposes only — not financial advice""",
+    },
 }
+
 
 def t(uid, key):
     lang = user_languages.get(uid, "ar")
     return TEXTS[lang].get(key, key)
 
+
 def gmt_now():
-    return datetime.now(timezone.utc).strftime("%d/%m/%Y  %H:%M")
+    return datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M")
 
 
-# ==================== البيانات ====================
+def get_cached(key):
+    if key in _cache:
+        data, ts = _cache[key]
+        if time.time() - ts < CACHE_TTL:
+            return data.copy() if hasattr(data, "copy") else data
+    return None
+
+
+def set_cache(key, data):
+    _cache[key] = (data.copy() if hasattr(data, "copy") else data, time.time())
+
+
+def asset_symbol(asset):
+    return "BTC/USD" if asset == "BTC" else "XAU/USD"
+
+
+# ================= DATA =================
+
 def get_data(asset="BTC", days=30, interval="hourly"):
-    cache_key = str(asset).upper() + "_" + str(days) + "_" + interval
+    asset = asset.upper()
+    cache_key = f"{asset}_{days}_{interval}"
     cached = get_cached(cache_key)
     if cached is not None:
         return cached
 
-    symbol = "BTC/USD" if asset == "BTC" else "XAU/USD"
+    symbol = asset_symbol(asset)
+
     if interval == "hourly":
         td_interval = "1h"
         outputsize = min(days * 24, 500)
@@ -324,745 +326,954 @@ def get_data(asset="BTC", days=30, interval="hourly"):
         outputsize = min(days, 500)
     else:
         td_interval = "1h"
-        outputsize = 200
+        outputsize = 300
 
     if TWELVEDATA_KEY:
         try:
             r = requests.get(
                 "https://api.twelvedata.com/time_series",
-                params={"symbol": symbol, "interval": td_interval,
-                        "outputsize": outputsize, "apikey": TWELVEDATA_KEY, "format": "JSON"},
-                timeout=15)
+                params={
+                    "symbol": symbol,
+                    "interval": td_interval,
+                    "outputsize": outputsize,
+                    "apikey": TWELVEDATA_KEY,
+                    "format": "JSON",
+                },
+                timeout=15,
+            )
             data = r.json()
+
             if "values" in data and len(data["values"]) > 0:
                 rows = []
                 for v in reversed(data["values"]):
-                    rows.append({"timestamp": pd.to_datetime(v["datetime"]),
-                                 "Open": float(v["open"]), "High": float(v["high"]),
-                                 "Low": float(v["low"]), "Close": float(v["close"]),
-                                 "Volume": float(v.get("volume", 0))})
-                df = pd.DataFrame(rows).set_index("timestamp").dropna()
+                    rows.append({
+                        "timestamp": pd.to_datetime(v["datetime"]),
+                        "Open": float(v["open"]),
+                        "High": float(v["high"]),
+                        "Low": float(v["low"]),
+                        "Close": float(v["close"]),
+                        "Volume": float(v.get("volume", 0) or 0),
+                    })
+
+                df = pd.DataFrame(rows).set_index("timestamp").sort_index().dropna()
+                if len(df) >= 60:
+                    set_cache(cache_key, df)
+                    return df
+
+        except Exception as e:
+            logger.warning("TwelveData failed: %s", e)
+
+    if asset == "BTC":
+        try:
+            r = requests.get(
+                "https://api.coingecko.com/api/v3/coins/bitcoin/ohlc",
+                params={"vs_currency": "usd", "days": min(days, 30)},
+                timeout=15,
+            )
+            data = r.json()
+
+            df = pd.DataFrame(data, columns=["timestamp", "Open", "High", "Low", "Close"])
+            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+            df["Volume"] = 0
+            df = df.set_index("timestamp").sort_index().dropna()
+
+            if len(df) >= 60:
                 set_cache(cache_key, df)
                 return df
+
         except Exception as e:
-            logger.warning("Twelve Data failed: " + str(e))
+            logger.error("CoinGecko BTC fallback failed: %s", e)
 
-    try:
-        coin = "bitcoin" if asset == "BTC" else "tether-gold"
-        r = requests.get(
-            "https://api.coingecko.com/api/v3/coins/" + coin + "/market_chart",
-            params={"vs_currency": "usd", "days": days, "interval": interval}, timeout=15)
-        data = r.json()
-        df = pd.DataFrame(data["prices"], columns=["timestamp", "Close"])
-        df["Volume"] = [v[1] for v in data["total_volumes"]]
-        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-        df = df.set_index("timestamp")
-        df["High"] = df["Close"].rolling(3).max()
-        df["Low"]  = df["Close"].rolling(3).min()
-        df["Open"] = df["Close"].shift(1)
-        result = df.dropna()
-        set_cache(cache_key, result)
-        return result
-    except Exception as e:
-        logger.error(asset + " Error: " + str(e))
-        return None
+    return None
 
-def get_btc_price():
+
+def get_live_price(asset="BTC"):
+    asset = asset.upper()
+
     if TWELVEDATA_KEY:
         try:
-            r = requests.get("https://api.twelvedata.com/price",
-                             params={"symbol": "BTC/USD", "apikey": TWELVEDATA_KEY}, timeout=10)
+            r = requests.get(
+                "https://api.twelvedata.com/price",
+                params={"symbol": asset_symbol(asset), "apikey": TWELVEDATA_KEY},
+                timeout=10,
+            )
             data = r.json()
             if "price" in data:
                 return float(data["price"])
-        except:
+        except Exception:
             pass
-    try:
-        r = requests.get(
-            "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd", timeout=10)
-        return float(r.json()["bitcoin"]["usd"])
-    except:
-        return None
+
+    if asset == "BTC":
+        try:
+            r = requests.get(
+                "https://api.coingecko.com/api/v3/simple/price",
+                params={"ids": "bitcoin", "vs_currencies": "usd"},
+                timeout=10,
+            )
+            return float(r.json()["bitcoin"]["usd"])
+        except Exception:
+            return None
+
+    return None
+
 
 def get_prices():
-    result = {"bitcoin": {}, "tether-gold": {}}
-    if TWELVEDATA_KEY:
-        try:
-            r1 = requests.get("https://api.twelvedata.com/price",
-                              params={"symbol": "BTC/USD", "apikey": TWELVEDATA_KEY}, timeout=10)
-            btc_price = float(r1.json().get("price", 0))
-            r2 = requests.get("https://api.twelvedata.com/price",
-                              params={"symbol": "XAU/USD", "apikey": TWELVEDATA_KEY}, timeout=10)
-            gold_price = float(r2.json().get("price", 0))
-            r3 = requests.get("https://api.twelvedata.com/time_series",
-                              params={"symbol": "BTC/USD", "interval": "1day",
-                                      "outputsize": 2, "apikey": TWELVEDATA_KEY}, timeout=10)
-            btc_data = r3.json().get("values", [])
-            btc_change = 0
-            if len(btc_data) >= 2:
-                prev = float(btc_data[1]["close"])
-                btc_change = round((btc_price - prev) / prev * 100, 2) if prev > 0 else 0
-            r4 = requests.get("https://api.twelvedata.com/time_series",
-                              params={"symbol": "XAU/USD", "interval": "1day",
-                                      "outputsize": 2, "apikey": TWELVEDATA_KEY}, timeout=10)
-            gold_data = r4.json().get("values", [])
-            gold_change = 0
-            if len(gold_data) >= 2:
-                prev_g = float(gold_data[1]["close"])
-                gold_change = round((gold_price - prev_g) / prev_g * 100, 2) if prev_g > 0 else 0
-            result["bitcoin"]     = {"usd": btc_price,  "usd_24h_change": btc_change}
-            result["tether-gold"] = {"usd": gold_price, "usd_24h_change": gold_change}
-            return result
-        except Exception as e:
-            logger.warning("Twelve Data prices failed: " + str(e))
-    try:
-        r = requests.get(
-            "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,tether-gold&vs_currencies=usd&include_24hr_change=true",
-            timeout=10)
-        return r.json()
-    except:
-        return None
+    result = {"bitcoin": {}, "gold": {}}
+
+    btc = get_live_price("BTC")
+    gold = get_live_price("GOLD")
+
+    result["bitcoin"] = {"usd": btc or 0, "usd_24h_change": 0}
+    result["gold"] = {"usd": gold or 0, "usd_24h_change": 0}
+    return result
 
 
-# ==================== Fibonacci ====================
+# ================= INDICATORS =================
+
+def calc_indicators(df):
+    df = df.copy()
+
+    c = df["Close"]
+    h = df["High"]
+    l = df["Low"]
+
+    df["EMA9"] = ta.trend.EMAIndicator(c, window=9).ema_indicator()
+    df["EMA21"] = ta.trend.EMAIndicator(c, window=21).ema_indicator()
+    df["EMA50"] = ta.trend.EMAIndicator(c, window=50).ema_indicator()
+    df["EMA200"] = ta.trend.EMAIndicator(c, window=200).ema_indicator()
+
+    df["RSI"] = ta.momentum.RSIIndicator(c, window=14).rsi()
+
+    macd = ta.trend.MACD(c)
+    df["MACD"] = macd.macd()
+    df["MACD_S"] = macd.macd_signal()
+    df["MACD_H"] = macd.macd_diff()
+
+    bb = ta.volatility.BollingerBands(c, window=20, window_dev=2)
+    df["BB_U"] = bb.bollinger_hband()
+    df["BB_L"] = bb.bollinger_lband()
+    df["BB_W"] = (df["BB_U"] - df["BB_L"]) / c * 100
+
+    df["ATR"] = ta.volatility.AverageTrueRange(h, l, c, window=14).average_true_range()
+    df["ATR_PCT"] = df["ATR"] / c * 100
+
+    adx = ta.trend.ADXIndicator(h, l, c, window=14)
+    df["ADX"] = adx.adx()
+
+    stoch = ta.momentum.StochasticOscillator(h, l, c, window=14, smooth_window=3)
+    df["Stoch"] = stoch.stoch()
+    df["Stoch_S"] = stoch.stoch_signal()
+
+    pivot = (h.shift(1) + l.shift(1) + c.shift(1)) / 3
+    df["R1"] = 2 * pivot - l.shift(1)
+    df["S1"] = 2 * pivot - h.shift(1)
+
+    return df.dropna()
+
+
+def detect_market_regime(df):
+    last = df.iloc[-1]
+    adx = float(last["ADX"])
+    atr_pct = float(last["ATR_PCT"])
+    bb_w = float(last["BB_W"])
+
+    if atr_pct > 2.8:
+        return "High Volatility"
+    if adx >= 25:
+        return "Trending"
+    if bb_w < 2.5:
+        return "Squeeze / Breakout Watch"
+    return "Ranging / Mixed"
+
+
+# ================= FIBONACCI =================
+
 def calculate_fibonacci(df):
-    window = min(50, len(df))
+    window = min(80, len(df))
     recent = df.tail(window)
-    swing_high = float(recent['High'].max())
-    swing_low  = float(recent['Low'].min())
+
+    swing_high = float(recent["High"].max())
+    swing_low = float(recent["Low"].min())
     diff = swing_high - swing_low
+
     levels = {
-        "0.0":   round(swing_high, 2),
-        "23.6":  round(swing_high - 0.236 * diff, 2),
-        "38.2":  round(swing_high - 0.382 * diff, 2),
-        "50.0":  round(swing_high - 0.500 * diff, 2),
-        "61.8":  round(swing_high - 0.618 * diff, 2),
-        "78.6":  round(swing_high - 0.786 * diff, 2),
+        "0.0": round(swing_high, 2),
+        "23.6": round(swing_high - 0.236 * diff, 2),
+        "38.2": round(swing_high - 0.382 * diff, 2),
+        "50.0": round(swing_high - 0.500 * diff, 2),
+        "61.8": round(swing_high - 0.618 * diff, 2),
+        "78.6": round(swing_high - 0.786 * diff, 2),
         "100.0": round(swing_low, 2),
     }
+
     extensions = {
-        "127.2": round(swing_low - 0.272 * diff, 2),
-        "161.8": round(swing_low - 0.618 * diff, 2),
-        "200.0": round(swing_low - 1.000 * diff, 2),
+        "BUY_127.2": round(swing_high + 0.272 * diff, 2),
+        "BUY_161.8": round(swing_high + 0.618 * diff, 2),
+        "BUY_200.0": round(swing_high + 1.000 * diff, 2),
+        "SELL_127.2": round(swing_low - 0.272 * diff, 2),
+        "SELL_161.8": round(swing_low - 0.618 * diff, 2),
+        "SELL_200.0": round(swing_low - 1.000 * diff, 2),
     }
+
     return levels, extensions, swing_high, swing_low
 
-def find_nearest_fib(price, levels, direction):
-    fib_values = list(levels.values())
-    nearest = min(fib_values, key=lambda x: abs(x - price))
-    fib_key  = [k for k, v in levels.items() if v == nearest][0]
-    dist_pct = abs(nearest - price) / price * 100
-    return nearest, fib_key, dist_pct
+
+def find_nearest_fib(price, levels):
+    nearest_key, nearest_val = min(levels.items(), key=lambda x: abs(x[1] - price))
+    dist_pct = abs(nearest_val - price) / price * 100
+    return nearest_val, nearest_key, dist_pct
+
 
 def get_fib_targets(price, levels, extensions, direction, atr):
     fib_vals = sorted(levels.values())
+
     if direction == "BUY":
-        sl_fib = max([v for v in fib_vals if v < price], default=price - atr)
-        sl = round(min(sl_fib - 0.2*atr, price - 0.8*atr), 2)
-        tp1_candidates = [v for v in fib_vals if v > price + 0.5*atr]
-        tp1 = round(tp1_candidates[0] if tp1_candidates else price + 0.8*atr, 2)
-        tp2_candidates = [v for v in fib_vals if v > tp1 + 0.3*atr]
-        tp2_fib = tp2_candidates[0] if tp2_candidates else price + 1.8*atr
-        tp2 = round(max(tp2_fib, price + 1.5*atr), 2)
-        ext_vals = sorted(extensions.values(), reverse=True)
-        tp3_candidates = [v for v in ext_vals if v > tp2 + 0.5*atr]
-        tp3 = round(tp3_candidates[0] if tp3_candidates else price + 3.0*atr, 2)
+        below = [v for v in fib_vals if v < price]
+        above = [v for v in fib_vals if v > price]
+
+        sl_base = below[-1] if below else price - atr
+        sl = round(min(sl_base - 0.25 * atr, price - 0.9 * atr), 2)
+
+        tp1 = round(max((above[0] if above else price + atr), price + 0.85 * atr), 2)
+        tp2 = round(max(price + 1.65 * atr, tp1 + 0.5 * atr), 2)
+        tp3 = round(max(extensions["BUY_127.2"], price + 2.6 * atr), 2)
+
     else:
-        sl_fib = min([v for v in fib_vals if v > price], default=price + atr)
-        sl = round(max(sl_fib + 0.2*atr, price + 0.8*atr), 2)
-        tp1_candidates = [v for v in reversed(fib_vals) if v < price - 0.5*atr]
-        tp1 = round(tp1_candidates[0] if tp1_candidates else price - 0.8*atr, 2)
-        tp2_candidates = [v for v in reversed(fib_vals) if v < tp1 - 0.3*atr]
-        tp2_fib = tp2_candidates[0] if tp2_candidates else price - 1.8*atr
-        tp2 = round(min(tp2_fib, price - 1.5*atr), 2)
-        ext_vals_sell = sorted(extensions.values())
-        tp3_candidates = [v for v in ext_vals_sell if v < tp2 - 0.5*atr]
-        tp3 = round(tp3_candidates[0] if tp3_candidates else price - 3.0*atr, 2)
-    rr = round(abs(tp2-price) / abs(sl-price), 2) if abs(sl-price) > 0 else 0
+        above = [v for v in fib_vals if v > price]
+        below = [v for v in fib_vals if v < price]
+
+        sl_base = above[0] if above else price + atr
+        sl = round(max(sl_base + 0.25 * atr, price + 0.9 * atr), 2)
+
+        tp1 = round(min((below[-1] if below else price - atr), price - 0.85 * atr), 2)
+        tp2 = round(min(price - 1.65 * atr, tp1 - 0.5 * atr), 2)
+        tp3 = round(min(extensions["SELL_127.2"], price - 2.6 * atr), 2)
+
+    rr = round(abs(tp2 - price) / abs(sl - price), 2) if abs(sl - price) > 0 else 0
     return sl, tp1, tp2, tp3, rr
 
 
-# ==================== التحليل ====================
-def calc_indicators(df):
-    c = df['Close']; h = df['High']; l = df['Low']
-    df['EMA9']  = ta.trend.EMAIndicator(c, window=9).ema_indicator()
-    df['EMA21'] = ta.trend.EMAIndicator(c, window=21).ema_indicator()
-    df['EMA50'] = ta.trend.EMAIndicator(c, window=50).ema_indicator()
-    df['EMA200']= ta.trend.EMAIndicator(c, window=200).ema_indicator()
-    df['RSI']   = ta.momentum.RSIIndicator(c, window=14).rsi()
-    macd = ta.trend.MACD(c)
-    df['MACD']  = macd.macd()
-    df['MACD_S']= macd.macd_signal()
-    df['MACD_H']= macd.macd_diff()
-    bb = ta.volatility.BollingerBands(c)
-    df['BB_U'] = bb.bollinger_hband()
-    df['BB_L'] = bb.bollinger_lband()
-    df['ATR']  = ta.volatility.AverageTrueRange(h, l, c, window=14).average_true_range()
-    stoch = ta.momentum.StochasticOscillator(h, l, c)
-    df['Stoch'] = stoch.stoch()
-    df['Stoch_S']= stoch.stoch_signal()
-    df['Pivot'] = (h.shift(1) + l.shift(1) + c.shift(1)) / 3
-    df['R1'] = 2 * df['Pivot'] - l.shift(1)
-    df['S1'] = 2 * df['Pivot'] - h.shift(1)
-    df['R2'] = df['Pivot'] + (h.shift(1) - l.shift(1))
-    df['S2'] = df['Pivot'] - (h.shift(1) - l.shift(1))
-    high_9  = h.rolling(window=9).max();  low_9   = l.rolling(window=9).min()
-    high_26 = h.rolling(window=26).max(); low_26  = l.rolling(window=26).min()
-    high_52 = h.rolling(window=52).max(); low_52  = l.rolling(window=52).min()
-    df['Tenkan'] = (high_9  + low_9)  / 2
-    df['Kijun']  = (high_26 + low_26) / 2
-    df['SpanA']  = ((df['Tenkan'] + df['Kijun']) / 2).shift(26)
-    df['SpanB']  = ((high_52 + low_52) / 2).shift(26)
-    df['Chikou'] = c.shift(-26)
-    return df
+# ================= ANALYSIS =================
 
 def analyze_frame(df, uid=0):
     df = calc_indicators(df)
-    last  = df.iloc[-1]
-    price = last['Close']
-    sb = ss = 0
+    if len(df) < 50:
+        return None
+
+    last = df.iloc[-1]
+    price = float(last["Close"])
+
+    sb = 0
+    ss = 0
     details = []
-    rsi = last['RSI']
-    if rsi < 30:   sb += 25; details.append(t(uid,'ind_rsi_oversold') + " (" + str(round(rsi,1)) + ") 🟢")
-    elif rsi < 45: sb += 12; details.append(t(uid,'ind_rsi_buy') + " (" + str(round(rsi,1)) + ")")
-    elif rsi > 70: ss += 25; details.append(t(uid,'ind_rsi_overbought') + " (" + str(round(rsi,1)) + ") 🔴")
-    elif rsi > 55: ss += 12; details.append(t(uid,'ind_rsi_sell') + " (" + str(round(rsi,1)) + ")")
-    if last['MACD'] > last['MACD_S'] and last['MACD_H'] > 0:
-        sb += 20; details.append(t(uid,'ind_macd_pos'))
-    elif last['MACD'] < last['MACD_S'] and last['MACD_H'] < 0:
-        ss += 20; details.append(t(uid,'ind_macd_neg'))
-    if last['EMA9'] > last['EMA21'] > last['EMA50']:
-        sb += 20; details.append(t(uid,'ind_ema_up'))
-    elif last['EMA9'] < last['EMA21'] < last['EMA50']:
-        ss += 20; details.append(t(uid,'ind_ema_down'))
-    if price > last['EMA200']: sb += 10
-    else: ss += 10
-    if price <= last['BB_L']:   sb += 15; details.append(t(uid,'ind_bb_low'))
-    elif price >= last['BB_U']: ss += 15; details.append(t(uid,'ind_bb_high'))
-    if last['Stoch'] < 20 and last['Stoch_S'] < 20:
-        sb += 10; details.append(t(uid,'ind_stoch_low'))
-    elif last['Stoch'] > 80 and last['Stoch_S'] > 80:
-        ss += 10; details.append(t(uid,'ind_stoch_high'))
-    try:
-        tenkan = last['Tenkan']; kijun = last['Kijun']
-        span_a = last['SpanA'];  span_b = last['SpanB']
-        cloud_top = max(span_a, span_b) if not (pd.isna(span_a) or pd.isna(span_b)) else None
-        cloud_bot = min(span_a, span_b) if not (pd.isna(span_a) or pd.isna(span_b)) else None
-        ichi_bull = False; ichi_bear = False
-        if cloud_top and cloud_bot:
-            if price > cloud_top and tenkan > kijun:
-                sb += 15; ichi_bull = True
-                details.append("Ichimoku: فوق السحابة + TK صاعد ☁️")
-            elif price < cloud_bot and tenkan < kijun:
-                ss += 15; ichi_bear = True
-                details.append("Ichimoku: تحت السحابة + TK هابط ☁️")
-            elif cloud_top > cloud_bot: sb += 5
-            else: ss += 5
-    except:
-        ichi_bull = False; ichi_bear = False
-    direction = "BUY" if sb > ss else "SELL"
+
+    rsi = float(last["RSI"])
+    adx = float(last["ADX"])
+
+    if rsi < 30:
+        sb += 20
+        details.append(f"RSI تشبع بيعي ({rsi:.1f}) 🟢")
+    elif rsi < 45:
+        sb += 10
+        details.append(f"RSI يميل للشراء ({rsi:.1f})")
+    elif rsi > 70:
+        ss += 20
+        details.append(f"RSI تشبع شرائي ({rsi:.1f}) 🔴")
+    elif rsi > 55:
+        ss += 10
+        details.append(f"RSI يميل للبيع ({rsi:.1f})")
+
+    if last["MACD"] > last["MACD_S"] and last["MACD_H"] > 0:
+        sb += 18
+        details.append("MACD زخم صاعد ↗️")
+    elif last["MACD"] < last["MACD_S"] and last["MACD_H"] < 0:
+        ss += 18
+        details.append("MACD زخم هابط ↘️")
+
+    if last["EMA9"] > last["EMA21"] > last["EMA50"]:
+        sb += 22
+        details.append("EMAs مرتبة صعوداً 📈")
+    elif last["EMA9"] < last["EMA21"] < last["EMA50"]:
+        ss += 22
+        details.append("EMAs مرتبة هبوطاً 📉")
+
+    if price > last["EMA200"]:
+        sb += 10
+    else:
+        ss += 10
+
+    if adx >= 25:
+        if sb > ss:
+            sb += 8
+        elif ss > sb:
+            ss += 8
+        details.append(f"ADX قوة اتجاه ({adx:.1f})")
+
+    if price <= last["BB_L"]:
+        sb += 8
+        details.append("Bollinger دعم سفلي 🟢")
+    elif price >= last["BB_U"]:
+        ss += 8
+        details.append("Bollinger مقاومة علوية 🔴")
+
+    if last["Stoch"] < 20 and last["Stoch_S"] < 20:
+        sb += 6
+        details.append("Stochastic تشبع بيعي")
+    elif last["Stoch"] > 80 and last["Stoch_S"] > 80:
+        ss += 6
+        details.append("Stochastic تشبع شرائي")
+
     total = sb + ss
-    conf  = round(max(sb, ss) / total * 100) if total > 0 else 50
+    if total <= 0:
+        return None
+
+    direction = "BUY" if sb > ss else "SELL"
+    conf = round(max(sb, ss) / total * 100)
+
     return {
-        "direction": direction, "conf": conf, "sb": sb, "ss": ss,
-        "rsi": round(rsi, 1), "price": round(price, 2),
-        "atr": round(last['ATR'], 2), "details": details[:4],
-        "support": round(last['S1'], 2), "resistance": round(last['R1'], 2),
-        "macd_bull": last['MACD'] > last['MACD_S'],
-        "ema_bull": last['EMA9'] > last['EMA21'] > last['EMA50'],
-        "ema_bear": last['EMA9'] < last['EMA21'] < last['EMA50'],
-        "bb_zone": "low" if price <= last['BB_L'] else "high" if price >= last['BB_U'] else "mid",
-        "ichi_bull": ichi_bull, "ichi_bear": ichi_bear,
+        "direction": direction,
+        "conf": conf,
+        "sb": sb,
+        "ss": ss,
+        "price": round(price, 2),
+        "rsi": round(rsi, 1),
+        "atr": round(float(last["ATR"]), 2),
+        "adx": round(adx, 1),
+        "support": round(float(last["S1"]), 2),
+        "resistance": round(float(last["R1"]), 2),
+        "details": details[:5],
+        "macd_bull": last["MACD"] > last["MACD_S"],
+        "ema_bull": last["EMA9"] > last["EMA21"] > last["EMA50"],
+        "ema_bear": last["EMA9"] < last["EMA21"] < last["EMA50"],
+        "bb_zone": "low" if price <= last["BB_L"] else "high" if price >= last["BB_U"] else "mid",
     }
+
 
 def full_analysis(asset="BTC", uid=0):
-    df_1h = get_data(asset, days=14, interval="hourly")
-    df_4h = get_data(asset, days=30, interval="hourly")
-    df_1d = get_data(asset, days=90, interval="daily")
-    if df_4h is not None and len(df_4h) > 0:
-        try:
-            df_4h = df_4h.resample('4h').agg({
-                'Open':'first','High':'max','Low':'min','Close':'last','Volume':'sum'}).dropna()
-        except:
-            df_4h = None
-    frames = {"1h": df_1h, "4h": df_4h, "1d": df_1d}
+    df_1h = get_data(asset, days=18, interval="hourly")
+    df_4h_raw = get_data(asset, days=35, interval="hourly")
+    df_1d = get_data(asset, days=180, interval="daily")
+
+    df_4h = None
+    if df_4h_raw is not None and len(df_4h_raw) > 0:
+        df_4h = df_4h_raw.resample("4h").agg({
+            "Open": "first",
+            "High": "max",
+            "Low": "min",
+            "Close": "last",
+            "Volume": "sum",
+        }).dropna()
+
+    frames = {
+        "1h": df_1h,
+        "4h": df_4h,
+        "1d": df_1d,
+    }
+
     results = {}
     for label, df in frames.items():
-        if df is not None and len(df) >= 20:
-            results[label] = analyze_frame(df, uid)
+        if df is not None and len(df) >= 60:
+            r = analyze_frame(df, uid)
+            if r:
+                results[label] = r
+
     if len(results) < 2:
         return None
-    buy_c = sum(1 for r in results.values() if r['direction'] == "BUY")
-    sel_c = sum(1 for r in results.values() if r['direction'] == "SELL")
-    if buy_c == 3:   final="BUY";  conf_txt=t(uid,"full_confluence");    base_conf=92
-    elif buy_c == 2: final="BUY";  conf_txt=t(uid,"partial_confluence"); base_conf=74
-    elif sel_c == 3: final="SELL"; conf_txt=t(uid,"full_confluence");    base_conf=92
-    elif sel_c == 2: final="SELL"; conf_txt=t(uid,"partial_confluence"); base_conf=74
-    else:
-        main2 = results.get("1h") or list(results.values())[0]
-        fib_l2, fib_e2, sh2, sl2 = calculate_fibonacci(df_1h) if (df_1h is not None and len(df_1h)>=20) else ({},{},0,0)
-        nf2, fk2, dp2 = find_nearest_fib(main2['price'], fib_l2, "NEUTRAL") if fib_l2 else (main2['price'],"50.0",0)
-        kf2 = ["Fib "+k+"%  $"+"{:,.2f}".format(v) for k,v in sorted(fib_l2.items(), key=lambda x: float(x[0]))][:5]
-        fl2 = []
-        icons2 = {"1h":t(uid,"frame_1h"),"4h":t(uid,"frame_4h"),"1d":t(uid,"frame_1d")}
-        for k,r in results.items():
-            icon = "🟢" if r['direction']=="BUY" else "🔴"
-            fl2.append(icon+" "+icons2.get(k,"")+": "+r['direction']+" ("+str(r['conf'])+"%)")
-        return {"final":"NEUTRAL","asset":asset,"confluence_txt":t(uid,"no_confluence"),"base_conf":0,
-                "price":main2['price'],"tp1":0,"tp2":0,"tp3":0,"sl":0,"rr":0,"atr":main2['atr'],
-                "risk_pct":50,"risk_label":t(uid,"risk_med"),"risk_msg":t(uid,"risk_med_msg"),
-                "frame_lines":fl2,"ind_details":main2['details'],
-                "rsi":main2['rsi'],"support":main2['support'],"resistance":main2['resistance'],
-                "macd_bull":main2['macd_bull'],"ema_bull":main2['ema_bull'],
-                "ema_bear":main2['ema_bear'],"bb_zone":main2['bb_zone'],
-                "fib_levels":fib_l2,"fib_ext":fib_e2,"key_fibs":kf2,
-                "nearest_fib":nf2,"fib_key":fk2,"swing_h":sh2,"swing_l":sl2,
-                "leverage_ar":"","leverage_en":"","tf_ar":"","tf_en":"","hold_ar":"","hold_en":""}
-    main  = results.get("1h") or list(results.values())[0]
-    price = main['price']
-    atr   = main['atr']
-    if df_1h is not None and len(df_1h) >= 20:
-        fib_levels, fib_ext, swing_h, swing_l = calculate_fibonacci(df_1h)
-    else:
-        fib_levels, fib_ext, swing_h, swing_l = {}, {}, price*1.02, price*0.98
-    nearest_fib, fib_key, dist_pct = find_nearest_fib(price, fib_levels, final)
+
+    buy_c = sum(1 for r in results.values() if r["direction"] == "BUY")
+    sell_c = sum(1 for r in results.values() if r["direction"] == "SELL")
+
+    if buy_c == sell_c:
+        return None
+
+    final = "BUY" if buy_c > sell_c else "SELL"
+    aligned = buy_c if final == "BUY" else sell_c
+
+    if aligned < 2:
+        return None
+
+    aligned_results = [r for r in results.values() if r["direction"] == final]
+    avg_conf = round(np.mean([r["conf"] for r in aligned_results]))
+    base_conf = min(96, avg_conf + (7 if aligned == 3 else 0))
+
+    main = results.get("1h") or aligned_results[0]
+    price = main["price"]
+    atr = main["atr"]
+
+    df_regime = calc_indicators(df_1h)
+    market_regime = detect_market_regime(df_regime)
+
+    if market_regime == "High Volatility" and base_conf < 82:
+        return None
+
+    fib_levels, fib_ext, swing_h, swing_l = calculate_fibonacci(df_1h)
+    nearest_fib, fib_key, dist_pct = find_nearest_fib(price, fib_levels)
     sl, tp1, tp2, tp3, rr = get_fib_targets(price, fib_levels, fib_ext, final, atr)
-    risk = 100 - base_conf
-    if main['rsi'] < 25 or main['rsi'] > 75: risk += 10
-    if dist_pct > 2: risk += 5
-    risk = min(risk, 99)
-    if risk < 30:   rl=t(uid,"risk_low");  rm=t(uid,"risk_low_msg")
-    elif risk < 55: rl=t(uid,"risk_med");  rm=t(uid,"risk_med_msg")
-    else:           rl=t(uid,"risk_high"); rm=t(uid,"risk_high_msg")
+
+    if rr < MIN_RR:
+        return None
+
+    quality = base_conf
+    if rr >= 1.8:
+        quality += 4
+    if main["adx"] >= 25:
+        quality += 3
+    if market_regime == "Ranging / Mixed":
+        quality -= 4
+    if market_regime == "High Volatility":
+        quality -= 6
+    if dist_pct > 2:
+        quality -= 3
+
+    quality = max(1, min(99, quality))
+
+    if quality < MIN_CONFIDENCE:
+        return None
+
+    risk = 100 - quality
+    if risk < 28:
+        rl = t(uid, "risk_low")
+        rm = t(uid, "risk_low_msg")
+    elif risk < 50:
+        rl = t(uid, "risk_med")
+        rm = t(uid, "risk_med_msg")
+    else:
+        rl = t(uid, "risk_high")
+        rm = t(uid, "risk_high_msg")
+
+    icons = {"1h": t(uid, "frame_1h"), "4h": t(uid, "frame_4h"), "1d": t(uid, "frame_1d")}
     frame_lines = []
-    icons = {"1h": t(uid,"frame_1h"), "4h": t(uid,"frame_4h"), "1d": t(uid,"frame_1d")}
     for k, r in results.items():
-        icon = "🟢" if r['direction'] == "BUY" else "🔴"
-        frame_lines.append(icon + " " + icons.get(k,'') + ": " + r['direction'] + " (" + str(r['conf']) + "%)")
-    key_fibs = []
-    for pct, val in sorted(fib_levels.items(), key=lambda x: float(x[0])):
-        key_fibs.append("Fib " + pct + "%  $" + "{:,.2f}".format(val))
+        icon = "🟢" if r["direction"] == "BUY" else "🔴"
+        frame_lines.append(f"{icon} {icons.get(k, k)}: {r['direction']} ({r['conf']}%) | ADX {r['adx']}")
+
+    conf_txt = t(uid, "full_confluence") if aligned == 3 else t(uid, "partial_confluence")
+
+    key_fibs = [
+        f"Fib {pct}%  ${val:,.2f}"
+        for pct, val in sorted(fib_levels.items(), key=lambda x: float(x[0]))[:6]
+    ]
+
+    entry_buffer = max(atr * 0.18, price * 0.0015)
+    entry_low = round(price - entry_buffer, 2)
+    entry_high = round(price + entry_buffer, 2)
+
     return {
-        "final": final, "asset": asset,
-        "confluence_txt": conf_txt, "base_conf": base_conf,
-        "price": price, "tp1": tp1, "tp2": tp2, "tp3": tp3,
-        "sl": sl, "rr": rr, "atr": atr,
-        "risk_pct": risk, "risk_label": rl, "risk_msg": rm,
-        "frame_lines": frame_lines, "ind_details": main['details'],
-        "rsi": main['rsi'],
-        "support": main['support'], "resistance": main['resistance'],
-        "macd_bull": main['macd_bull'], "ema_bull": main['ema_bull'],
-        "ema_bear": main['ema_bear'], "bb_zone": main['bb_zone'],
-        "fib_levels": fib_levels, "fib_ext": fib_ext,
-        "key_fibs": key_fibs[:5],
-        "nearest_fib": nearest_fib, "fib_key": fib_key,
-        "swing_h": swing_h, "swing_l": swing_l,
-        "leverage_ar": "10x — 15x\n⚠️ لا تتجاوز 15x للمبتدئين",
-        "leverage_en": "10x — 15x\n⚠️ Max 15x for beginners",
-        "tf_ar": "1 ساعة", "tf_en": "1 Hour",
-        "hold_ar": "2 — 8 ساعات", "hold_en": "2 — 8 Hours",
+        "final": final,
+        "asset": asset,
+        "confluence_txt": conf_txt,
+        "base_conf": base_conf,
+        "quality": quality,
+        "price": price,
+        "entry_low": entry_low,
+        "entry_high": entry_high,
+        "tp1": tp1,
+        "tp2": tp2,
+        "tp3": tp3,
+        "sl": sl,
+        "rr": rr,
+        "atr": atr,
+        "risk_pct": risk,
+        "risk_label": rl,
+        "risk_msg": rm,
+        "frame_lines": frame_lines,
+        "ind_details": main["details"],
+        "rsi": main["rsi"],
+        "adx": main["adx"],
+        "support": main["support"],
+        "resistance": main["resistance"],
+        "macd_bull": main["macd_bull"],
+        "ema_bull": main["ema_bull"],
+        "ema_bear": main["ema_bear"],
+        "bb_zone": main["bb_zone"],
+        "fib_levels": fib_levels,
+        "fib_ext": fib_ext,
+        "key_fibs": key_fibs,
+        "nearest_fib": nearest_fib,
+        "fib_key": fib_key,
+        "market_regime": market_regime,
+        "leverage_ar": "إدارة المخاطر أهم من حجم الدخول — تجنب الرافعة العالية",
+        "leverage_en": "Risk management matters more than position size — avoid high leverage",
+        "hold_ar": "2 — 8 ساعات",
+        "hold_en": "2 — 8 Hours",
     }
 
 
-# ==================== بناء الرسائل (محسّن) ====================
+# ================= MESSAGES =================
+
 def build_trade_msg(res, uid=0, auto=False):
-    lang    = user_languages.get(uid, "ar")
-    ai      = "₿" if res['asset'] == "BTC" else "🥇"
-    an      = "BTC/USD" if res['asset'] == "BTC" else "XAU/USD"
-    is_sell = res['final'] == "SELL"
+    lang = user_languages.get(uid, "ar")
+    ai = "₿" if res["asset"] == "BTC" else "🥇"
+    an = "BTC/USD" if res["asset"] == "BTC" else "XAU/USD"
+    is_sell = res["final"] == "SELL"
+
     dir_emoji = "🔴" if is_sell else "🟢"
-    dir_txt   = t(uid,"sell") if is_sell else t(uid,"buy")
-    header    = t(uid,"auto_header") if auto else t(uid,"trade_header")
-    leverage  = res['leverage_ar'] if lang == "ar" else res['leverage_en']
-    hold      = res['hold_ar']     if lang == "ar" else res['hold_en']
-    conf      = res['base_conf']
-    bar       = "█" * (conf // 10) + "░" * (10 - conf // 10)
+    dir_txt = t(uid, "sell") if is_sell else t(uid, "buy")
+    header = t(uid, "auto_header") if auto else t(uid, "trade_header")
+
+    risk_note = res["leverage_ar"] if lang == "ar" else res["leverage_en"]
+    hold = res["hold_ar"] if lang == "ar" else res["hold_en"]
+
+    conf = res["quality"]
+    bar = "█" * (conf // 10) + "░" * (10 - conf // 10)
 
     lines = [
         "╔══════════════════════════╗",
-        "  " + ai + " " + an + "  " + dir_emoji + "  " + dir_txt,
-        "  ⚡ " + header,
+        f"  {ai} {an}  {dir_emoji}  {dir_txt}",
+        f"  ⚡ {header}",
         "╚══════════════════════════╝",
         "",
-        "📍 " + t(uid,'entry') + "        $" + "{:,.2f}".format(res['price']),
-        "📐 " + t(uid,'fib_entry') + "   Fib " + res['fib_key'] + "% ($" + "{:,.2f}".format(res['nearest_fib']) + ")",
+        f"📍 {t(uid, 'entry')}        ${res['entry_low']:,.2f} - ${res['entry_high']:,.2f}",
+        f"💵 {t(uid, 'ref_price')}     ${res['price']:,.2f}",
+        f"📐 {t(uid, 'fib_entry')}   Fib {res['fib_key']}% (${res['nearest_fib']:,.2f})",
         "",
-        "━━━━  🎯 " + t(uid,'targets_section') + "  ━━━━",
-        "  TP1  ›  $" + "{:,.2f}".format(res['tp1']),
-        "  TP2  ›  $" + "{:,.2f}".format(res['tp2']),
-        "  TP3  ›  $" + "{:,.2f}".format(res['tp3']),
-        "  🛑 " + t(uid,'sl') + "   ›  $" + "{:,.2f}".format(res['sl']),
-        "  ⚖️  " + t(uid,'rr') + ":  1:" + str(res['rr']),
+        f"━━━━  🎯 {t(uid, 'targets_section')}  ━━━━",
+        f"  TP1  ›  ${res['tp1']:,.2f}",
+        f"  TP2  ›  ${res['tp2']:,.2f}",
+        f"  TP3  ›  ${res['tp3']:,.2f}",
+        f"  🛑 {t(uid, 'sl')}   ›  ${res['sl']:,.2f}",
+        f"  ⚖️ {t(uid, 'rr')}:  1:{res['rr']}",
         "",
-        "━━━━  📐 " + t(uid,'fib_section') + "  ━━━━",
+        f"━━━━  🧠 {t(uid, 'quality')}  ━━━━",
+        f"  {bar}  {res['quality']}%",
+        f"  Technical Confidence: {res['base_conf']}%",
+        f"  {t(uid, 'market_regime')}: {res['market_regime']}",
+        "",
+        f"━━━━  🔗 {t(uid, 'confluence')}  ━━━━",
     ]
-    for f in res['key_fibs']:
+
+    for fl in res["frame_lines"]:
+        lines.append("  " + fl)
+
+    lines.append("  " + res["confluence_txt"])
+
+    lines += [
+        "",
+        f"━━━━  📐 {t(uid, 'fib_section')}  ━━━━",
+    ]
+
+    for f in res["key_fibs"]:
         lines.append("  " + f)
 
     lines += [
         "",
-        "━━━━  🔗 " + t(uid,'confluence') + "  ━━━━",
+        f"━━━━  📊 {t(uid, 'indicators_section')}  ━━━━",
+        f"  RSI: {res['rsi']}",
+        f"  ADX: {res['adx']}",
     ]
-    for fl in res['frame_lines']:
-        lines.append("  " + fl)
-    lines.append("  " + res['confluence_txt'])
 
-    lines += [
-        "",
-        "━━━━  📊 " + t(uid,'indicators_section') + "  ━━━━",
-        "  RSI: " + str(res['rsi']),
-    ]
-    for d in res['ind_details']:
+    for d in res["ind_details"]:
         lines.append("  " + d)
 
     lines += [
         "",
-        "━━━━  📡 " + t(uid,'support') + " / " + t(uid,'resistance') + "  ━━━━",
-        "  🟢 " + t(uid,'support') + "      $" + "{:,.2f}".format(res['support']),
-        "  🔴 " + t(uid,'resistance') + "   $" + "{:,.2f}".format(res['resistance']),
+        f"━━━━  📡 {t(uid, 'support')} / {t(uid, 'resistance')}  ━━━━",
+        f"  🟢 {t(uid, 'support')}      ${res['support']:,.2f}",
+        f"  🔴 {t(uid, 'resistance')}   ${res['resistance']:,.2f}",
         "",
-        "━━━━  🔧 " + t(uid,'leverage') + "  ━━━━",
-        "  " + leverage,
-        "  ⏳ " + t(uid,'hold_time') + ":  " + hold,
-        "",
-        "━━━━  💡 " + t(uid,'strength_section') + "  ━━━━",
-        "  " + bar + "  " + str(conf) + "%",
-        "",
-        "━━━━  ⚠️ " + t(uid,'risk_section') + "  ━━━━",
-        "  " + res['risk_label'] + "  •  " + str(res['risk_pct']) + "%",
-        "  " + res['risk_msg'],
+        f"━━━━  ⚠️ {t(uid, 'risk_section')}  ━━━━",
+        f"  {res['risk_label']}  •  {res['risk_pct']}%",
+        f"  {res['risk_msg']}",
+        f"  {risk_note}",
+        f"  ⏳ {t(uid, 'hold_time')}: {hold}",
         "",
         "━━━━━━━━━━━━━━━━━━━━━━━━",
-        "🕐 " + t(uid,'updated_gmt') + ":  " + gmt_now(),
-        t(uid,'footer'),
+        f"🕐 {t(uid, 'updated_gmt')}: {gmt_now()}",
+        t(uid, "footer"),
     ]
+
     return "\n".join(lines)
 
 
 def build_update_msg(trade, current_price, update_type, uid=0):
-    dir_txt = t(uid,"buy") if trade['direction'] == "BUY" else t(uid,"sell")
-    lines = [
+    dir_txt = t(uid, "buy") if trade["direction"] == "BUY" else t(uid, "sell")
+
+    return "\n".join([
         "╔══════════════════════════╗",
-        "  🔄 ₿ BTC/USD  •  " + t(uid,'update_header'),
+        f"  🔄 ₿ BTC/USD • {t(uid, 'update_header')}",
         "╚══════════════════════════╝",
         "",
-        "  " + t(uid,'direction') + ":      " + dir_txt,
-        "  " + t(uid,'entry') + ":          $" + "{:,.2f}".format(trade['entry']),
-        "  " + t(uid,'current_price') + ":  $" + "{:,.2f}".format(current_price),
+        f"  {t(uid, 'direction')}:      {dir_txt}",
+        f"  {t(uid, 'entry')}:          ${trade['entry_low']:,.2f} - ${trade['entry_high']:,.2f}",
+        f"  {t(uid, 'current_price')}:  ${current_price:,.2f}",
         "",
-        "  " + update_type,
+        f"  {update_type}",
         "",
-        "━━━━  🎯 " + t(uid,'targets_section') + "  ━━━━",
-        "  TP1  ›  $" + "{:,.2f}".format(trade['tp1']),
-        "  TP2  ›  $" + "{:,.2f}".format(trade['tp2']),
-        "  TP3  ›  $" + "{:,.2f}".format(trade['tp3']),
-        "  🛑 SL  ›  $" + "{:,.2f}".format(trade['sl']),
+        f"━━━━  🎯 {t(uid, 'targets_section')}  ━━━━",
+        f"  TP1  ›  ${trade['tp1']:,.2f}",
+        f"  TP2  ›  ${trade['tp2']:,.2f}",
+        f"  TP3  ›  ${trade['tp3']:,.2f}",
+        f"  🛑 SL  ›  ${trade['sl']:,.2f}",
         "",
         "━━━━━━━━━━━━━━━━━━━━━━━━",
-        "🕐 " + t(uid,'updated_gmt') + ":  " + gmt_now(),
-        t(uid,'footer'),
-    ]
-    return "\n".join(lines)
+        f"🕐 {t(uid, 'updated_gmt')}: {gmt_now()}",
+        t(uid, "footer"),
+    ])
 
 
 def build_analysis_msg(res, uid=0):
-    ai = "₿" if res['asset'] == "BTC" else "🥇"
-    an = "BTC/USD" if res['asset'] == "BTC" else "XAU/USD"
-    if res['final'] == "BUY" and res['base_conf'] > 60:
-        trend = t(uid,"trend_bull"); summary = t(uid,"summary_bull")
-    elif res['final'] == "SELL" and res['base_conf'] > 60:
-        trend = t(uid,"trend_bear"); summary = t(uid,"summary_bear")
+    ai = "₿" if res["asset"] == "BTC" else "🥇"
+    an = "BTC/USD" if res["asset"] == "BTC" else "XAU/USD"
+
+    if res["final"] == "BUY":
+        trend = t(uid, "trend_bull")
+        summary = t(uid, "summary_bull")
+    elif res["final"] == "SELL":
+        trend = t(uid, "trend_bear")
+        summary = t(uid, "summary_bear")
     else:
-        trend = t(uid,"trend_neutral"); summary = t(uid,"summary_neutral")
-    rsi = res['rsi']
-    rsi_txt  = t(uid,"rsi_oversold") if rsi < 30 else t(uid,"rsi_overbought") if rsi > 70 else t(uid,"rsi_neutral")
-    macd_txt = t(uid,"macd_bull") if res['macd_bull'] else t(uid,"macd_bear")
-    ema_txt  = t(uid,"ema_bull") if res['ema_bull'] else t(uid,"ema_bear") if res['ema_bear'] else t(uid,"ema_mixed")
-    bb_txt   = t(uid,"bb_low") if res['bb_zone']=="low" else t(uid,"bb_high") if res['bb_zone']=="high" else t(uid,"bb_mid")
+        trend = t(uid, "trend_neutral")
+        summary = t(uid, "summary_neutral")
+
     lines = [
         "╔══════════════════════════╗",
-        "  " + ai + " " + an + "  |  " + t(uid,'analysis_header'),
+        f"  {ai} {an} | تحليل السوق",
         "╚══════════════════════════╝",
         "",
-        "  " + trend,
-        "  💵 " + t(uid,'entry') + ":         $" + "{:,.2f}".format(res['price']),
-        "  🟢 " + t(uid,'support') + ":      $" + "{:,.2f}".format(res['support']),
-        "  🔴 " + t(uid,'resistance') + ":   $" + "{:,.2f}".format(res['resistance']),
+        f"  {trend}",
+        f"  💵 {t(uid, 'ref_price')}: ${res['price']:,.2f}",
+        f"  🧠 {t(uid, 'quality')}: {res['quality']}%",
+        f"  {t(uid, 'market_regime')}: {res['market_regime']}",
         "",
-        "━━━━  📐 " + t(uid,'fib_section') + "  ━━━━",
+        f"━━━━  🔗 {t(uid, 'confluence')}  ━━━━",
     ]
-    for f in res['key_fibs']:
-        lines.append("  " + f)
-    lines += [
-        "",
-        "━━━━  🔗 " + t(uid,'confluence') + "  ━━━━",
-    ]
-    for fl in res['frame_lines']:
+
+    for fl in res["frame_lines"]:
         lines.append("  " + fl)
+
     lines += [
         "",
-        "━━━━  📊 " + t(uid,'indicators_section') + "  ━━━━",
-        "  RSI (" + str(rsi) + "):  " + rsi_txt,
-        "  " + macd_txt,
-        "  " + ema_txt,
-        "  " + bb_txt,
+        f"━━━━  📊 {t(uid, 'indicators_section')}  ━━━━",
+        f"  RSI: {res['rsi']}",
+        f"  ADX: {res['adx']}",
+    ]
+
+    for d in res["ind_details"]:
+        lines.append("  " + d)
+
+    lines += [
         "",
         "  " + summary,
         "",
         "━━━━━━━━━━━━━━━━━━━━━━━━",
-        "🕐 " + t(uid,'updated_gmt') + ":  " + gmt_now(),
-        t(uid,'footer'),
+        f"🕐 {t(uid, 'updated_gmt')}: {gmt_now()}",
+        t(uid, "footer"),
     ]
+
     return "\n".join(lines)
 
 
-# ==================== لوحات المفاتيح ====================
+# ================= KEYBOARDS =================
+
 def main_keyboard(uid):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(t(uid,"btn_btc"),  callback_data='trade_BTC'),
-         InlineKeyboardButton(t(uid,"btn_gold"), callback_data='trade_GOLD')],
-        [InlineKeyboardButton(t(uid,"btn_analysis_btc"),  callback_data='analysis_BTC'),
-         InlineKeyboardButton(t(uid,"btn_analysis_gold"), callback_data='analysis_GOLD')],
-        [InlineKeyboardButton(t(uid,"btn_prices"), callback_data='prices'),
-         InlineKeyboardButton(t(uid,"btn_about"),  callback_data='about')],
-        [InlineKeyboardButton(t(uid,"btn_lang"), callback_data='change_lang')]
+        [
+            InlineKeyboardButton(t(uid, "btn_btc"), callback_data="trade_BTC"),
+            InlineKeyboardButton(t(uid, "btn_gold"), callback_data="trade_GOLD"),
+        ],
+        [
+            InlineKeyboardButton(t(uid, "btn_analysis_btc"), callback_data="analysis_BTC"),
+            InlineKeyboardButton(t(uid, "btn_analysis_gold"), callback_data="analysis_GOLD"),
+        ],
+        [
+            InlineKeyboardButton(t(uid, "btn_prices"), callback_data="prices"),
+            InlineKeyboardButton(t(uid, "btn_about"), callback_data="about"),
+        ],
+        [InlineKeyboardButton(t(uid, "btn_lang"), callback_data="change_lang")],
     ])
+
 
 def lang_keyboard():
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("العربية", callback_data='lang_ar'),
-        InlineKeyboardButton("English",  callback_data='lang_en')
+        InlineKeyboardButton("العربية", callback_data="lang_ar"),
+        InlineKeyboardButton("English", callback_data="lang_en"),
     ]])
 
 
-# ==================== هاندلرز ====================
+# ================= DEDUP =================
+
+def signal_fingerprint(res):
+    step = 50 if res["asset"] == "BTC" else 5
+    rounded_entry = round(res["price"] / step) * step
+    return f"{res['asset']}:{res['final']}:{rounded_entry}"
+
+
+def can_send_signal(res):
+    fp = signal_fingerprint(res)
+    last = _last_signals.get(fp)
+
+    if last and time.time() - last < SIGNAL_COOLDOWN_SEC:
+        return False
+
+    _last_signals[fp] = time.time()
+    return True
+
+
+# ================= HANDLERS =================
+
 async def start(update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
+
     if uid not in ALLOWED_USERS:
         await update.message.reply_text("⛔ هذا البوت خاص")
         return
+
     if uid not in user_languages:
         await update.message.reply_text(
-            "🐎 Abu Mahra Bot\n\nاختر لغتك / Choose your language:",
-            reply_markup=lang_keyboard())
+            "🐎 Abu Mahra Pro\n\nاختر لغتك / Choose your language:",
+            reply_markup=lang_keyboard(),
+        )
     else:
-        await update.message.reply_text(t(uid,"welcome"), reply_markup=main_keyboard(uid))
+        await update.message.reply_text(t(uid, "welcome"), reply_markup=main_keyboard(uid))
+
 
 async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
-    uid  = update.effective_user.id
+    uid = update.effective_user.id
+    if uid not in ALLOWED_USERS:
+        return
+
     text = update.message.text or ""
-    if uid not in ALLOWED_USERS: return
-    kb   = main_keyboard(uid) if uid in user_languages else lang_keyboard()
-    lang = user_languages.get(uid, "ar")
+    kb = main_keyboard(uid) if uid in user_languages else lang_keyboard()
+
     if any(g in text.lower() for g in GREETINGS):
-        reply = random.choice(REPLIES_AR if lang == "ar" else REPLIES_EN)
+        reply = "هلا وغلا! 🐎 استخدم الأزرار 👇" if user_languages.get(uid, "ar") == "ar" else "Hello! 🐎 Use the buttons below 👇"
     else:
-        reply = random.choice(CONFUSED_AR if lang == "ar" else CONFUSED_EN)
+        reply = "اختر من القائمة 👇" if user_languages.get(uid, "ar") == "ar" else "Choose from the menu 👇"
+
     await update.message.reply_text(reply, reply_markup=kb)
+
 
 async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    uid   = query.from_user.id
-    data  = query.data
-    await query.answer()
-    if uid not in ALLOWED_USERS: return
+    uid = query.from_user.id
+    data = query.data
 
-    if data == 'lang_ar':
+    await query.answer()
+
+    if uid not in ALLOWED_USERS:
+        return
+
+    if data == "lang_ar":
         user_languages[uid] = "ar"
-        await query.message.reply_text(t(uid,"welcome"), reply_markup=main_keyboard(uid))
-    elif data == 'lang_en':
+        await query.message.reply_text(t(uid, "welcome"), reply_markup=main_keyboard(uid))
+
+    elif data == "lang_en":
         user_languages[uid] = "en"
-        await query.message.reply_text(t(uid,"welcome"), reply_markup=main_keyboard(uid))
-    elif data == 'change_lang':
-        await query.message.reply_text(t(uid,"choose_lang"), reply_markup=lang_keyboard())
-    elif data.startswith('trade_'):
-        asset = data.split('_')[1]
-        await query.message.reply_text(t(uid,"loading_trade"))
+        await query.message.reply_text(t(uid, "welcome"), reply_markup=main_keyboard(uid))
+
+    elif data == "change_lang":
+        await query.message.reply_text(t(uid, "choose_lang"), reply_markup=lang_keyboard())
+
+    elif data.startswith("trade_"):
+        asset = data.split("_")[1]
+        await query.message.reply_text(t(uid, "loading_trade"))
+
         try:
             res = full_analysis(asset, uid)
-            if not res or res['final'] == "NEUTRAL":
-                await query.message.reply_text(t(uid,"no_signal")); return
+
+            if not res:
+                await query.message.reply_text(t(uid, "no_signal"))
+                return
+
             await query.message.reply_text(build_trade_msg(res, uid))
+
             if asset == "BTC":
-                active_btc_trade['data'] = {
-                    "asset": "BTC", "direction": res['final'],
-                    "entry": res['price'], "sl": res['sl'],
-                    "tp1": res['tp1'], "tp2": res['tp2'], "tp3": res['tp3'],
-                    "atr": res['atr'], "tp1_hit": False, "tp2_hit": False,
+                active_btc_trade["data"] = {
+                    "asset": "BTC",
+                    "direction": res["final"],
+                    "entry": res["price"],
+                    "entry_low": res["entry_low"],
+                    "entry_high": res["entry_high"],
+                    "sl": res["sl"],
+                    "tp1": res["tp1"],
+                    "tp2": res["tp2"],
+                    "tp3": res["tp3"],
+                    "atr": res["atr"],
+                    "tp1_hit": False,
+                    "tp2_hit": False,
                     "chat_id": query.message.chat_id,
+                    "uid": uid,
                 }
+
         except Exception as e:
-            await query.message.reply_text(t(uid,"error") + str(e))
-    elif data.startswith('analysis_'):
-        asset = data.split('_')[1]
-        await query.message.reply_text(t(uid,"loading_analysis"))
+            logger.exception("Manual trade failed")
+            await query.message.reply_text(t(uid, "error") + str(e))
+
+    elif data.startswith("analysis_"):
+        asset = data.split("_")[1]
+        await query.message.reply_text(t(uid, "loading_analysis"))
+
         try:
             res = full_analysis(asset, uid)
-            if not res or 'key_fibs' not in res:
-                await query.message.reply_text(t(uid,"failed")); return
+
+            if not res:
+                await query.message.reply_text(t(uid, "no_signal"))
+                return
+
             await query.message.reply_text(build_analysis_msg(res, uid))
+
         except Exception as e:
-            await query.message.reply_text(t(uid,"error") + str(e))
-    elif data == 'prices':
+            logger.exception("Analysis failed")
+            await query.message.reply_text(t(uid, "error") + str(e))
+
+    elif data == "prices":
         try:
-            d    = get_prices()
-            btc  = d.get('bitcoin', {})
-            gold = d.get('tether-gold', {})
-            bp = btc.get('usd',0);  bc = btc.get('usd_24h_change',0)
-            gp = gold.get('usd',0); gc = gold.get('usd_24h_change',0)
+            d = get_prices()
+            btc = d.get("bitcoin", {})
+            gold = d.get("gold", {})
+
+            bp = btc.get("usd", 0)
+            gp = gold.get("usd", 0)
+
             lines = [
                 "╔══════════════════════════╗",
-                "  " + t(uid,'prices_title'),
+                f"  {t(uid, 'prices_title')}",
                 "╚══════════════════════════╝",
                 "",
-                "  ₿ BTC/USD:   $" + "{:,.0f}".format(bp),
-                "  " + ("📈" if bc > 0 else "📉") + " " + t(uid,'change_24h') + ":  " + "{:+.2f}".format(bc) + "%",
+                f"  ₿ BTC/USD:   ${bp:,.2f}" if bp else "  ₿ BTC/USD: غير متاح",
                 "",
-                "  🥇 XAU/USD:  $" + "{:,.2f}".format(gp),
-                "  " + ("📈" if gc > 0 else "📉") + " " + t(uid,'change_24h') + ":  " + "{:+.2f}".format(gc) + "%",
+                f"  🥇 XAU/USD:  ${gp:,.2f}" if gp else "  🥇 XAU/USD: غير متاح",
                 "",
                 "━━━━━━━━━━━━━━━━━━━━━━━━",
-                "🕐 " + t(uid,'updated_gmt') + ":  " + gmt_now(),
+                f"🕐 {t(uid, 'updated_gmt')}: {gmt_now()}",
             ]
+
             await query.message.reply_text("\n".join(lines))
+
         except Exception as e:
-            await query.message.reply_text(t(uid,"error") + str(e))
-    elif data == 'about':
-        await query.message.reply_text(t(uid,"about_text"))
+            await query.message.reply_text(t(uid, "error") + str(e))
+
+    elif data == "about":
+        await query.message.reply_text(t(uid, "about_text"))
 
 
-# ==================== إشارات تلقائية ====================
+# ================= AUTO JOBS =================
+
 async def auto_signals(context):
     try:
         for asset in ["BTC", "GOLD"]:
             res = full_analysis(asset, 0)
-            if res and res['final'] != "NEUTRAL" and res['base_conf'] >= MIN_CONFIDENCE:
-                await context.bot.send_message(chat_id=CHANNEL_ID,
-                                               text=build_trade_msg(res, 0, auto=True))
-                if asset == "BTC":
-                    active_btc_trade['data'] = {
-                        "asset": "BTC", "direction": res['final'],
-                        "entry": res['price'], "sl": res['sl'],
-                        "tp1": res['tp1'], "tp2": res['tp2'], "tp3": res['tp3'],
-                        "atr": res['atr'], "tp1_hit": False, "tp2_hit": False,
-                        "chat_id": CHANNEL_ID,
-                    }
+
+            if not res:
+                continue
+
+            if not can_send_signal(res):
+                logger.info("Duplicate signal skipped: %s", signal_fingerprint(res))
+                continue
+
+            await context.bot.send_message(
+                chat_id=CHANNEL_ID,
+                text=build_trade_msg(res, 0, auto=True),
+            )
+
+            if asset == "BTC":
+                active_btc_trade["data"] = {
+                    "asset": "BTC",
+                    "direction": res["final"],
+                    "entry": res["price"],
+                    "entry_low": res["entry_low"],
+                    "entry_high": res["entry_high"],
+                    "sl": res["sl"],
+                    "tp1": res["tp1"],
+                    "tp2": res["tp2"],
+                    "tp3": res["tp3"],
+                    "atr": res["atr"],
+                    "tp1_hit": False,
+                    "tp2_hit": False,
+                    "chat_id": CHANNEL_ID,
+                    "uid": 0,
+                }
+
     except Exception as e:
-        logger.error("❌ Auto: " + str(e))
+        logger.error("❌ Auto: %s", e)
+
 
 async def monitor_btc(context):
-    if 'data' not in active_btc_trade:
+    if "data" not in active_btc_trade:
         return
-    trade = active_btc_trade['data']
+
+    trade = active_btc_trade["data"]
+
     try:
-        current = get_btc_price()
-        if not current: return
-        entry=trade['entry']; sl=trade['sl']
-        tp1=trade['tp1']; tp2=trade['tp2']; tp3=trade['tp3']
-        atr=trade['atr']; direction=trade['direction']
-        chat_id=trade['chat_id']; uid=0
+        current = get_live_price("BTC")
+        if not current:
+            return
+
+        direction = trade["direction"]
+        chat_id = trade["chat_id"]
+        uid = trade.get("uid", 0)
         update_msg = None
+        should_clear = False
+
         if direction == "BUY":
-            if not trade['tp1_hit'] and current >= tp1:
-                trade['tp1_hit'] = True; trade['sl'] = entry
-                update_msg = t(uid,"update_tp1_hit")
-            elif trade['tp1_hit'] and not trade['tp2_hit'] and current >= tp2:
-                trade['tp2_hit'] = True; trade['sl'] = tp1
-                update_msg = t(uid,"update_tp2_hit")
-            elif current <= trade['sl']:
-                update_msg = t(uid,"update_near_sl")
-            elif trade['tp1_hit'] and current > tp1 + 0.5*atr:
-                new_sl = round(current - 0.8*atr, 2)
-                if new_sl > trade['sl']:
-                    trade['sl'] = new_sl; update_msg = t(uid,"update_sl_moved")
-            if current >= tp3:
-                update_msg = t(uid,"update_tp3_hit"); active_btc_trade.clear()
+            if current <= trade["sl"]:
+                update_msg = t(uid, "update_near_sl")
+                should_clear = True
+            elif current >= trade["tp3"]:
+                update_msg = t(uid, "update_tp3_hit")
+                should_clear = True
+            elif not trade["tp1_hit"] and current >= trade["tp1"]:
+                trade["tp1_hit"] = True
+                trade["sl"] = trade["entry"]
+                update_msg = t(uid, "update_tp1_hit")
+            elif trade["tp1_hit"] and not trade["tp2_hit"] and current >= trade["tp2"]:
+                trade["tp2_hit"] = True
+                trade["sl"] = trade["tp1"]
+                update_msg = t(uid, "update_tp2_hit")
+
         else:
-            if not trade['tp1_hit'] and current <= tp1:
-                trade['tp1_hit'] = True; trade['sl'] = entry
-                update_msg = t(uid,"update_tp1_hit")
-            elif trade['tp1_hit'] and not trade['tp2_hit'] and current <= tp2:
-                trade['tp2_hit'] = True; trade['sl'] = tp1
-                update_msg = t(uid,"update_tp2_hit")
-            elif current >= trade['sl']:
-                update_msg = t(uid,"update_near_sl")
-            elif trade['tp1_hit'] and current < tp1 - 0.5*atr:
-                new_sl = round(current + 0.8*atr, 2)
-                if new_sl < trade['sl']:
-                    trade['sl'] = new_sl; update_msg = t(uid,"update_sl_moved")
-            if current <= tp3:
-                update_msg = t(uid,"update_tp3_hit"); active_btc_trade.clear()
+            if current >= trade["sl"]:
+                update_msg = t(uid, "update_near_sl")
+                should_clear = True
+            elif current <= trade["tp3"]:
+                update_msg = t(uid, "update_tp3_hit")
+                should_clear = True
+            elif not trade["tp1_hit"] and current <= trade["tp1"]:
+                trade["tp1_hit"] = True
+                trade["sl"] = trade["entry"]
+                update_msg = t(uid, "update_tp1_hit")
+            elif trade["tp1_hit"] and not trade["tp2_hit"] and current <= trade["tp2"]:
+                trade["tp2_hit"] = True
+                trade["sl"] = trade["tp1"]
+                update_msg = t(uid, "update_tp2_hit")
+
         if update_msg:
-            await context.bot.send_message(chat_id=chat_id,
-                                           text=build_update_msg(trade, current, update_msg, uid))
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=build_update_msg(trade, current, update_msg, uid),
+            )
+
+        if should_clear:
+            active_btc_trade.clear()
+
     except Exception as e:
-        logger.error("❌ Monitor: " + str(e))
-
-async def send_smart_alerts(context):
-    try:
-        for asset in ["BTC", "GOLD"]:
-            df = get_data(asset, days=7, interval="hourly")
-            if df is None or len(df) < 30: continue
-            df = calc_indicators(df)
-            last  = df.iloc[-1]
-            price = last['Close']
-            rsi   = last['RSI']
-            atr   = last['ATR']
-            fib_levels, _, _, _ = calculate_fibonacci(df)
-            ai = "₿ BTC/USD" if asset == "BTC" else "🥇 XAU/USD"
-            alerts = []
-            if rsi < 28:
-                alerts.append("🔴 RSI تشبع بيعي قوي (" + str(round(rsi,1)) + ") — فرصة شراء محتملة!")
-            elif rsi > 72:
-                alerts.append("🔴 RSI تشبع شرائي قوي (" + str(round(rsi,1)) + ") — احتمال انعكاس!")
-            for pct, level in fib_levels.items():
-                dist = abs(price - level) / price * 100
-                if dist < 0.3:
-                    alerts.append("📐 السعر عند Fib " + pct + "% ($" + "{:,.2f}".format(level) + ") — مستوى مهم!")
-                    break
-            try:
-                tenkan = last['Tenkan']; kijun = last['Kijun']
-                if abs(tenkan - kijun) / price * 100 < 0.2:
-                    alerts.append("☁️ Ichimoku: Tenkan و Kijun على وشك التقاطع!")
-            except: pass
-            bb_width = (last['BB_U'] - last['BB_L']) / last['BB_U'] * 100
-            if bb_width < 2:
-                alerts.append("💥 Bollinger Squeeze — حركة قوية قادمة!")
-            if alerts:
-                msg_lines = [
-                    "╔══════════════════════════╗",
-                    "  ⚡ تنبيه ذكي — " + ai,
-                    "╚══════════════════════════╝",
-                    "",
-                    "  💵 السعر: $" + "{:,.2f}".format(price),
-                    "",
-                ]
-                for a in alerts:
-                    msg_lines.append("  " + a)
-                msg_lines += [
-                    "",
-                    "━━━━━━━━━━━━━━━━━━━━━━━━",
-                    "🕐 " + gmt_now(),
-                    "⚠️ للأغراض التعليمية فقط",
-                ]
-                await context.bot.send_message(chat_id=CHANNEL_ID, text="\n".join(msg_lines))
-    except Exception as e:
-        logger.error("❌ Smart Alerts: " + str(e))
+        logger.error("❌ Monitor: %s", e)
 
 
-
+# ================= MAIN =================
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
 
+    app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.job_queue.run_repeating(auto_signals,      interval=AUTO_INTERVAL_MIN*60, first=30)
-    app.job_queue.run_repeating(monitor_btc,       interval=MONITOR_MIN*60,       first=60)
-    app.job_queue.run_repeating(send_smart_alerts, interval=45*60,                first=120)
-    logger.info("🐎 Abu Mahra Bot - Ready!")
+
+    app.job_queue.run_repeating(
+        auto_signals,
+        interval=AUTO_INTERVAL_MIN * 60,
+        first=30,
+    )
+
+    app.job_queue.run_repeating(
+        monitor_btc,
+        interval=MONITOR_MIN * 60,
+        first=60,
+    )
+
+    logger.info("🐎 Abu Mahra Pro Bot - Ready!")
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
