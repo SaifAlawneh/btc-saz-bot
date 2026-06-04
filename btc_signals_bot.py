@@ -669,6 +669,14 @@ def full_analysis(asset="BTC", uid=0):
     else:
         fib_levels, fib_ext, swing_h, swing_l = {}, {}, price*1.02, price*0.98
     nearest_fib, fib_key, dist_pct = find_nearest_fib(price, fib_levels, final)
+    # منطقة الدخول: ±0.3% من السعر (أو 0.2 ATR)
+    entry_buffer = round(max(price * 0.003, atr * 0.2), 2)
+    if final == 'BUY':
+        entry_low  = round(price - entry_buffer, 2)
+        entry_high = round(price + entry_buffer * 0.5, 2)
+    else:
+        entry_low  = round(price - entry_buffer * 0.5, 2)
+        entry_high = round(price + entry_buffer, 2)
     sl, tp1, tp2, tp3, rr = get_fib_targets(price, fib_levels, fib_ext, final, atr)
     risk = 100 - base_conf
     if main['rsi'] < 25 or main['rsi'] > 75: risk += 10
@@ -725,7 +733,7 @@ def full_analysis(asset="BTC", uid=0):
     return {
         "final": final, "asset": asset,
         "confluence_txt": conf_txt, "base_conf": base_conf,
-        "price": price, "tp1": tp1, "tp2": tp2, "tp3": tp3,
+        "price": price, "entry_low": entry_low, "entry_high": entry_high, "tp1": tp1, "tp2": tp2, "tp3": tp3,
         "sl": sl, "rr": rr, "atr": atr,
         "risk_pct": risk, "risk_label": rl, "risk_msg": rm,
         "frame_lines": frame_lines, "ind_details": main['details'],
@@ -766,7 +774,7 @@ def build_trade_msg(res, uid=0, auto=False):
         "  ⚡ " + header,
         "╚══════════════════════════╝",
         "",
-        "📍 " + t(uid,'entry') + "        $" + "{:,.2f}".format(res['price']),
+        "📍 " + t(uid,'entry') + "   $" + "{:,.2f}".format(res.get('entry_low', res['price'])) + " — $" + "{:,.2f}".format(res.get('entry_high', res['price'])) + "  ↔️",
         "📐 " + t(uid,'fib_entry') + "   Fib " + res['fib_key'] + "% ($" + "{:,.2f}".format(res['nearest_fib']) + ")",
         "",
         "━━━━  🎯 " + t(uid,'targets_section') + "  ━━━━",
@@ -784,28 +792,9 @@ def build_trade_msg(res, uid=0, auto=False):
 
     lines += [
         "",
-        "━━━━  📊 " + t(uid,'indicators_section') + "  ━━━━",
-        "  RSI: " + str(res['rsi']),
-    ]
-    for d in res['ind_details']:
-        lines.append("  " + d)
-
-    lines += [
-        "",
         "━━━━  📡 " + t(uid,'support') + " / " + t(uid,'resistance') + "  ━━━━",
         "  🟢 " + t(uid,'support') + "      $" + "{:,.2f}".format(res['support']),
         "  🔴 " + t(uid,'resistance') + "   $" + "{:,.2f}".format(res['resistance']),
-        "",
-        "━━━━  🔧 " + t(uid,'leverage') + "  ━━━━",
-        "  " + leverage,
-        "  ⏳ " + t(uid,'hold_time') + ":  " + hold,
-        "",
-        "━━━━  💡 " + t(uid,'strength_section') + "  ━━━━",
-        "  " + bar + "  " + str(conf) + "%",
-        "",
-        "━━━━  ⚠️ " + t(uid,'risk_section') + "  ━━━━",
-        "  " + res['risk_label'] + "  •  " + str(res['risk_pct']) + "%",
-        "  " + res['risk_msg'],
         "",
         "━━━━━━━━━━━━━━━━━━━━━━━━",
         "🕐 " + t(uid,'updated_gmt') + ":  " + gmt_now(),
