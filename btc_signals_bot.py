@@ -141,8 +141,8 @@ TEXTS = {
         "support":    "دعم",
         "resistance": "مقاومة",
         "confluence": "توافق الفريمات",
-        "frame_1h":  "1H",
-        "frame_4h":  "4H",
+        "frame_1h":  "ساعة",
+        "frame_4h":  "4 ساعات",
         "frame_1d":  "يومي",
         "full_confluence":    "🔥 توافق كامل على 3 فريمات!",
         "partial_confluence": "✅ توافق على فريمين",
@@ -551,6 +551,24 @@ def calc_indicators(df):
             df['Vol_High'] = False
     except:
         df['Vol_High'] = False
+    # Price Action Patterns
+    try:
+        o = df['Open']; h = df['High']; l = df['Low']; c2 = df['Close']
+        body    = abs(c2 - o)
+        candle  = h - l
+        # Pin Bar (Hammer/Shooting Star)
+        df['PinBar_Bull'] = ((l - c2.combine(o, min)) > body * 2) & (candle > 0)
+        df['PinBar_Bear'] = ((h - c2.combine(o, max)) > body * 2) & (candle > 0)
+        # Engulfing
+        df['Engulf_Bull'] = (c2 > o.shift(1)) & (o < c2.shift(1)) & (c2.shift(1) < o.shift(1))
+        df['Engulf_Bear'] = (c2 < o.shift(1)) & (o > c2.shift(1)) & (c2.shift(1) > o.shift(1))
+        # Market Structure: Higher High / Lower Low
+        df['HH'] = h > h.shift(1)
+        df['LL'] = l < l.shift(1)
+    except:
+        df['PinBar_Bull'] = False; df['PinBar_Bear'] = False
+        df['Engulf_Bull'] = False; df['Engulf_Bear'] = False
+        df['HH'] = False;          df['LL'] = False
     return df
 
 def analyze_frame(df, uid=0):
@@ -618,9 +636,10 @@ def analyze_frame(df, uid=0):
     }
 
 def full_analysis(asset="BTC", uid=0):
-    df_1h = get_data(asset, days=14, interval="hourly")
-    df_4h = get_data(asset, days=30, interval="hourly")
-    df_1d = get_data(asset, days=90, interval="daily")
+    df_1h = get_data(asset, days=14,  interval="hourly")
+    df_4h = get_data(asset, days=30,  interval="hourly")
+    df_1d = get_data(asset, days=90,  interval="daily")
+    df_1w = get_data(asset, days=365, interval="daily")
     if df_4h is not None and len(df_4h) > 0:
         try:
             df_4h = df_4h.resample('4h').agg({
@@ -693,6 +712,42 @@ def full_analysis(asset="BTC", uid=0):
     key_fibs = []
     for pct, val in sorted(fib_levels.items(), key=lambda x: float(x[0])):
         key_fibs.append("Fib " + pct + "%  $" + "{:,.2f}".format(val))
+    # ==================== Market Regime ====================
+    regime, regime_strength = detect_market_regime(df_1h)
+    # في RANGING — اشتراط توافق 3 فريمات
+    if regime == "RANGING" and (buy_c < 3 and sel_c < 3):
+        return None
+    # في VOLATILE — اشتراط توافق 3 فريمات
+    if regime == "VOLATILE" and (buy_c < 3 and sel_c < 3):
+        return None
+
+    # ==================== Weekly Trend Filter ====================
+    weekly_trend = "NEUTRAL"
+    try:
+        if df_1w is not None and len(df_1w) >= 20:
+            df_1w_calc = calc_indicators(df_1w.tail(200).copy())
+            last_w = df_1w_calc.iloc[-1]
+            w_price = last_w["Close"]
+            w_ema20 = last_w.get("EMA21", w_price)
+            w_ema50 = last_w.get("EMA50", w_price)
+            if w_price > w_ema20 and w_ema20 > w_ema50:
+                weekly_trend = "BULL"
+            elif w_price < w_ema20 and w_ema20 < w_ema50:
+                weekly_trend = "BEAR"
+            # منع SELL إذا الويكلي صاعد بقوة (إلا لو توافق 3 فريمات)
+            if weekly_trend == "BULL" and final == "SELL" and sel_c < 3:
+                return None
+            # منع BUY إذا الويكلي هابط بقوة (إلا لو توافق 3 فريمات)
+            if weekly_trend == "BEAR" and final == "BUY" and buy_c < 3:
+                return None
+    except Exception as e:
+        logger.warning("Weekly filter error: " + str(e))
+
+    # ==================== فلتر الأحداث الاقتصادية ====================
+    upcoming_ev = get_upcoming_event_warning(hours_ahead=2)
+    if upcoming_ev and "عالي" in upcoming_ev.get("impact",""):
+        return None  # لا إشارات قبل ساعتين من حدث عالي التأثير
+
     # ==================== فلتر EMA200 ====================
     # في BUY: السعر لازم يكون فوق EMA200 أو توافق 3 فريمات
     # في SELL: السعر لازم يكون تحت EMA200 أو توافق 3 فريمات
@@ -731,7 +786,8 @@ def full_analysis(asset="BTC", uid=0):
         return None
 
     return {
-        "final": final, "asset": asset,
+        "final": final, "asset": asset, "weekly_trend": weekly_trend,
+        "regime": regime, "regime_strength": regime_strength,
         "confluence_txt": conf_txt, "base_conf": base_conf,
         "price": price, "entry_low": entry_low, "entry_high": entry_high, "tp1": tp1, "tp2": tp2, "tp3": tp3,
         "sl": sl, "rr": rr, "atr": atr,
@@ -774,6 +830,7 @@ def build_trade_msg(res, uid=0, auto=False):
         "  ⚡ " + header,
         "╚══════════════════════════╝",
         "",
+        "💵 السعر الحالي   $" + "{:,.2f}".format(res['price']),
         "📍 " + t(uid,'entry') + "   $" + "{:,.2f}".format(res.get('entry_low', res['price'])) + " — $" + "{:,.2f}".format(res.get('entry_high', res['price'])) + "  ↔️",
         "📐 " + t(uid,'fib_entry') + "   Fib " + res['fib_key'] + "% ($" + "{:,.2f}".format(res['nearest_fib']) + ")",
         "",
@@ -786,6 +843,13 @@ def build_trade_msg(res, uid=0, auto=False):
         "",
         "━━━━  🔗 " + t(uid,'confluence') + "  ━━━━",
     ]
+    wt = res.get("weekly_trend", "NEUTRAL")
+    wt_emoji = "📈" if wt=="BULL" else "📉" if wt=="BEAR" else "➡️"
+    wt_txt   = "صاعد" if wt=="BULL" else "هابط" if wt=="BEAR" else "محايد"
+    lines.append("  " + wt_emoji + " ويكلي: " + wt_txt)
+    rg = res.get("regime", "UNKNOWN")
+    rg_map = {"TRENDING_UP":"📈 ترند صاعد","TRENDING_DOWN":"📉 ترند هابط","RANGING":"↔️ سوق جانبي","VOLATILE":"⚡ تقلب عالي","UNKNOWN":"❓"}
+    lines.append("  " + rg_map.get(rg, rg))
     for fl in res['frame_lines']:
         lines.append("  " + fl)
     lines.append("  " + res['confluence_txt'])
@@ -1378,6 +1442,105 @@ async def send_news(context):
     except Exception as e:
         logger.error("News error: " + str(e))
 
+
+# ==================== Market Regime ====================
+def detect_market_regime(df):
+    """
+    يحدد نوع السوق:
+    - TRENDING_UP: اتجاه صاعد قوي
+    - TRENDING_DOWN: اتجاه هابط قوي
+    - RANGING: سوق جانبي (تجنب إشارات الاتجاه)
+    - VOLATILE: تقلب عالي (تداول بحذر)
+    """
+    try:
+        if df is None or len(df) < 50:
+            return "UNKNOWN", 0
+
+        df2 = calc_indicators(df.tail(100).copy())
+        last = df2.iloc[-1]
+        price = last["Close"]
+
+        # ATR نسبي للتقلب
+        atr_pct = last["ATR"] / price * 100
+
+        # ADX-like: قياس قوة الاتجاه من EMA
+        ema9  = last.get("EMA9",  price)
+        ema21 = last.get("EMA21", price)
+        ema50 = last.get("EMA50", price)
+
+        # مسافة بين EMAs كنسبة مئوية
+        ema_spread = abs(ema9 - ema50) / price * 100
+
+        # Bollinger Band Width
+        bb_width = (last["BB_U"] - last["BB_L"]) / price * 100
+
+        # تحديد النظام
+        if atr_pct > 3.0:
+            regime = "VOLATILE"
+            strength = round(atr_pct * 10)
+        elif ema_spread > 1.5 and ema9 > ema21 > ema50:
+            regime = "TRENDING_UP"
+            strength = round(min(ema_spread * 30, 95))
+        elif ema_spread > 1.5 and ema9 < ema21 < ema50:
+            regime = "TRENDING_DOWN"
+            strength = round(min(ema_spread * 30, 95))
+        elif bb_width < 3.0:
+            regime = "RANGING"
+            strength = round((3.0 - bb_width) * 20)
+        else:
+            regime = "RANGING"
+            strength = 50
+
+        return regime, min(strength, 95)
+
+    except Exception as e:
+        logger.warning("Regime error: " + str(e))
+        return "UNKNOWN", 0
+
+
+# ==================== تنبيه الأحداث الاقتصادية ====================
+def get_upcoming_event_warning(hours_ahead=6):
+    """يتحقق إذا في حدث اقتصادي مهم خلال X ساعات"""
+    try:
+        now = datetime.now(timezone.utc)
+        for ev in ECONOMIC_CALENDAR:
+            ev_date = datetime.strptime(ev["date"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            # افترض الأحداث الساعة 14:00 GMT (وقت معظم البيانات الأمريكية)
+            ev_datetime = ev_date.replace(hour=14, minute=0)
+            diff_hours = (ev_datetime - now).total_seconds() / 3600
+            if 0 <= diff_hours <= hours_ahead:
+                return ev
+        return None
+    except:
+        return None
+
+async def check_economic_alerts(context):
+    """يبعث تحذير قبل ساعة من حدث اقتصادي مهم"""
+    try:
+        ev = get_upcoming_event_warning(hours_ahead=1.5)
+        if not ev:
+            return
+        lines = [
+            "╔══════════════════════════╗",
+            "  ⚠️ تنبيه حدث اقتصادي",
+            "╚══════════════════════════╝",
+            "",
+            "  " + ev["event"],
+            "  📅 " + ev["date"],
+            "  " + ev["impact"],
+            "  💡 يؤثر على: " + ev["affects"],
+            "",
+            "  🚫 تجنب فتح صفقات جديدة",
+            "  ⏳ انتظر ما بعد الحدث",
+            "",
+            "━━━━━━━━━━━━━━━━━━━━━━━━",
+            "🕐 " + gmt_now(),
+        ]
+        await context.bot.send_message(chat_id=CHANNEL_ID, text="\n".join(lines))
+        logger.info("Economic alert sent: " + ev["event"])
+    except Exception as e:
+        logger.error("Economic alert error: " + str(e))
+
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
@@ -1389,6 +1552,7 @@ def main():
     app.job_queue.run_repeating(send_smart_alerts, interval=45*60,                first=120)
     app.job_queue.run_repeating(send_news,         interval=4*60*60,              first=300)
     app.job_queue.run_repeating(send_calendar,     interval=24*60*60,             first=600)
+    app.job_queue.run_repeating(check_economic_alerts, interval=30*60,            first=120)
     app.job_queue.run_repeating(send_news,         interval=4*60*60,              first=300)
     logger.info("🐎 Abu Mahra Bot - Ready!")
     app.run_polling()
