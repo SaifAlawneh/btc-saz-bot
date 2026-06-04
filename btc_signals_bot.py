@@ -740,9 +740,11 @@ def build_trade_msg(res, uid=0, auto=False):
     conf      = res['base_conf']
     bar       = "█" * (conf // 10) + "░" * (10 - conf // 10)
 
+    trade_num = res.get("id", "")
+    trade_num_str = "  #" + str(trade_num) if trade_num else ""
     lines = [
         "╔══════════════════════════╗",
-        "  " + ai + " " + an + "  " + dir_emoji + "  " + dir_txt,
+        "  " + ai + " " + an + "  " + dir_emoji + "  " + dir_txt + trade_num_str,
         "  ⚡ " + header,
         "╚══════════════════════════╝",
         "",
@@ -944,9 +946,10 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             res = full_analysis(asset, uid)
             if not res or res['final'] == "NEUTRAL":
                 await query.message.reply_text(t(uid,"no_signal")); return
-            await query.message.reply_text(build_trade_msg(res, uid))
             global trade_counter
             trade_counter += 1
+            res["id"] = trade_counter
+            await query.message.reply_text(build_trade_msg(res, uid))
             new_trade = {
                 "id": trade_counter,
                 "asset": res['asset'],
@@ -1007,8 +1010,6 @@ async def auto_signals(context):
         for asset in ["BTC", "GOLD"]:
             res = full_analysis(asset, 0)
             if res and res['final'] != "NEUTRAL" and res['base_conf'] >= MIN_CONFIDENCE:
-                await context.bot.send_message(chat_id=CHANNEL_ID,
-                                               text=build_trade_msg(res, 0, auto=True))
                 global trade_counter
                 # spam filter
                 now_ts = datetime.now(timezone.utc).timestamp()
@@ -1018,6 +1019,9 @@ async def auto_signals(context):
                     continue
                 last_signal_time[asset] = now_ts
                 trade_counter += 1
+                res["id"] = trade_counter
+                await context.bot.send_message(chat_id=CHANNEL_ID,
+                                               text=build_trade_msg(res, 0, auto=True))
                 new_trade = {
                     "id": trade_counter,
                     "asset": res['asset'],
