@@ -936,7 +936,9 @@ def build_trade_msg(res, uid=0, auto=False):
     # Liquidity
     liq = res.get("sell_liq" if is_sell else "buy_liq", [])
     if liq:
-        lines.append("  💧 Liquidity: $" + "{:,.0f}".format(liq[0]))
+        liq_label = "💧 هدف سيولة (SSL)" if is_sell else "💧 هدف سيولة (BSL)"
+        liq_desc  = "السوق قد يستهدفه" if is_sell else "السوق قد يستهدفه"
+        lines.append("  " + liq_label + ": $" + "{:,.0f}".format(liq[0]))
     for fl in res['frame_lines']:
         lines.append("  " + fl)
     lines.append("  " + res['confluence_txt'])
