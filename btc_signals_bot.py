@@ -1789,6 +1789,40 @@ def get_gold_btc_correlation(asset="BTC"):
     except:
         return "NEUTRAL"
 
+
+async def send_calendar(context):
+    """يبعث التقويم الاقتصادي كل يوم"""
+    try:
+        events = get_upcoming_events(days_ahead=7)
+        if not events:
+            return
+        lines = [
+            "╔══════════════════════════╗",
+            "  📅 التقويم الاقتصادي - أبو مهرة",
+            "╚══════════════════════════╝",
+            "",
+        ]
+        for ev in events:
+            if ev["days_left"] == 0:
+                day_txt = "⚠️ اليوم!"
+            elif ev["days_left"] == 1:
+                day_txt = "⏰ غداً"
+            else:
+                day_txt = "📆 بعد " + str(ev["days_left"]) + " أيام"
+            lines.append(day_txt + " — " + ev["event"])
+            lines.append("  📌 " + ev["date"] + "  |  " + ev["impact"])
+            lines.append("  💡 يؤثر على: " + ev["affects"])
+            lines.append("")
+        lines += [
+            "━" * 24,
+            "🕐 " + gmt_now(),
+            "⚠️ للأغراض التعليمية فقط",
+        ]
+        await context.bot.send_message(chat_id=CHANNEL_ID, text="\n".join(lines))
+        logger.info("Calendar sent")
+    except Exception as e:
+        logger.error("Calendar error: " + str(e))
+
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
