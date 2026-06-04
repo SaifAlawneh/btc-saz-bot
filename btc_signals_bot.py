@@ -52,7 +52,7 @@ ALLOWED_USERS = {8490817794, 1548286220}
 
 
 _cache = {}
-CACHE_TTL = 1200  # 20 دقيقة
+CACHE_TTL = 600
 
 def get_cached(key):
     if key in _cache:
@@ -339,68 +339,72 @@ def gmt_now():
 
 # ==================== البيانات ====================
 def get_data(asset="BTC", days=30, interval="hourly"):
-    """
-    مصدر البيانات الرئيسي: Binance (مجاني + real-time)
-    Fallback: CoinGecko
-    """
     cache_key = str(asset).upper() + "_" + str(days) + "_" + interval
     cached = get_cached(cache_key)
     if cached is not None:
         return cached
 
-    # تحويل الفريم لـ Binance
+    symbol = "BTC/USD" if asset == "BTC" else "XAU/USD"
     if interval == "hourly":
-        bn_interval = "1h"
-        limit = min(days * 24, 1000)
+        td_interval = "1h"
+        outputsize = min(days * 24, 500)
     elif interval == "daily":
-        bn_interval = "1d"
-        limit = min(days, 1000)
+        td_interval = "1day"
+        outputsize = min(days, 500)
     else:
-        bn_interval = "1h"
-        limit = 500
+        td_interval = "1h"
+        outputsize = 200
 
-    # ==================== Binance (مجاني + real-time) ====================
-    binance_urls = [
-        "https://api.binance.com/api/v3/klines",
-        "https://api1.binance.com/api/v3/klines",
-        "https://api2.binance.com/api/v3/klines",
-        "https://api3.binance.com/api/v3/klines",
-    ]
-    for bn_url in binance_urls:
+    if TWELVEDATA_KEY:
         try:
             r = requests.get(
-                bn_url,
-                params={"symbol": "BTCUSDT", "interval": bn_interval, "limit": limit},
-                headers={"User-Agent": "Mozilla/5.0"},
-                timeout=15
-            )
+                "https://api.twelvedata.com/time_series",
+                params={"symbol": symbol, "interval": td_interval,
+                        "outputsize": outputsize, "apikey": TWELVEDATA_KEY, "format": "JSON"},
+                timeout=15)
             data = r.json()
-            if isinstance(data, list) and len(data) > 0:
+            if "values" in data and len(data["values"]) > 0:
                 rows = []
-                for k in data:
-                    rows.append({
-                        "timestamp": pd.to_datetime(k[0], unit="ms"),
-                        "Open":   float(k[1]),
-                        "High":   float(k[2]),
-                        "Low":    float(k[3]),
-                        "Close":  float(k[4]),
-                        "Volume": float(k[5]),
-                    })
+                for v in reversed(data["values"]):
+                    rows.append({"timestamp": pd.to_datetime(v["datetime"]),
+                                 "Open": float(v["open"]), "High": float(v["high"]),
+                                 "Low": float(v["low"]), "Close": float(v["close"]),
+                                 "Volume": float(v.get("volume", 0))})
                 df = pd.DataFrame(rows).set_index("timestamp").dropna()
                 set_cache(cache_key, df)
-                logger.info("Binance OK: " + bn_url + " " + str(len(df)) + " candles")
                 return df
         except Exception as e:
-            logger.warning("Binance failed " + bn_url + ": " + str(e))
-            continue
+            logger.warning("Twelve Data failed: " + str(e))
 
-    # ==================== Fallback: CoinGecko ====================
+    # Fallback: للذهب نجرب Twelve Data بـ outputsize أصغر
+    if asset != "BTC" and TWELVEDATA_KEY:
+        try:
+            r = requests.get(
+                "https://api.twelvedata.com/time_series",
+                params={"symbol": "XAU/USD", "interval": td_interval,
+                        "outputsize": min(outputsize, 200),
+                        "apikey": TWELVEDATA_KEY, "format": "JSON"},
+                timeout=20)
+            data = r.json()
+            if "values" in data and len(data["values"]) > 0:
+                rows = []
+                for v in reversed(data["values"]):
+                    rows.append({"timestamp": pd.to_datetime(v["datetime"]),
+                                 "Open": float(v["open"]), "High": float(v["high"]),
+                                 "Low": float(v["low"]), "Close": float(v["close"]),
+                                 "Volume": float(v.get("volume", 0))})
+                df = pd.DataFrame(rows).set_index("timestamp").dropna()
+                set_cache(cache_key, df)
+                logger.info("Twelve Data fallback OK: XAU/USD")
+                return df
+        except Exception as e:
+            logger.warning("Twelve Data fallback failed: " + str(e))
+
+    # Fallback: CoinGecko للبيتكوين
     try:
         r = requests.get(
             "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart",
-            params={"vs_currency": "usd", "days": days, "interval": interval},
-            timeout=15
-        )
+            params={"vs_currency": "usd", "days": days, "interval": interval}, timeout=15)
         data = r.json()
         df = pd.DataFrame(data["prices"], columns=["timestamp", "Close"])
         df["Volume"] = [v[1] for v in data["total_volumes"]]
@@ -414,58 +418,50 @@ def get_data(asset="BTC", days=30, interval="hourly"):
         logger.info("CoinGecko fallback OK: BTC")
         return result
     except Exception as e:
-        logger.error("BTC all sources failed: " + str(e))
+        logger.error("BTC CoinGecko Error: " + str(e))
 
     return None
 
 def get_btc_price():
-    """السعر الحالي من Binance (real-time)"""
-    # Binance أولاً — جرب عدة endpoints
-    for bn_url in ["https://api.binance.com","https://api1.binance.com","https://api2.binance.com"]:
+    if TWELVEDATA_KEY:
         try:
-            r = requests.get(
-                bn_url + "/api/v3/ticker/price",
-                params={"symbol": "BTCUSDT"},
-                headers={"User-Agent": "Mozilla/5.0"},
-                timeout=10
-            )
+            r = requests.get("https://api.twelvedata.com/price",
+                             params={"symbol": "BTC/USD", "apikey": TWELVEDATA_KEY}, timeout=10)
             data = r.json()
             if "price" in data:
-                logger.info("Binance price OK: " + bn_url)
                 return float(data["price"])
         except:
-            continue
-    # Fallback: CoinGecko
+            pass
     try:
         r = requests.get(
-            "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd",
-            timeout=10
-        )
+            "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd", timeout=10)
         return float(r.json()["bitcoin"]["usd"])
     except:
         return None
 
 def get_prices():
-    """أسعار BTC من Binance"""
-    try:
-        # السعر الحالي
-        r1 = requests.get(
-            "https://api.binance.com/api/v3/ticker/24hr",
-            params={"symbol": "BTCUSDT"},
-            timeout=10
-        )
-        data = r1.json()
-        btc_price  = float(data["lastPrice"])
-        btc_change = round(float(data["priceChangePercent"]), 2)
-        return {"bitcoin": {"usd": btc_price, "usd_24h_change": btc_change}}
-    except:
-        pass
-    # Fallback: CoinGecko
+    result = {"bitcoin": {}}
+    if TWELVEDATA_KEY:
+        try:
+            r1 = requests.get("https://api.twelvedata.com/price",
+                              params={"symbol": "BTC/USD", "apikey": TWELVEDATA_KEY}, timeout=10)
+            btc_price = float(r1.json().get("price", 0))
+            r3 = requests.get("https://api.twelvedata.com/time_series",
+                              params={"symbol": "BTC/USD", "interval": "1day",
+                                      "outputsize": 2, "apikey": TWELVEDATA_KEY}, timeout=10)
+            btc_data = r3.json().get("values", [])
+            btc_change = 0
+            if len(btc_data) >= 2:
+                prev = float(btc_data[1]["close"])
+                btc_change = round((btc_price - prev) / prev * 100, 2) if prev > 0 else 0
+            result["bitcoin"] = {"usd": btc_price, "usd_24h_change": btc_change}
+            return result
+        except Exception as e:
+            logger.warning("Twelve Data prices failed: " + str(e))
     try:
         r = requests.get(
             "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true",
-            timeout=10
-        )
+            timeout=10)
         return r.json()
     except:
         return None
@@ -653,185 +649,19 @@ def analyze_frame(df, uid=0):
         "ichi_bull": ichi_bull, "ichi_bear": ichi_bear,
     }
 
-
-def detect_market_regime(df):
-    """
-    يحدد نوع السوق:
-    - TRENDING_UP: اتجاه صاعد قوي
-    - TRENDING_DOWN: اتجاه هابط قوي
-    - RANGING: سوق جانبي (تجنب إشارات الاتجاه)
-    - VOLATILE: تقلب عالي (تداول بحذر)
-    """
-    try:
-        if df is None or len(df) < 50:
-            return "UNKNOWN", 0
-
-        df2 = calc_indicators(df.tail(100).copy())
-        last = df2.iloc[-1]
-        price = last["Close"]
-
-        # ATR نسبي للتقلب
-        atr_pct = last["ATR"] / price * 100
-
-        # ADX-like: قياس قوة الاتجاه من EMA
-        ema9  = last.get("EMA9",  price)
-        ema21 = last.get("EMA21", price)
-        ema50 = last.get("EMA50", price)
-
-        # مسافة بين EMAs كنسبة مئوية
-        ema_spread = abs(ema9 - ema50) / price * 100
-
-        # Bollinger Band Width
-        bb_width = (last["BB_U"] - last["BB_L"]) / price * 100
-
-        # تحديد النظام
-        if atr_pct > 3.0:
-            regime = "VOLATILE"
-            strength = round(atr_pct * 10)
-        elif ema_spread > 1.5 and ema9 > ema21 > ema50:
-            regime = "TRENDING_UP"
-            strength = round(min(ema_spread * 30, 95))
-        elif ema_spread > 1.5 and ema9 < ema21 < ema50:
-            regime = "TRENDING_DOWN"
-            strength = round(min(ema_spread * 30, 95))
-        elif bb_width < 3.0:
-            regime = "RANGING"
-            strength = round((3.0 - bb_width) * 20)
-        else:
-            regime = "RANGING"
-            strength = 50
-
-        return regime, min(strength, 95)
-
-    except Exception as e:
-        logger.warning("Regime error: " + str(e))
-        return "UNKNOWN", 0
+# ==================== Market Regime ====================
 
 
-
-def detect_rsi_divergence(df, lookback=20):
-    """
-    Bullish Divergence: السعر Lower Low بس RSI Higher Low = انعكاس صعودي محتمل
-    Bearish Divergence: السعر Higher High بس RSI Lower High = انعكاس هبوطي محتمل
-    """
-    try:
-        if len(df) < lookback + 5:
-            return "NONE"
-        recent = df.tail(lookback)
-        prices = recent["Close"].values
-        rsi    = recent["RSI"].values
-
-        # إيجاد القمم والقيعان
-        price_hh = prices[-1] > max(prices[:-5])   # Higher High في السعر
-        price_ll = prices[-1] < min(prices[:-5])    # Lower Low في السعر
-        rsi_hh   = rsi[-1]   > max(rsi[:-5])        # Higher High في RSI
-        rsi_lh   = rsi[-1]   < max(rsi[:-5])        # Lower High في RSI
-        rsi_hl   = rsi[-1]   > min(rsi[:-5])        # Higher Low في RSI
-        rsi_ll2  = rsi[-1]   < min(rsi[:-5])        # Lower Low في RSI
-
-        # Bearish Divergence: سعر أعلى بس RSI أقل
-        if price_hh and rsi_lh and rsi[-1] > 55:
-            return "BEARISH"
-        # Bullish Divergence: سعر أقل بس RSI أعلى
-        if price_ll and rsi_hl and rsi[-1] < 45:
-            return "BULLISH"
-        return "NONE"
-    except:
-        return "NONE"
+# ==================== RSI Divergence ====================
 
 
-
-def find_order_blocks(df, lookback=50):
-    """
-    Order Block = آخر شمعة هبوطية قبل حركة صعودية قوية (Bullish OB)
-    أو آخر شمعة صعودية قبل حركة هبوطية قوية (Bearish OB)
-    """
-    try:
-        if len(df) < lookback:
-            return [], []
-        recent = df.tail(lookback).copy()
-        bullish_obs = []
-        bearish_obs = []
-
-        for i in range(2, len(recent) - 2):
-            candle = recent.iloc[i]
-            next3  = recent.iloc[i+1:i+3]
-
-            # Bullish OB: شمعة حمراء (هبوطية) يليها 2+ شمعات خضراء قوية
-            if candle["Close"] < candle["Open"]:
-                if all(next3["Close"] > next3["Open"]) and                    next3["Close"].max() > candle["Open"] * 1.005:
-                    bullish_obs.append({
-                        "high": float(candle["Open"]),
-                        "low":  float(candle["Close"]),
-                        "time": str(candle.name)
-                    })
-
-            # Bearish OB: شمعة خضراء (صعودية) يليها 2+ شمعات حمراء قوية
-            if candle["Close"] > candle["Open"]:
-                if all(next3["Close"] < next3["Open"]) and                    next3["Close"].min() < candle["Open"] * 0.995:
-                    bearish_obs.append({
-                        "high": float(candle["Close"]),
-                        "low":  float(candle["Open"]),
-                        "time": str(candle.name)
-                    })
-
-        return bullish_obs[-3:], bearish_obs[-3:]
-    except:
-        return [], []
+# ==================== Order Blocks ====================
 
 
-
-def find_liquidity_zones(df, lookback=50):
-    """
-    Liquidity = أماكن تجمع الـ Stop Loss
-    فوق القمم السابقة (Buy Side Liquidity) = هدف للسوق قبل الهبوط
-    تحت القيعان السابقة (Sell Side Liquidity) = هدف للسوق قبل الصعود
-    """
-    try:
-        if len(df) < lookback:
-            return [], []
-        recent   = df.tail(lookback)
-        highs    = recent["High"].values
-        lows     = recent["Low"].values
-        buy_liq  = []  # فوق القمم
-        sell_liq = []  # تحت القيعان
-
-        for i in range(2, len(highs) - 2):
-            # قمة محلية = Buy Side Liquidity
-            if highs[i] > highs[i-1] and highs[i] > highs[i+1] and                highs[i] > highs[i-2] and highs[i] > highs[i+2]:
-                buy_liq.append(round(float(highs[i]), 2))
-            # قاع محلي = Sell Side Liquidity
-            if lows[i] < lows[i-1] and lows[i] < lows[i+1] and                lows[i] < lows[i-2] and lows[i] < lows[i+2]:
-                sell_liq.append(round(float(lows[i]), 2))
-
-        return sorted(buy_liq)[-3:], sorted(sell_liq)[:3]
-    except:
-        return [], []
+# ==================== Liquidity Zones ====================
 
 
-
-def get_current_session():
-    """
-    Asian:  00:00 - 08:00 GMT  (ضعيف للـ scalping)
-    London: 08:00 - 16:00 GMT  (قوي جداً)
-    NY:     13:00 - 21:00 GMT  (قوي جداً)
-    Overlap: 13:00 - 16:00 GMT (الأقوى)
-    """
-    try:
-        hour = datetime.now(timezone.utc).hour
-        if 13 <= hour < 16:
-            return "OVERLAP", 100   # London + NY overlap = الأقوى
-        elif 8 <= hour < 16:
-            return "LONDON", 85
-        elif 13 <= hour < 21:
-            return "NY", 85
-        else:
-            return "ASIAN", 40      # ضعيف
-    except:
-        return "UNKNOWN", 60
-
-
-
+# ==================== Session Filter ====================
 
 
 def get_monthly_bias(df_daily):
@@ -858,20 +688,8 @@ def get_monthly_bias(df_daily):
 
 
 
-def get_upcoming_event_warning(hours_ahead=6):
-    """يتحقق إذا في حدث اقتصادي مهم خلال X ساعات"""
-    try:
-        now = datetime.now(timezone.utc)
-        for ev in ECONOMIC_CALENDAR:
-            ev_date = datetime.strptime(ev["date"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
-            # افترض الأحداث الساعة 14:00 GMT (وقت معظم البيانات الأمريكية)
-            ev_datetime = ev_date.replace(hour=14, minute=0)
-            diff_hours = (ev_datetime - now).total_seconds() / 3600
-            if 0 <= diff_hours <= hours_ahead:
-                return ev
-        return None
-    except:
-        return None
+
+# ==================== تنبيه الأحداث الاقتصادية ====================
 
 
 def full_analysis(asset="BTC", uid=0):
@@ -1637,96 +1455,26 @@ async def send_smart_alerts(context):
 
 
 # ==================== أخبار ====================
-
-
-
-# ==================== التقويم الاقتصادي ====================
-ECONOMIC_CALENDAR = [
-    # Fed Meetings 2026
-    {"date": "2026-01-29", "event": "قرار الفائدة الأمريكية 🏦", "impact": "🔴 عالي", "affects": "BTC + ذهب"},
-    {"date": "2026-03-19", "event": "قرار الفائدة الأمريكية 🏦", "impact": "🔴 عالي", "affects": "BTC + ذهب"},
-    {"date": "2026-05-07", "event": "قرار الفائدة الأمريكية 🏦", "impact": "🔴 عالي", "affects": "BTC + ذهب"},
-    {"date": "2026-06-18", "event": "قرار الفائدة الأمريكية 🏦", "impact": "🔴 عالي", "affects": "BTC + ذهب"},
-    {"date": "2026-07-30", "event": "قرار الفائدة الأمريكية 🏦", "impact": "🔴 عالي", "affects": "BTC + ذهب"},
-    {"date": "2026-09-17", "event": "قرار الفائدة الأمريكية 🏦", "impact": "🔴 عالي", "affects": "BTC + ذهب"},
-    {"date": "2026-11-05", "event": "قرار الفائدة الأمريكية 🏦", "impact": "🔴 عالي", "affects": "BTC + ذهب"},
-    {"date": "2026-12-17", "event": "قرار الفائدة الأمريكية 🏦", "impact": "🔴 عالي", "affects": "BTC + ذهب"},
-    # CPI 2026 (كل شهر تقريباً يوم 10-15)
-    {"date": "2026-01-15", "event": "بيانات التضخم CPI 📊", "impact": "🔴 عالي", "affects": "BTC + ذهب"},
-    {"date": "2026-02-12", "event": "بيانات التضخم CPI 📊", "impact": "🔴 عالي", "affects": "BTC + ذهب"},
-    {"date": "2026-03-12", "event": "بيانات التضخم CPI 📊", "impact": "🔴 عالي", "affects": "BTC + ذهب"},
-    {"date": "2026-04-10", "event": "بيانات التضخم CPI 📊", "impact": "🔴 عالي", "affects": "BTC + ذهب"},
-    {"date": "2026-05-13", "event": "بيانات التضخم CPI 📊", "impact": "🔴 عالي", "affects": "BTC + ذهب"},
-    {"date": "2026-06-11", "event": "بيانات التضخم CPI 📊", "impact": "🔴 عالي", "affects": "BTC + ذهب"},
-    {"date": "2026-07-14", "event": "بيانات التضخم CPI 📊", "impact": "🔴 عالي", "affects": "BTC + ذهب"},
-    {"date": "2026-08-13", "event": "بيانات التضخم CPI 📊", "impact": "🔴 عالي", "affects": "BTC + ذهب"},
-    {"date": "2026-09-11", "event": "بيانات التضخم CPI 📊", "impact": "🔴 عالي", "affects": "BTC + ذهب"},
-    {"date": "2026-10-14", "event": "بيانات التضخم CPI 📊", "impact": "🔴 عالي", "affects": "BTC + ذهب"},
-    {"date": "2026-11-12", "event": "بيانات التضخم CPI 📊", "impact": "🔴 عالي", "affects": "BTC + ذهب"},
-    {"date": "2026-12-10", "event": "بيانات التضخم CPI 📊", "impact": "🔴 عالي", "affects": "BTC + ذهب"},
-    # NFP كل أول جمعة من الشهر
-    {"date": "2026-01-02", "event": "تقرير الوظائف NFP 💼", "impact": "🟡 متوسط", "affects": "BTC + ذهب"},
-    {"date": "2026-02-06", "event": "تقرير الوظائف NFP 💼", "impact": "🟡 متوسط", "affects": "BTC + ذهب"},
-    {"date": "2026-03-06", "event": "تقرير الوظائف NFP 💼", "impact": "🟡 متوسط", "affects": "BTC + ذهب"},
-    {"date": "2026-04-03", "event": "تقرير الوظائف NFP 💼", "impact": "🟡 متوسط", "affects": "BTC + ذهب"},
-    {"date": "2026-05-01", "event": "تقرير الوظائف NFP 💼", "impact": "🟡 متوسط", "affects": "BTC + ذهب"},
-    {"date": "2026-06-05", "event": "تقرير الوظائف NFP 💼", "impact": "🟡 متوسط", "affects": "BTC + ذهب"},
-    {"date": "2026-07-02", "event": "تقرير الوظائف NFP 💼", "impact": "🟡 متوسط", "affects": "BTC + ذهب"},
-    {"date": "2026-08-07", "event": "تقرير الوظائف NFP 💼", "impact": "🟡 متوسط", "affects": "BTC + ذهب"},
-    {"date": "2026-09-04", "event": "تقرير الوظائف NFP 💼", "impact": "🟡 متوسط", "affects": "BTC + ذهب"},
-    {"date": "2026-10-02", "event": "تقرير الوظائف NFP 💼", "impact": "🟡 متوسط", "affects": "BTC + ذهب"},
-    {"date": "2026-11-06", "event": "تقرير الوظائف NFP 💼", "impact": "🟡 متوسط", "affects": "BTC + ذهب"},
-    {"date": "2026-12-04", "event": "تقرير الوظائف NFP 💼", "impact": "🟡 متوسط", "affects": "BTC + ذهب"},
-    # GDP
-    {"date": "2026-01-29", "event": "بيانات الناتج المحلي GDP 📈", "impact": "🟡 متوسط", "affects": "BTC + ذهب"},
-    {"date": "2026-04-29", "event": "بيانات الناتج المحلي GDP 📈", "impact": "🟡 متوسط", "affects": "BTC + ذهب"},
-    {"date": "2026-07-29", "event": "بيانات الناتج المحلي GDP 📈", "impact": "🟡 متوسط", "affects": "BTC + ذهب"},
-    {"date": "2026-10-29", "event": "بيانات الناتج المحلي GDP 📈", "impact": "🟡 متوسط", "affects": "BTC + ذهب"},
-]
-
-def get_upcoming_events(days_ahead=7):
-    """يجيب الأحداث خلال X أيام القادمة"""
-    today = datetime.now(timezone.utc).date()
-    upcoming = []
-    for ev in ECONOMIC_CALENDAR:
-        ev_date = datetime.strptime(ev["date"], "%Y-%m-%d").date()
-        diff = (ev_date - today).days
-        if 0 <= diff <= days_ahead:
-            upcoming.append({**ev, "days_left": diff})
-    return sorted(upcoming, key=lambda x: x["days_left"])
-
-async def send_calendar(context):
-    """يبعث التقويم الاقتصادي كل يوم الساعة 7 صباحاً GMT"""
+def get_news():
     try:
-        events = get_upcoming_events(days_ahead=7)
-        if not events:
-            return
-        lines = [
-            "\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557",
-            "  \U0001f4c5 \u0627\u0644\u062a\u0642\u0648\u064a\u0645 \u0627\u0644\u0627\u0642\u062a\u0635\u0627\u062f\u064a - \u0623\u0628\u0648 \u0645\u0647\u0631\u0629",
-            "\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d",
-            "",
-        ]
-        for ev in events:
-            if ev["days_left"] == 0:
-                day_txt = "\u26a0\ufe0f \u0627\u0644\u064a\u0648\u0645!"
-            elif ev["days_left"] == 1:
-                day_txt = "\u23f0 \u063a\u062f\u0627\u064b"
-            else:
-                day_txt = "\U0001f4c6 \u0628\u0639\u062f " + str(ev["days_left"]) + " \u0623\u064a\u0627\u0645"
-            lines.append(day_txt + " — " + ev["event"])
-            lines.append("  \U0001f4cc " + ev["date"] + "  |  " + ev["impact"])
-            lines.append("  \U0001f4a1 \u064a\u0624\u062b\u0631 \u0639\u0644\u0649: " + ev["affects"])
-            lines.append("")
-        lines += [
-            "\u2501" * 24,
-            "\U0001f550 " + gmt_now(),
-            "\u26a0\ufe0f \u0644\u0644\u0623\u063a\u0631\u0627\u0636 \u0627\u0644\u062a\u0639\u0644\u064a\u0645\u064a\u0629 \u0641\u0642\u0637",
-        ]
-        await context.bot.send_message(chat_id=CHANNEL_ID, text="\n".join(lines))
-        logger.info("Calendar sent")
+        r = requests.get(
+            "https://newsapi.org/v2/everything",
+            params={
+                "q": "bitcoin OR gold OR Federal Reserve OR inflation OR CPI",
+                "language": "en",
+                "sortBy": "publishedAt",
+                "pageSize": 5,
+                "apiKey": NEWS_API_KEY,
+            },
+            timeout=10
+        )
+        data = r.json()
+        if data.get("status") != "ok":
+            return None
+        return data.get("articles", [])
     except Exception as e:
-        logger.error("Calendar error: " + str(e))
+        logger.error("News error: " + str(e))
+        return None
 
 async def send_news(context):
     """يبعث الأخبار كل 4 ساعات"""
@@ -1772,8 +1520,22 @@ async def send_news(context):
         logger.error("News error: " + str(e))
 
 
-# ==================== Market Regime ====================
-# ==================== تنبيه الأحداث الاقتصادية ====================
+
+def get_upcoming_event_warning(hours_ahead=6):
+    """يتحقق إذا في حدث اقتصادي مهم خلال X ساعات"""
+    try:
+        now = datetime.now(timezone.utc)
+        for ev in ECONOMIC_CALENDAR:
+            ev_date = datetime.strptime(ev["date"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            # افترض الأحداث الساعة 14:00 GMT (وقت معظم البيانات الأمريكية)
+            ev_datetime = ev_date.replace(hour=14, minute=0)
+            diff_hours = (ev_datetime - now).total_seconds() / 3600
+            if 0 <= diff_hours <= hours_ahead:
+                return ev
+        return None
+    except:
+        return None
+
 async def check_economic_alerts(context):
     """يبعث تحذير قبل ساعة من حدث اقتصادي مهم"""
     try:
@@ -1894,10 +1656,139 @@ async def send_daily_summary(context):
         logger.error("Daily summary error: " + str(e))
 
 
-# ==================== RSI Divergence ====================
-# ==================== Order Blocks ====================
-# ==================== Liquidity Zones ====================
-# ==================== Session Filter ====================
+def detect_rsi_divergence(df, lookback=20):
+    """
+    Bullish Divergence: السعر Lower Low بس RSI Higher Low = انعكاس صعودي محتمل
+    Bearish Divergence: السعر Higher High بس RSI Lower High = انعكاس هبوطي محتمل
+    """
+    try:
+        if len(df) < lookback + 5:
+            return "NONE"
+        recent = df.tail(lookback)
+        prices = recent["Close"].values
+        rsi    = recent["RSI"].values
+
+        # إيجاد القمم والقيعان
+        price_hh = prices[-1] > max(prices[:-5])   # Higher High في السعر
+        price_ll = prices[-1] < min(prices[:-5])    # Lower Low في السعر
+        rsi_hh   = rsi[-1]   > max(rsi[:-5])        # Higher High في RSI
+        rsi_lh   = rsi[-1]   < max(rsi[:-5])        # Lower High في RSI
+        rsi_hl   = rsi[-1]   > min(rsi[:-5])        # Higher Low في RSI
+        rsi_ll2  = rsi[-1]   < min(rsi[:-5])        # Lower Low في RSI
+
+        # Bearish Divergence: سعر أعلى بس RSI أقل
+        if price_hh and rsi_lh and rsi[-1] > 55:
+            return "BEARISH"
+        # Bullish Divergence: سعر أقل بس RSI أعلى
+        if price_ll and rsi_hl and rsi[-1] < 45:
+            return "BULLISH"
+        return "NONE"
+    except:
+        return "NONE"
+
+
+def find_order_blocks(df, lookback=50):
+    """
+    Order Block = آخر شمعة هبوطية قبل حركة صعودية قوية (Bullish OB)
+    أو آخر شمعة صعودية قبل حركة هبوطية قوية (Bearish OB)
+    """
+    try:
+        if len(df) < lookback:
+            return [], []
+        recent = df.tail(lookback).copy()
+        bullish_obs = []
+        bearish_obs = []
+
+        for i in range(2, len(recent) - 2):
+            candle = recent.iloc[i]
+            next3  = recent.iloc[i+1:i+3]
+
+            # Bullish OB: شمعة حمراء (هبوطية) يليها 2+ شمعات خضراء قوية
+            if candle["Close"] < candle["Open"]:
+                if all(next3["Close"] > next3["Open"]) and                    next3["Close"].max() > candle["Open"] * 1.005:
+                    bullish_obs.append({
+                        "high": float(candle["Open"]),
+                        "low":  float(candle["Close"]),
+                        "time": str(candle.name)
+                    })
+
+            # Bearish OB: شمعة خضراء (صعودية) يليها 2+ شمعات حمراء قوية
+            if candle["Close"] > candle["Open"]:
+                if all(next3["Close"] < next3["Open"]) and                    next3["Close"].min() < candle["Open"] * 0.995:
+                    bearish_obs.append({
+                        "high": float(candle["Close"]),
+                        "low":  float(candle["Open"]),
+                        "time": str(candle.name)
+                    })
+
+        return bullish_obs[-3:], bearish_obs[-3:]
+    except:
+        return [], []
+
+
+def find_liquidity_zones(df, lookback=50):
+    """
+    Liquidity = أماكن تجمع الـ Stop Loss
+    فوق القمم السابقة (Buy Side Liquidity) = هدف للسوق قبل الهبوط
+    تحت القيعان السابقة (Sell Side Liquidity) = هدف للسوق قبل الصعود
+    """
+    try:
+        if len(df) < lookback:
+            return [], []
+        recent   = df.tail(lookback)
+        highs    = recent["High"].values
+        lows     = recent["Low"].values
+        buy_liq  = []  # فوق القمم
+        sell_liq = []  # تحت القيعان
+
+        for i in range(2, len(highs) - 2):
+            # قمة محلية = Buy Side Liquidity
+            if highs[i] > highs[i-1] and highs[i] > highs[i+1] and                highs[i] > highs[i-2] and highs[i] > highs[i+2]:
+                buy_liq.append(round(float(highs[i]), 2))
+            # قاع محلي = Sell Side Liquidity
+            if lows[i] < lows[i-1] and lows[i] < lows[i+1] and                lows[i] < lows[i-2] and lows[i] < lows[i+2]:
+                sell_liq.append(round(float(lows[i]), 2))
+
+        return sorted(buy_liq)[-3:], sorted(sell_liq)[:3]
+    except:
+        return [], []
+
+
+def get_current_session():
+    """
+    Asian:  00:00 - 08:00 GMT  (ضعيف للـ scalping)
+    London: 08:00 - 16:00 GMT  (قوي جداً)
+    NY:     13:00 - 21:00 GMT  (قوي جداً)
+    Overlap: 13:00 - 16:00 GMT (الأقوى)
+    """
+    try:
+        hour = datetime.now(timezone.utc).hour
+        if 13 <= hour < 16:
+            return "OVERLAP", 100   # London + NY overlap = الأقوى
+        elif 8 <= hour < 16:
+            return "LONDON", 85
+        elif 13 <= hour < 21:
+            return "NY", 85
+        else:
+            return "ASIAN", 40      # ضعيف
+    except:
+        return "UNKNOWN", 60
+
+
+# ==================== Correlation Filter ====================
+def get_gold_btc_correlation(asset="BTC"):
+    """
+    يتحقق من correlation بين BTC والذهب
+    - إذا الذهب صاعد قوي = BTC عادةً يتبع (risk-on)
+    - إذا الذهب هابط = احتمال ضغط على BTC
+    """
+    try:
+        if asset != "BTC":
+            return "NEUTRAL"
+        return "NEUTRAL"
+    except:
+        return "NEUTRAL"
+
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
