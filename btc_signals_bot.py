@@ -759,12 +759,59 @@ def full_analysis(asset="BTC", uid=0):
     bull_obs, bear_obs = find_order_blocks(df_1h) if df_1h is not None else ([], [])
     buy_liq, sell_liq  = find_liquidity_zones(df_1h) if df_1h is not None else ([], [])
 
+    # ==================== تحقق من OB ====================
+    # في SELL: منطقة الدخول لازم تكون قريبة من Bearish OB
+    # في BUY: منطقة الدخول لازم تكون قريبة من Bullish OB
+    ob_confirmed = False
+    try:
+        if final == "SELL" and bear_obs:
+            for ob in bear_obs:
+                # الدخول داخل أو قريب من الـ OB بـ 0.5%
+                ob_range = ob["high"] * 1.005
+                ob_floor = ob["low"]  * 0.995
+                if ob_floor <= price <= ob_range:
+                    ob_confirmed = True
+                    break
+        elif final == "BUY" and bull_obs:
+            for ob in bull_obs:
+                ob_range = ob["high"] * 1.005
+                ob_floor = ob["low"]  * 0.995
+                if ob_floor <= price <= ob_range:
+                    ob_confirmed = True
+                    break
+        # إذا ما في OB قريب — اشتراط توافق 3 فريمات
+        if not ob_confirmed and buy_c < 3 and sel_c < 3:
+            return None
+    except: pass
+
+    # ==================== SL عند منطقة سيولة ====================
+    try:
+        if final == "SELL" and buy_liq:
+            # في SELL: SL فوق أقرب Buy Side Liquidity
+            liq_above = [l for l in buy_liq if l > price]
+            if liq_above:
+                liq_sl = round(min(liq_above) * 1.002, 2)  # 0.2% فوق السيولة
+                # استخدم الأصغر بين ATR-based SL وLiquidity SL
+                sl = round(min(sl, liq_sl), 2) if liq_sl < sl * 1.01 else sl
+        elif final == "BUY" and sell_liq:
+            # في BUY: SL تحت أقرب Sell Side Liquidity
+            liq_below = [l for l in sell_liq if l < price]
+            if liq_below:
+                liq_sl = round(max(liq_below) * 0.998, 2)  # 0.2% تحت السيولة
+                sl = round(max(sl, liq_sl), 2) if liq_sl > sl * 0.99 else sl
+        # أعد حساب RR بعد تعديل SL
+        rr = round(abs(tp2 - price) / abs(sl - price), 2) if abs(sl - price) > 0 else 0
+        # تحقق RR لا زال فوق 1.5
+        if rr < 1.5:
+            return None
+    except: pass
+
     # Correlation Filter
     if asset == "BTC":
         if gold_corr == "BEAR" and final == "BUY" and buy_c < 3:
-            return None  # الذهب هابط والـ BTC بيع؟ خطر
+            return None
         if gold_corr == "BULL" and final == "SELL" and sel_c < 3:
-            return None  # الذهب صاعد والبوت يبيع؟ خطر
+            return None
 
     # ==================== Monthly Bias ====================
     monthly_bias = get_monthly_bias(df_1d)
@@ -914,9 +961,6 @@ def build_trade_msg(res, uid=0, auto=False):
     mb_txt = "📈 شهري: صاعد" if mb=="BULL" else "📉 شهري: هابط" if mb=="BEAR" else "➡️ شهري: محايد"
     lines.append("  " + mb_txt)
     # Session
-    sess = res.get("session", "")
-    sess_map = {"OVERLAP":"🔥 London+NY","LONDON":"🇬🇧 London","NY":"🗽 NY","ASIAN":"🌏 Asian"}
-    if sess: lines.append("  ⏰ " + sess_map.get(sess, sess))
     # Divergence
     div = res.get("divergence", "NONE")
     if div == "BEARISH": lines.append("  📉 RSI Divergence هابط ⚠️")
@@ -931,8 +975,9 @@ def build_trade_msg(res, uid=0, auto=False):
     obs = res.get("bear_obs" if is_sell else "bull_obs", [])
     if obs:
         ob = obs[-1]
-        ob_label = "🔴 OB مقاومة" if is_sell else "🟢 OB دعم"
-        lines.append("  " + ob_label + ": $" + "{:,.0f}".format(ob["low"]) + " — $" + "{:,.0f}".format(ob["high"]))
+        ob_label = "🔴 سبب الدخول: منطقة بيع قوية" if is_sell else "🟢 سبب الدخول: منطقة شراء قوية"
+        lines.append("  " + ob_label)
+        lines.append("     $" + "{:,.0f}".format(ob["low"]) + " — $" + "{:,.0f}".format(ob["high"]))
     # Liquidity
     liq = res.get("sell_liq" if is_sell else "buy_liq", [])
     if liq:
@@ -944,9 +989,9 @@ def build_trade_msg(res, uid=0, auto=False):
 
     lines += [
         "",
-        "━━━━  📡 " + t(uid,'support') + " / " + t(uid,'resistance') + "  ━━━━",
-        "  🟢 " + t(uid,'support') + "      $" + "{:,.2f}".format(res['support']),
-        "  🔴 " + t(uid,'resistance') + "   $" + "{:,.2f}".format(res['resistance']),
+        "━━━━  📡 مناطق مهمة  ━━━━",
+        "  🟢 دعم:       $" + "{:,.2f}".format(res['support']),
+        "  🔴 مقاومة:   $" + "{:,.2f}".format(res['resistance']),
         "",
         "━━━━━━━━━━━━━━━━━━━━━━━━",
         "🕐 " + t(uid,'updated_gmt') + ":  " + gmt_now(),
