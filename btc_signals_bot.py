@@ -692,6 +692,41 @@ def get_monthly_bias(df_daily):
 # ==================== تنبيه الأحداث الاقتصادية ====================
 
 
+# ==================== Market Regime ====================
+def detect_market_regime(df):
+    try:
+        if df is None or len(df) < 50:
+            return "UNKNOWN", 0
+        df2 = calc_indicators(df.tail(100).copy())
+        last = df2.iloc[-1]
+        price = last["Close"]
+        atr_pct = last["ATR"] / price * 100
+        ema9  = last.get("EMA9",  price)
+        ema21 = last.get("EMA21", price)
+        ema50 = last.get("EMA50", price)
+        ema_spread = abs(ema9 - ema50) / price * 100
+        bb_width = (last["BB_U"] - last["BB_L"]) / price * 100
+        if atr_pct > 3.0:
+            regime = "VOLATILE"
+            strength = round(atr_pct * 10)
+        elif ema_spread > 1.5 and ema9 > ema21 > ema50:
+            regime = "TRENDING_UP"
+            strength = round(min(ema_spread * 30, 95))
+        elif ema_spread > 1.5 and ema9 < ema21 < ema50:
+            regime = "TRENDING_DOWN"
+            strength = round(min(ema_spread * 30, 95))
+        elif bb_width < 3.0:
+            regime = "RANGING"
+            strength = round((3.0 - bb_width) * 20)
+        else:
+            regime = "RANGING"
+            strength = 50
+        return regime, min(strength, 95)
+    except Exception as e:
+        logger.warning("Regime error: " + str(e))
+        return "UNKNOWN", 0
+
+
 def full_analysis(asset="BTC", uid=0):
     df_1h = get_data(asset, days=14,  interval="hourly")
     df_4h = get_data(asset, days=30,  interval="hourly")
