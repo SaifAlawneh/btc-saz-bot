@@ -20,6 +20,55 @@ logger = logging.getLogger(__name__)
 user_languages   = {}
 active_btc_trade = {}
 
+# ==================== نظام الصلاحيات ====================
+ADMIN_ID     = 123456789   # ← غيّر هذا لـ ID تبعك (@userinfobot)
+ALLOWED_FILE = "allowed_users.txt"
+
+def load_allowed():
+    try:
+        with open(ALLOWED_FILE, "r") as f:
+            return set(int(line.strip()) for line in f if line.strip())
+    except:
+        return set()
+
+def save_allowed(users):
+    with open(ALLOWED_FILE, "w") as f:
+        for u in users:
+            f.write(str(u) + "\n")
+
+allowed_users = load_allowed()
+
+def is_allowed(uid): return uid == ADMIN_ID or uid in allowed_users
+def is_admin(uid):   return uid == ADMIN_ID
+
+
+
+# ==================== نظام الصلاحيات ====================
+ADMIN_ID     = 123456789   # ← غيّر هذا لـ ID تبعك (@userinfobot)
+ALLOWED_FILE = "allowed_users.txt"
+
+def load_allowed():
+    try:
+        with open(ALLOWED_FILE, "r") as f:
+            return set(int(line.strip()) for line in f if line.strip())
+    except:
+        return set()
+
+def save_allowed(users):
+    with open(ALLOWED_FILE, "w") as f:
+        for u in users:
+            f.write(str(u) + "\n")
+
+allowed_users = load_allowed()
+
+def is_allowed(uid):
+    return uid == ADMIN_ID or uid in allowed_users
+
+def is_admin(uid):
+    return uid == ADMIN_ID
+
+
+
 _cache = {}
 CACHE_TTL = 600
 
@@ -832,6 +881,14 @@ def lang_keyboard():
 # ==================== هاندلرز ====================
 async def start(update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
+    if not is_allowed(uid):
+        lang = user_languages.get(uid, "ar")
+        await update.message.reply_text(
+            "⛔ ليس لديك صلاحية استخدام هذا البوت\n\nابعث /myid للحصول على ID تبعك وأرسله للمسؤول"
+            if lang == "ar" else
+            "⛔ You don't have access to this bot\n\nSend /myid to get your ID"
+        )
+        return
     if uid not in user_languages:
         await update.message.reply_text(
             "🐎 Abu Mahra Bot\n\nاختر لغتك / Choose your language:",
@@ -842,6 +899,9 @@ async def start(update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
     uid  = update.effective_user.id
     text = update.message.text or ""
+    if not is_allowed(uid): return
+    if not is_allowed(uid):
+        return
     kb   = main_keyboard(uid) if uid in user_languages else lang_keyboard()
     lang = user_languages.get(uid, "ar")
     if any(g in text.lower() for g in GREETINGS):
@@ -855,6 +915,9 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
     uid   = query.from_user.id
     data  = query.data
     await query.answer()
+    if not is_allowed(uid):
+        await query.message.reply_text("⛔ ليس لديك صلاحية استخدام هذا البوت")
+        return
 
     if data == 'lang_ar':
         user_languages[uid] = "ar"
@@ -953,12 +1016,15 @@ async def monitor_btc(context):
         update_msg = None
         if direction == "BUY":
             if not trade['tp1_hit'] and current >= tp1:
-                trade['tp1_hit'] = True; trade['sl'] = entry
+                trade['tp1_hit'] = True
+                trade['sl'] = entry  # SL ينتقل للدخول (تحت السعر الحالي = منطقي)
                 update_msg = t(uid,"update_tp1_hit")
-            elif not trade['tp2_hit'] and current >= tp2:
-                trade['tp2_hit'] = True; trade['sl'] = tp1
+            elif trade['tp1_hit'] and not trade['tp2_hit'] and current >= tp2:
+                trade['tp2_hit'] = True
+                trade['sl'] = tp1  # SL ينتقل لـ TP1 (تحت TP2 = منطقي)
                 update_msg = t(uid,"update_tp2_hit")
-            elif current <= sl * 1.002:
+            elif current <= trade['sl']:
+                # السعر وصل أو نزل تحت SL — تحذير فعلي
                 update_msg = t(uid,"update_near_sl")
             elif trade['tp1_hit'] and current > tp1 + 0.5*atr:
                 new_sl = round(current - 0.8*atr, 2)
@@ -966,16 +1032,21 @@ async def monitor_btc(context):
                     trade['sl'] = new_sl; update_msg = t(uid,"update_sl_moved")
             if current >= tp3:
                 update_msg = t(uid,"update_tp3_hit"); active_btc_trade.clear()
-        else:
+        else:  # SELL
             if not trade['tp1_hit'] and current <= tp1:
-                trade['tp1_hit'] = True; trade['sl'] = entry
+                trade['tp1_hit'] = True
+                # SL ينتقل لسعر الدخول (فوق السعر الحالي في SELL = منطقي)
+                trade['sl'] = entry
                 update_msg = t(uid,"update_tp1_hit")
-            elif not trade['tp2_hit'] and current <= tp2:
-                trade['tp2_hit'] = True; trade['sl'] = tp1
+            elif trade['tp1_hit'] and not trade['tp2_hit'] and current <= tp2:
+                trade['tp2_hit'] = True
+                trade['sl'] = tp1  # SL ينتقل لـ TP1 (فوق TP2 = منطقي)
                 update_msg = t(uid,"update_tp2_hit")
-            elif current >= sl * 0.998:
+            elif current >= trade['sl']:
+                # السعر وصل أو تجاوز SL — تحذير فعلي
                 update_msg = t(uid,"update_near_sl")
             elif trade['tp1_hit'] and current < tp1 - 0.5*atr:
+                # trailing SL للأسفل (في SELL new_sl لازم يكون أقل من SL الحالي)
                 new_sl = round(current + 0.8*atr, 2)
                 if new_sl < trade['sl']:
                     trade['sl'] = new_sl; update_msg = t(uid,"update_sl_moved")
@@ -1039,9 +1110,103 @@ async def send_smart_alerts(context):
         logger.error("❌ Smart Alerts: " + str(e))
 
 
+
+# ==================== أوامر الـ Admin ====================
+async def cmd_add(update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        await update.message.reply_text("⛔ هذا الأمر للـ admin فقط"); return
+    if not context.args:
+        await update.message.reply_text("الاستخدام: /add <user_id>\nمثال: /add 123456789"); return
+    try:
+        new_uid = int(context.args[0])
+        allowed_users.add(new_uid)
+        save_allowed(allowed_users)
+        await update.message.reply_text("✅ تم إضافة: " + str(new_uid))
+    except:
+        await update.message.reply_text("❌ ID غير صحيح")
+
+async def cmd_remove(update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        await update.message.reply_text("⛔ هذا الأمر للـ admin فقط"); return
+    if not context.args:
+        await update.message.reply_text("الاستخدام: /remove <user_id>"); return
+    try:
+        rem_uid = int(context.args[0])
+        allowed_users.discard(rem_uid)
+        save_allowed(allowed_users)
+        await update.message.reply_text("✅ تم إزالة: " + str(rem_uid))
+    except:
+        await update.message.reply_text("❌ ID غير صحيح")
+
+async def cmd_list(update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        await update.message.reply_text("⛔ هذا الأمر للـ admin فقط"); return
+    if not allowed_users:
+        await update.message.reply_text("📋 لا يوجد مستخدمون مضافون\n(أنت فقط كـ admin)"); return
+    lines = ["📋 المستخدمون المسموح لهم:\n"]
+    for i, u in enumerate(sorted(allowed_users), 1):
+        lines.append(str(i) + ". " + str(u))
+    lines.append("\nالمجموع: " + str(len(allowed_users)) + " مستخدم")
+    await update.message.reply_text("\n".join(lines))
+
+async def cmd_myid(update, context: ContextTypes.DEFAULT_TYPE):
+    uid  = update.effective_user.id
+    name = update.effective_user.first_name or ""
+    await update.message.reply_text(
+        "👤 " + name + "\n🆔 User ID: " + str(uid) +
+        "\n\nابعث هذا الرقم للـ admin عشان يضيفك"
+    )
+
+
+# ==================== أوامر الـ Admin ====================
+async def cmd_add(update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        await update.message.reply_text("⛔ للـ admin فقط"); return
+    if not context.args:
+        await update.message.reply_text("الاستخدام: /add <user_id>"); return
+    try:
+        new_uid = int(context.args[0]); allowed_users.add(new_uid); save_allowed(allowed_users)
+        await update.message.reply_text("✅ تم إضافة: " + str(new_uid))
+    except: await update.message.reply_text("❌ ID غير صحيح")
+
+async def cmd_remove(update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        await update.message.reply_text("⛔ للـ admin فقط"); return
+    if not context.args:
+        await update.message.reply_text("الاستخدام: /remove <user_id>"); return
+    try:
+        rem_uid = int(context.args[0]); allowed_users.discard(rem_uid); save_allowed(allowed_users)
+        await update.message.reply_text("✅ تم إزالة: " + str(rem_uid))
+    except: await update.message.reply_text("❌ ID غير صحيح")
+
+async def cmd_list(update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        await update.message.reply_text("⛔ للـ admin فقط"); return
+    if not allowed_users:
+        await update.message.reply_text("📋 لا يوجد مستخدمون مضافون\n(أنت فقط كـ admin)"); return
+    lines = ["📋 المستخدمون المسموح لهم:\n"]
+    for i, u in enumerate(sorted(allowed_users), 1): lines.append(str(i) + ". " + str(u))
+    lines.append("\nالمجموع: " + str(len(allowed_users)) + " مستخدم")
+    await update.message.reply_text("\n".join(lines))
+
+async def cmd_myid(update, context: ContextTypes.DEFAULT_TYPE):
+    uid  = update.effective_user.id
+    name = update.effective_user.first_name or ""
+    await update.message.reply_text("👤 " + name + "\n🆔 User ID: " + str(uid) + "\n\nابعث هذا الرقم للـ admin عشان يضيفك")
+
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("start",  start))
+    app.add_handler(CommandHandler("add",    cmd_add))
+    app.add_handler(CommandHandler("remove", cmd_remove))
+    app.add_handler(CommandHandler("list",   cmd_list))
+    app.add_handler(CommandHandler("myid",   cmd_myid))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.job_queue.run_repeating(auto_signals,      interval=AUTO_INTERVAL_MIN*60, first=30)
