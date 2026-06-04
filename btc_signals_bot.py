@@ -90,7 +90,6 @@ TEXTS = {
 ━━━━━━━━━━━━━━━━━━━━
 متخصص في:
 ₿ البيتكوين  BTC/USD
-🥇 الذهب  XAU/USD
 
 ✨ مميزاتي:
 ▫️ صفقات مبنية على فريم الساعة
@@ -213,7 +212,6 @@ TEXTS = {
 ━━━━━━━━━━━━━━━━━━━━
 Specializing in:
 ₿ Bitcoin  BTC/USD
-🥇 Gold  XAU/USD
 
 ✨ Features:
 ▫️ 1H timeframe based signals
@@ -443,15 +441,12 @@ def get_btc_price():
         return None
 
 def get_prices():
-    result = {"bitcoin": {}, "tether-gold": {}}
+    result = {"bitcoin": {}}
     if TWELVEDATA_KEY:
         try:
             r1 = requests.get("https://api.twelvedata.com/price",
                               params={"symbol": "BTC/USD", "apikey": TWELVEDATA_KEY}, timeout=10)
             btc_price = float(r1.json().get("price", 0))
-            r2 = requests.get("https://api.twelvedata.com/price",
-                              params={"symbol": "XAU/USD", "apikey": TWELVEDATA_KEY}, timeout=10)
-            gold_price = float(r2.json().get("price", 0))
             r3 = requests.get("https://api.twelvedata.com/time_series",
                               params={"symbol": "BTC/USD", "interval": "1day",
                                       "outputsize": 2, "apikey": TWELVEDATA_KEY}, timeout=10)
@@ -460,22 +455,13 @@ def get_prices():
             if len(btc_data) >= 2:
                 prev = float(btc_data[1]["close"])
                 btc_change = round((btc_price - prev) / prev * 100, 2) if prev > 0 else 0
-            r4 = requests.get("https://api.twelvedata.com/time_series",
-                              params={"symbol": "XAU/USD", "interval": "1day",
-                                      "outputsize": 2, "apikey": TWELVEDATA_KEY}, timeout=10)
-            gold_data = r4.json().get("values", [])
-            gold_change = 0
-            if len(gold_data) >= 2:
-                prev_g = float(gold_data[1]["close"])
-                gold_change = round((gold_price - prev_g) / prev_g * 100, 2) if prev_g > 0 else 0
-            result["bitcoin"]     = {"usd": btc_price,  "usd_24h_change": btc_change}
-            result["tether-gold"] = {"usd": gold_price, "usd_24h_change": gold_change}
+            result["bitcoin"] = {"usd": btc_price, "usd_24h_change": btc_change}
             return result
         except Exception as e:
             logger.warning("Twelve Data prices failed: " + str(e))
     try:
         r = requests.get(
-            "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,tether-gold&vs_currencies=usd&include_24hr_change=true",
+            "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true",
             timeout=10)
         return r.json()
     except:
@@ -676,8 +662,7 @@ def full_analysis(asset="BTC", uid=0):
     if session == "ASIAN" and (buy_c if "buy_c" in dir() else 0) < 3 and (sel_c if "sel_c" in dir() else 0) < 3:
         pass  # سيتم التحقق بعد حساب buy_c/sel_c
 
-    # Correlation Filter
-    gold_corr = get_gold_btc_correlation(asset)
+    gold_corr = "NEUTRAL"
     if df_4h is not None and len(df_4h) > 0:
         try:
             df_4h = df_4h.resample('4h').agg({
@@ -833,12 +818,6 @@ def full_analysis(asset="BTC", uid=0):
             return None
     except: pass
 
-    # Correlation Filter
-    if asset == "BTC":
-        if gold_corr == "BEAR" and final == "BUY" and buy_c < 3:
-            return None
-        if gold_corr == "BULL" and final == "SELL" and sel_c < 3:
-            return None
 
     # ==================== Monthly Bias ====================
     monthly_bias = get_monthly_bias(df_1d)
@@ -992,11 +971,6 @@ def build_trade_msg(res, uid=0, auto=False):
     div = res.get("divergence", "NONE")
     if div == "BEARISH": lines.append("  📉 RSI Divergence هابط ⚠️")
     elif div == "BULLISH": lines.append("  📈 RSI Divergence صاعد ✅")
-    # Gold Correlation
-    gc = res.get("gold_corr", "NEUTRAL")
-    if gc != "NEUTRAL":
-        gc_txt = "🥇 ذهب: صاعد (إيجابي)" if gc=="BULL" else "🥇 ذهب: هابط (سلبي)"
-        lines.append("  " + gc_txt)
     # Order Blocks
     is_sell = res["final"] == "SELL"
     obs = res.get("bear_obs" if is_sell else "bull_obs", [])
@@ -1108,9 +1082,7 @@ def build_analysis_msg(res, uid=0):
 def main_keyboard(uid):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(t(uid,"btn_btc"),  callback_data='trade_BTC'),
-         InlineKeyboardButton(t(uid,"btn_gold"), callback_data='trade_GOLD')],
-        [InlineKeyboardButton(t(uid,"btn_analysis_btc"),  callback_data='analysis_BTC'),
-         InlineKeyboardButton(t(uid,"btn_analysis_gold"), callback_data='analysis_GOLD')],
+         InlineKeyboardButton(t(uid,"btn_analysis_btc"),  callback_data='analysis_BTC')],
         [InlineKeyboardButton(t(uid,"btn_prices"),  callback_data='prices'),
          InlineKeyboardButton(t(uid,"btn_trades"),  callback_data='open_trades')],
         [InlineKeyboardButton(t(uid,"btn_stats"),   callback_data='stats'),
@@ -1206,9 +1178,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
         try:
             d    = get_prices()
             btc  = d.get('bitcoin', {})
-            gold = d.get('tether-gold', {})
             bp = btc.get('usd',0);  bc = btc.get('usd_24h_change',0)
-            gp = gold.get('usd',0); gc = gold.get('usd_24h_change',0)
             lines = [
                 "╔══════════════════════════╗",
                 "  " + t(uid,'prices_title'),
@@ -1216,9 +1186,6 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 "",
                 "  ₿ BTC/USD:   $" + "{:,.0f}".format(bp),
                 "  " + ("📈" if bc > 0 else "📉") + " " + t(uid,'change_24h') + ":  " + "{:+.2f}".format(bc) + "%",
-                "",
-                "  🥇 XAU/USD:  $" + "{:,.2f}".format(gp),
-                "  " + ("📈" if gc > 0 else "📉") + " " + t(uid,'change_24h') + ":  " + "{:+.2f}".format(gc) + "%",
                 "",
                 "━━━━━━━━━━━━━━━━━━━━━━━━",
                 "🕐 " + t(uid,'updated_gmt') + ":  " + gmt_now(),
@@ -1276,7 +1243,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== إشارات تلقائية ====================
 async def auto_signals(context):
     try:
-        for asset in ["BTC", "GOLD"]:
+        for asset in ["BTC"]:
             res = full_analysis(asset, 0)
             if res and res['final'] != "NEUTRAL" and res['base_conf'] >= MIN_CONFIDENCE:
                 global trade_counter
@@ -1313,19 +1280,12 @@ async def monitor_btc(context):
         return
     try:
         current_btc  = get_btc_price()
-        current_gold = None
-        try:
-            prices = get_prices()
-            if prices:
-                current_gold = prices.get("tether-gold", {}).get("usd")
-        except:
-            pass
 
         to_remove = []
         for trade in active_trades:
             try:
                 asset     = trade.get("asset", "BTC")
-                current   = current_btc if asset == "BTC" else current_gold
+                current   = current_btc
                 if not current: continue
 
                 uid       = 0
@@ -1399,7 +1359,7 @@ async def monitor_btc(context):
 
 async def send_smart_alerts(context):
     try:
-        for asset in ["BTC", "GOLD"]:
+        for asset in ["BTC"]:
             df = get_data(asset, days=7, interval="hourly")
             if df is None or len(df) < 30: continue
             df = calc_indicators(df)
