@@ -108,6 +108,8 @@ TEXTS = {
         "btn_prices":       "💰 الأسعار",
         "btn_about":        "ℹ️ عن البوت",
         "btn_lang":         "🌐 اللغة",
+        "btn_trades":       "📋 الصفقات المفتوحة",
+        "no_open_trades":   "📭 لا توجد صفقات مفتوحة حالياً",
 
         "loading_trade":    "⏳ جاري تحليل السوق...",
         "loading_analysis": "⏳ جاري التحليل...",
@@ -228,6 +230,8 @@ Specializing in:
         "btn_prices":       "💰 Prices",
         "btn_about":        "ℹ️ About",
         "btn_lang":         "🌐 Language",
+        "btn_trades":       "📋 Open Trades",
+        "no_open_trades":   "📭 No open trades at the moment",
 
         "loading_trade":    "⏳ Analyzing market...",
         "loading_analysis": "⏳ Analyzing...",
@@ -451,7 +455,7 @@ def get_prices():
 
 # ==================== Fibonacci ====================
 def calculate_fibonacci(df):
-    window = min(50, len(df))
+    window = min(100, len(df))
     recent = df.tail(window)
     swing_high = float(recent['High'].max())
     swing_low  = float(recent['Low'].min())
@@ -539,6 +543,14 @@ def calc_indicators(df):
     df['SpanA']  = ((df['Tenkan'] + df['Kijun']) / 2).shift(26)
     df['SpanB']  = ((high_52 + low_52) / 2).shift(26)
     df['Chikou'] = c.shift(-26)
+    try:
+        if 'Volume' in df.columns and df['Volume'].sum() > 0:
+            df['Vol_MA']   = df['Volume'].rolling(20).mean()
+            df['Vol_High'] = df['Volume'] > df['Vol_MA'] * 1.5
+        else:
+            df['Vol_High'] = False
+    except:
+        df['Vol_High'] = False
     return df
 
 def analyze_frame(df, uid=0):
@@ -585,6 +597,11 @@ def analyze_frame(df, uid=0):
             else: ss += 5
     except:
         ichi_bull = False; ichi_bear = False
+    try:
+        if bool(last.get("Vol_High", False)) is True:
+            if sb > ss: sb += 10
+            else: ss += 10
+    except: pass
     direction = "BUY" if sb > ss else "SELL"
     total = sb + ss
     conf  = round(max(sb, ss) / total * 100) if total > 0 else 50
@@ -619,10 +636,10 @@ def full_analysis(asset="BTC", uid=0):
         return None
     buy_c = sum(1 for r in results.values() if r['direction'] == "BUY")
     sel_c = sum(1 for r in results.values() if r['direction'] == "SELL")
-    if buy_c == 3:   final="BUY";  conf_txt=t(uid,"full_confluence");    base_conf=92
-    elif buy_c == 2: final="BUY";  conf_txt=t(uid,"partial_confluence"); base_conf=74
-    elif sel_c == 3: final="SELL"; conf_txt=t(uid,"full_confluence");    base_conf=92
-    elif sel_c == 2: final="SELL"; conf_txt=t(uid,"partial_confluence"); base_conf=74
+    if buy_c == 3:   final="BUY";  conf_txt=t(uid,"full_confluence");    frames_conf=85
+    elif buy_c == 2: final="BUY";  conf_txt=t(uid,"partial_confluence"); frames_conf=65
+    elif sel_c == 3: final="SELL"; conf_txt=t(uid,"full_confluence");    frames_conf=85
+    elif sel_c == 2: final="SELL"; conf_txt=t(uid,"partial_confluence"); frames_conf=65
     else:
         main2 = results.get("1h") or list(results.values())[0]
         fib_l2, fib_e2, sh2, sl2 = calculate_fibonacci(df_1h) if (df_1h is not None and len(df_1h)>=20) else ({},{},0,0)
@@ -646,6 +663,7 @@ def full_analysis(asset="BTC", uid=0):
     main  = results.get("1h") or list(results.values())[0]
     price = main['price']
     atr   = main['atr']
+    base_conf = max(50, min(round(frames_conf * 0.6 + main['conf'] * 0.4), 89))
     if df_1h is not None and len(df_1h) >= 20:
         fib_levels, fib_ext, swing_h, swing_l = calculate_fibonacci(df_1h)
     else:
@@ -757,13 +775,6 @@ def build_trade_msg(res, uid=0, auto=False):
         "  TP3  ›  $" + "{:,.2f}".format(res['tp3']),
         "  🛑 " + t(uid,'sl') + "   ›  $" + "{:,.2f}".format(res['sl']),
         "  ⚖️  " + t(uid,'rr') + ":  1:" + str(res['rr']),
-        "",
-        "━━━━  📐 " + t(uid,'fib_section') + "  ━━━━",
-    ]
-    for f in res['key_fibs']:
-        lines.append("  " + f)
-
-    lines += [
         "",
         "━━━━  🔗 " + t(uid,'confluence') + "  ━━━━",
     ]
@@ -887,9 +898,10 @@ def main_keyboard(uid):
          InlineKeyboardButton(t(uid,"btn_gold"), callback_data='trade_GOLD')],
         [InlineKeyboardButton(t(uid,"btn_analysis_btc"),  callback_data='analysis_BTC'),
          InlineKeyboardButton(t(uid,"btn_analysis_gold"), callback_data='analysis_GOLD')],
-        [InlineKeyboardButton(t(uid,"btn_prices"), callback_data='prices'),
-         InlineKeyboardButton(t(uid,"btn_about"),  callback_data='about')],
-        [InlineKeyboardButton(t(uid,"btn_lang"), callback_data='change_lang')]
+        [InlineKeyboardButton(t(uid,"btn_prices"),  callback_data='prices'),
+         InlineKeyboardButton(t(uid,"btn_trades"),  callback_data='open_trades')],
+        [InlineKeyboardButton(t(uid,"btn_about"),   callback_data='about'),
+         InlineKeyboardButton(t(uid,"btn_lang"),    callback_data='change_lang')]
     ])
 
 def lang_keyboard():
@@ -1000,8 +1012,24 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("\n".join(lines))
         except Exception as e:
             await query.message.reply_text(t(uid,"error") + str(e))
+    elif data == 'open_trades':
+        if not active_trades:
+            await query.message.reply_text(t(uid,'no_open_trades'))
+        else:
+            rows = ['╔'+'═'*26+'╗', '  📋 الصفقات المفتوحة', '╚'+'═'*26+'╝', '']
+            for tr in active_trades:
+                de = '🔴 SELL' if tr['direction']=='SELL' else '🟢 BUY'
+                ai2 = '₿' if tr['asset']=='BTC' else '🥇'
+                rows += [ai2+' #'+str(tr.get('id','?'))+'  '+de,
+                         '  دخول: $'+'{:,.2f}'.format(tr['entry']),
+                         '  TP1:  $'+'{:,.2f}'.format(tr['tp1']),
+                         '  TP2:  $'+'{:,.2f}'.format(tr['tp2']),
+                         '  SL:   $'+'{:,.2f}'.format(tr['sl']),
+                         '  وقت: '+tr.get('open_time',''), '']
+            rows += ['━'*24, '🕐 '+gmt_now()]
+            await query.message.reply_text('\n'.join(rows))
     elif data == 'about':
-        await query.message.reply_text(t(uid,"about_text"))
+        await query.message.reply_text(t(uid,'about_text'))
 
 
 # ==================== إشارات تلقائية ====================
