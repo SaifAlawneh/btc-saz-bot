@@ -109,6 +109,7 @@ TEXTS = {
         "btn_about":        "ℹ️ عن البوت",
         "btn_lang":         "🌐 اللغة",
         "btn_trades":       "📋 الصفقات المفتوحة",
+        "btn_stats":        "📊 الإحصائيات",
         "no_open_trades":   "📭 لا توجد صفقات مفتوحة حالياً",
 
         "loading_trade":    "⏳ جاري تحليل السوق...",
@@ -231,6 +232,7 @@ Specializing in:
         "btn_about":        "ℹ️ About",
         "btn_lang":         "🌐 Language",
         "btn_trades":       "📋 Open Trades",
+        "btn_stats":        "📊 Statistics",
         "no_open_trades":   "📭 No open trades at the moment",
 
         "loading_trade":    "⏳ Analyzing market...",
@@ -721,6 +723,15 @@ def full_analysis(asset="BTC", uid=0):
     if regime == "VOLATILE" and (buy_c < 3 and sel_c < 3):
         return None
 
+    # ==================== Monthly Bias ====================
+    monthly_bias = get_monthly_bias(df_1d)
+    # منع SELL إذا الشهري صاعد إلا بتوافق 3 فريمات
+    if monthly_bias == "BULL" and final == "SELL" and sel_c < 3:
+        return None
+    # منع BUY إذا الشهري هابط إلا بتوافق 3 فريمات
+    if monthly_bias == "BEAR" and final == "BUY" and buy_c < 3:
+        return None
+
     # ==================== Weekly Trend Filter ====================
     weekly_trend = "NEUTRAL"
     try:
@@ -788,6 +799,7 @@ def full_analysis(asset="BTC", uid=0):
     return {
         "final": final, "asset": asset, "weekly_trend": weekly_trend,
         "regime": regime, "regime_strength": regime_strength,
+        "monthly_bias": monthly_bias,
         "confluence_txt": conf_txt, "base_conf": base_conf,
         "price": price, "entry_low": entry_low, "entry_high": entry_high, "tp1": tp1, "tp2": tp2, "tp3": tp3,
         "sl": sl, "rr": rr, "atr": atr,
@@ -850,6 +862,9 @@ def build_trade_msg(res, uid=0, auto=False):
     rg = res.get("regime", "UNKNOWN")
     rg_map = {"TRENDING_UP":"📈 ترند صاعد","TRENDING_DOWN":"📉 ترند هابط","RANGING":"↔️ سوق جانبي","VOLATILE":"⚡ تقلب عالي","UNKNOWN":"❓"}
     lines.append("  " + rg_map.get(rg, rg))
+    mb = res.get("monthly_bias", "NEUTRAL")
+    mb_txt = "📈 شهري: صاعد" if mb=="BULL" else "📉 شهري: هابط" if mb=="BEAR" else "➡️ شهري: محايد"
+    lines.append("  " + mb_txt)
     for fl in res['frame_lines']:
         lines.append("  " + fl)
     lines.append("  " + res['confluence_txt'])
@@ -953,8 +968,9 @@ def main_keyboard(uid):
          InlineKeyboardButton(t(uid,"btn_analysis_gold"), callback_data='analysis_GOLD')],
         [InlineKeyboardButton(t(uid,"btn_prices"),  callback_data='prices'),
          InlineKeyboardButton(t(uid,"btn_trades"),  callback_data='open_trades')],
-        [InlineKeyboardButton(t(uid,"btn_about"),   callback_data='about'),
-         InlineKeyboardButton(t(uid,"btn_lang"),    callback_data='change_lang')]
+        [InlineKeyboardButton(t(uid,"btn_stats"),   callback_data='stats'),
+         InlineKeyboardButton(t(uid,"btn_about"),   callback_data='about')],
+        [InlineKeyboardButton(t(uid,"btn_lang"),    callback_data='change_lang')]
     ])
 
 def lang_keyboard():
@@ -1081,6 +1097,33 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                          '  وقت: '+tr.get('open_time',''), '']
             rows += ['━'*24, '🕐 '+gmt_now()]
             await query.message.reply_text('\n'.join(rows))
+    elif data == 'stats':
+        stats = load_stats()
+        total  = stats.get('total', 0)
+        wins   = stats.get('wins', 0)
+        losses = stats.get('losses', 0)
+        total_rr = stats.get('total_rr', 0.0)
+        win_rate = round(wins / total * 100) if total > 0 else 0
+        avg_rr   = round(total_rr / wins, 2) if wins > 0 else 0
+        bar_w = '█' * (win_rate // 10) + '░' * (10 - win_rate // 10)
+        lines = [
+            '╔' + '═'*26 + '╗',
+            '  📊 إحصائيات أبو مهرة',
+            '╚' + '═'*26 + '╝',
+            '',
+            '  إجمالي الصفقات:  ' + str(total),
+            '  ✅ رابحة:         ' + str(wins),
+            '  ❌ خاسرة:         ' + str(losses),
+            '',
+            '  🎯 نسبة النجاح',
+            '  ' + bar_w + '  ' + str(win_rate) + '%',
+            '  ⚖️ متوسط RR:  1:' + str(avg_rr),
+            '',
+            '━'*24,
+            '🕐 ' + gmt_now(),
+        ]
+        await query.message.reply_text('\n'.join(lines))
+
     elif data == 'about':
         await query.message.reply_text(t(uid,'about_text'))
 
@@ -1152,6 +1195,7 @@ async def monitor_btc(context):
                 if direction == "BUY":
                     if current >= tp3:
                         update_msg = "🏆 #" + str(trade_id) + " الهدف الثالث تم! صفقة مغلقة بنجاح 🎉"
+                        record_trade_result(trade_id, "win", trade.get("rr", 0))
                         closed = True
                     elif not trade['tp1_hit'] and current >= tp1:
                         trade['tp1_hit'] = True; trade['sl'] = trade['entry']
@@ -1161,6 +1205,7 @@ async def monitor_btc(context):
                         update_msg = "✅✅ #" + str(trade_id) + " " + t(uid,"update_tp2_hit")
                     elif current <= trade['sl']:
                         update_msg = "🛑 #" + str(trade_id) + " وقف الخسارة تم! صفقة مغلقة"
+                        record_trade_result(trade_id, "loss")
                         closed = True
                     elif trade['tp1_hit'] and current > tp1 + 0.5*atr:
                         new_sl = round(current - 0.8*atr, 2)
@@ -1170,6 +1215,7 @@ async def monitor_btc(context):
                 else:
                     if current <= tp3:
                         update_msg = "🏆 #" + str(trade_id) + " الهدف الثالث تم! صفقة مغلقة بنجاح 🎉"
+                        record_trade_result(trade_id, "win", trade.get("rr", 0))
                         closed = True
                     elif not trade['tp1_hit'] and current <= tp1:
                         trade['tp1_hit'] = True; trade['sl'] = trade['entry']
@@ -1179,6 +1225,7 @@ async def monitor_btc(context):
                         update_msg = "✅✅ #" + str(trade_id) + " " + t(uid,"update_tp2_hit")
                     elif current >= trade['sl']:
                         update_msg = "🛑 #" + str(trade_id) + " وقف الخسارة تم! صفقة مغلقة"
+                        record_trade_result(trade_id, "loss")
                         closed = True
                     elif trade['tp1_hit'] and current < tp1 - 0.5*atr:
                         new_sl = round(current + 0.8*atr, 2)
@@ -1541,6 +1588,121 @@ async def check_economic_alerts(context):
     except Exception as e:
         logger.error("Economic alert error: " + str(e))
 
+
+# ==================== الإحصائيات ====================
+STATS_FILE = "trade_stats.json"
+
+def load_stats():
+    try:
+        import json
+        with open(STATS_FILE) as f:
+            return json.load(f)
+    except:
+        return {"total": 0, "wins": 0, "losses": 0, "total_rr": 0.0, "trades": []}
+
+def save_stats(stats):
+    import json
+    with open(STATS_FILE, "w") as f:
+        json.dump(stats, f)
+
+def record_trade_result(trade_id, result, rr=0):
+    """result: 'win' أو 'loss'"""
+    stats = load_stats()
+    stats["total"] += 1
+    if result == "win":
+        stats["wins"] += 1
+        stats["total_rr"] += rr
+    else:
+        stats["losses"] += 1
+    stats["trades"].append({
+        "id": trade_id, "result": result,
+        "rr": rr, "time": gmt_now()
+    })
+    # احتفظ بآخر 50 صفقة بس
+    stats["trades"] = stats["trades"][-50:]
+    save_stats(stats)
+
+
+async def send_daily_summary(context):
+    """ملخص يومي كل صباح"""
+    try:
+        stats = load_stats()
+        total  = stats.get("total", 0)
+        wins   = stats.get("wins", 0)
+        losses = stats.get("losses", 0)
+        total_rr = stats.get("total_rr", 0.0)
+        win_rate = round(wins / total * 100) if total > 0 else 0
+        avg_rr   = round(total_rr / wins, 2) if wins > 0 else 0
+
+        # أخبار اليوم
+        upcoming = get_upcoming_events(days_ahead=1)
+
+        lines = [
+            "╔══════════════════════════╗",
+            "  📊 الملخص اليومي - أبو مهرة",
+            "╚══════════════════════════╝",
+            "",
+            "━━━━  📈 الأداء  ━━━━",
+            "  إجمالي الصفقات:  " + str(total),
+            "  ✅ رابحة:         " + str(wins),
+            "  ❌ خاسرة:         " + str(losses),
+            "  🎯 نسبة النجاح:   " + str(win_rate) + "%",
+            "  ⚖️ متوسط RR:      1:" + str(avg_rr),
+            "",
+        ]
+
+        if upcoming:
+            lines += ["━━━━  📅 أحداث اليوم  ━━━━"]
+            for ev in upcoming[:3]:
+                lines.append("  " + ev["event"])
+                lines.append("  " + ev["impact"] + "  |  " + ev["date"])
+                lines.append("")
+        else:
+            lines += ["━━━━  📅 لا أحداث اقتصادية اليوم  ━━━━", ""]
+
+        # الصفقات المفتوحة
+        if active_trades:
+            lines += ["━━━━  🔓 صفقات مفتوحة: " + str(len(active_trades)) + "  ━━━━"]
+            for tr in active_trades:
+                de = "🔴 SELL" if tr["direction"]=="SELL" else "🟢 BUY"
+                ai2 = "₿" if tr["asset"]=="BTC" else "🥇"
+                lines.append("  " + ai2 + " #" + str(tr.get("id","?")) + "  " + de +
+                              "  دخول: $" + "{:,.0f}".format(tr["entry"]))
+            lines.append("")
+
+        lines += [
+            "━━━━━━━━━━━━━━━━━━━━━━━━",
+            "🕐 " + gmt_now(),
+            "⚠️ للأغراض التعليمية فقط",
+        ]
+        await context.bot.send_message(chat_id=CHANNEL_ID, text="\n".join(lines))
+        logger.info("Daily summary sent")
+    except Exception as e:
+        logger.error("Daily summary error: " + str(e))
+
+
+def get_monthly_bias(df_daily):
+    """يحدد الاتجاه الشهري"""
+    try:
+        if df_daily is None or len(df_daily) < 30:
+            return "NEUTRAL"
+        df_m = df_daily.resample("ME").agg({
+            "Open":"first","High":"max","Low":"min",
+            "Close":"last","Volume":"sum"
+        }).dropna().tail(3)
+        if len(df_m) < 2:
+            return "NEUTRAL"
+        last_close  = float(df_m["Close"].iloc[-1])
+        prev_close  = float(df_m["Close"].iloc[-2])
+        two_prev    = float(df_m["Close"].iloc[0]) if len(df_m) >= 3 else prev_close
+        if last_close > prev_close > two_prev:
+            return "BULL"
+        elif last_close < prev_close < two_prev:
+            return "BEAR"
+        return "NEUTRAL"
+    except:
+        return "NEUTRAL"
+
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
@@ -1553,6 +1715,7 @@ def main():
     app.job_queue.run_repeating(send_news,         interval=4*60*60,              first=300)
     app.job_queue.run_repeating(send_calendar,     interval=24*60*60,             first=600)
     app.job_queue.run_repeating(check_economic_alerts, interval=30*60,            first=120)
+    app.job_queue.run_daily(send_daily_summary, time=__import__("datetime").time(6, 0, 0))
     app.job_queue.run_repeating(send_news,         interval=4*60*60,              first=300)
     logger.info("🐎 Abu Mahra Bot - Ready!")
     app.run_polling()
