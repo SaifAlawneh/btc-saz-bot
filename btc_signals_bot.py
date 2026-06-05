@@ -16,7 +16,6 @@ CHANNEL_ID     = os.environ.get("CHANNEL_ID", "@btc_signals_saz")
 TWELVEDATA_KEY = os.environ.get("TWELVEDATA_KEY", "")
 NEWS_API_KEY   = os.environ.get("NEWS_API_KEY", "cdf2a61f2cbe4540a41456bc4bd3a40e")
 
-AUTO_INTERVAL_MIN = 30
 MIN_CONFIDENCE    = 68
 SPAM_COOLDOWN     = 1800
 CACHE_TTL         = 900
@@ -26,7 +25,6 @@ STATS_FILE        = "trade_stats.json"
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ==================== حالة البوت ====================
 user_languages        = {}
 active_trades         = []
 active_btc_trade      = {}
@@ -37,7 +35,6 @@ _cache                = {}
 
 ALLOWED_USERS = {8490817794, 1548286220}
 
-# ==================== تحميل الصفقات ====================
 def load_trades():
     try:
         with open(TRADES_FILE) as f:
@@ -55,7 +52,6 @@ _valid_trades = [t for t in _loaded_trades if t.get("asset") == "BTC" and t.get(
 active_trades.extend(_valid_trades)
 trade_counter = _loaded_counter
 
-# ==================== كاش ====================
 def get_cached(key):
     if key in _cache:
         data, ts = _cache[key]
@@ -66,7 +62,6 @@ def get_cached(key):
 def set_cache(key, data):
     _cache[key] = (data, datetime.now(timezone.utc).timestamp())
 
-# ==================== نصوص ====================
 GREETINGS = ["مرحبا","هاي","هلا","اهلا","أهلا","السلام","صباح","مساء","كيف","شلونك",
              "hello","hi","hey","good","howdy","sup","morning","evening"]
 REPLIES_AR = ["هلا وغلا! 🐎 أنا بوت أبو مهرة\nاستخدم الأزرار 👇",
@@ -80,9 +75,9 @@ CONFUSED_EN = ["Didn't get that 😅 Use the buttons 👇", "🤔 Choose from th
 TEXTS = {
     "ar": {
         "choose_lang": "🐎 بوت أبو مهرة\n\nاختر لغتك:",
-        "welcome": "🐎 أهلاً وسهلاً في بوت أبو مهرة!\n\n━━━━━━━━━━━━━━━━━━━━\nمتخصص في:\n₿ البيتكوين  BTC/USD\n\n✨ مميزاتي:\n▫️ صفقات مبنية على فريم الساعة\n▫️ Fibonacci + ATR للأهداف\n▫️ مستويات دعم ومقاومة دقيقة\n▫️ إشارات تلقائية كل 30 دقيقة\n▫️ مراقبة BTC وتحديث SL/TP\n━━━━━━━━━━━━━━━━━━━━\n⚠️ للأغراض التعليمية فقط",
-        "btn_btc": "₿ صفقة BTC", "btn_gold": "🥇 صفقة ذهب",
-        "btn_analysis_btc": "📈 تحليل BTC", "btn_analysis_gold": "📈 تحليل ذهب",
+        "welcome": "🐎 أهلاً وسهلاً في بوت أبو مهرة!\n\n━━━━━━━━━━━━━━━━━━━━\nمتخصص في:\n₿ البيتكوين  BTC/USD\n\n✨ مميزاتي:\n▫️ صفقات مبنية على فريم الساعة\n▫️ Fibonacci + ATR للأهداف\n▫️ مستويات دعم ومقاومة دقيقة\n▫️ إشارات تلقائية فورية\n▫️ مراقبة BTC وتحديث SL/TP\n━━━━━━━━━━━━━━━━━━━━\n⚠️ للأغراض التعليمية فقط",
+        "btn_btc": "₿ صفقة BTC",
+        "btn_analysis_btc": "📈 تحليل BTC",
         "btn_prices": "💰 الأسعار", "btn_about": "ℹ️ عن البوت",
         "btn_lang": "🌐 اللغة", "btn_trades": "📋 الصفقات المفتوحة",
         "btn_stats": "📊 الإحصائيات",
@@ -136,7 +131,7 @@ TEXTS = {
         "summary_bear": "✅ الخلاصة: السوق يميل للهبوط",
         "summary_neutral": "✅ الخلاصة: السوق في منطقة تردد",
         "prices_title": "💰 الأسعار الحالية", "change_24h": "التغيير 24h",
-        "about_text": "ℹ️ عن بوت أبو مهرة 🐎\n\n⏱️ فريم الساعة (1H)\n📐 Fibonacci + ATR للأهداف\n📡 إشارات تلقائية كل 30 دقيقة\n🔄 مراقبة BTC كل دقيقة\n🔬 RSI, MACD, EMA, BB, Stoch, ATR, Ichimoku\n⚙️ توافق 3 فريمات\n⚠️ للأغراض التعليمية فقط",
+        "about_text": "ℹ️ عن بوت أبو مهرة 🐎\n\n⏱️ فريم الساعة (1H)\n📐 Fibonacci + ATR للأهداف\n📡 إشارات تلقائية فورية\n🔄 مراقبة BTC كل دقيقة\n🔬 RSI, MACD, EMA, BB, Stoch, ATR, Ichimoku\n⚙️ توافق 3 فريمات\n📊 مصادر: Twelve Data + Binance\n⚠️ للأغراض التعليمية فقط",
         "ind_rsi_oversold": "RSI تشبع بيعي", "ind_rsi_buy": "RSI منطقة شراء",
         "ind_rsi_overbought": "RSI تشبع شرائي", "ind_rsi_sell": "RSI منطقة بيع",
         "ind_macd_pos": "MACD إيجابي ↗️", "ind_macd_neg": "MACD سلبي ↘️",
@@ -146,9 +141,9 @@ TEXTS = {
     },
     "en": {
         "choose_lang": "🐎 Abu Mahra Bot\n\nChoose your language:",
-        "welcome": "🐎 Welcome to Abu Mahra Bot!\n\n━━━━━━━━━━━━━━━━━━━━\nSpecializing in:\n₿ Bitcoin  BTC/USD\n\n✨ Features:\n▫️ 1H timeframe based signals\n▫️ Fibonacci + ATR targets\n▫️ Precise support & resistance\n▫️ Auto signals every 30 minutes\n▫️ BTC live SL/TP monitoring\n━━━━━━━━━━━━━━━━━━━━\n⚠️ For educational purposes only",
-        "btn_btc": "₿ BTC Trade", "btn_gold": "🥇 Gold Trade",
-        "btn_analysis_btc": "📈 BTC Analysis", "btn_analysis_gold": "📈 Gold Analysis",
+        "welcome": "🐎 Welcome to Abu Mahra Bot!\n\n━━━━━━━━━━━━━━━━━━━━\nSpecializing in:\n₿ Bitcoin  BTC/USD\n\n✨ Features:\n▫️ 1H timeframe based signals\n▫️ Fibonacci + ATR targets\n▫️ Precise support & resistance\n▫️ Instant auto signals\n▫️ BTC live SL/TP monitoring\n━━━━━━━━━━━━━━━━━━━━\n⚠️ For educational purposes only",
+        "btn_btc": "₿ BTC Trade",
+        "btn_analysis_btc": "📈 BTC Analysis",
         "btn_prices": "💰 Prices", "btn_about": "ℹ️ About",
         "btn_lang": "🌐 Language", "btn_trades": "📋 Open Trades",
         "btn_stats": "📊 Statistics",
@@ -202,7 +197,7 @@ TEXTS = {
         "summary_bear": "✅ Summary: Market leaning bearish",
         "summary_neutral": "✅ Summary: Market in consolidation",
         "prices_title": "💰 Current Prices", "change_24h": "24h Change",
-        "about_text": "ℹ️ About Abu Mahra Bot 🐎\n\n⏱️ 1H timeframe as base\n📐 Fibonacci + ATR targets\n📡 Auto signals every 30 minutes\n🔄 BTC live monitoring every minute\n🔬 RSI, MACD, EMA, BB, Stoch, ATR, Ichimoku\n⚙️ 3 timeframe confluence\n⚠️ For educational purposes only",
+        "about_text": "ℹ️ About Abu Mahra Bot 🐎\n\n⏱️ 1H timeframe as base\n📐 Fibonacci + ATR targets\n📡 Instant auto signals\n🔄 BTC live monitoring every minute\n🔬 RSI, MACD, EMA, BB, Stoch, ATR, Ichimoku\n⚙️ 3 timeframe confluence\n📊 Sources: Twelve Data + Binance\n⚠️ For educational purposes only",
         "ind_rsi_oversold": "RSI Oversold", "ind_rsi_buy": "RSI Buy Zone",
         "ind_rsi_overbought": "RSI Overbought", "ind_rsi_sell": "RSI Sell Zone",
         "ind_macd_pos": "MACD Positive ↗️", "ind_macd_neg": "MACD Negative ↘️",
@@ -221,20 +216,54 @@ def gmt_now():
 
 
 # ==================== البيانات ====================
+def get_binance_data(days=30, interval="hourly"):
+    """Binance كـ fallback — بيانات OHLCV حقيقية مجانية"""
+    try:
+        import time
+        binance_interval = "1h" if interval == "hourly" else "1d"
+        limit = min(days * 24 if interval == "hourly" else days, 1000)
+        r = requests.get(
+            "https://api.binance.com/api/v3/klines",
+            params={"symbol": "BTCUSDT", "interval": binance_interval, "limit": limit},
+            timeout=15
+        )
+        if r.status_code != 200:
+            logger.warning("Binance status: " + str(r.status_code))
+            return None
+        data = r.json()
+        if not data:
+            return None
+        rows = []
+        for k in data:
+            rows.append({
+                "timestamp": pd.to_datetime(k[0], unit="ms"),
+                "Open":   float(k[1]),
+                "High":   float(k[2]),
+                "Low":    float(k[3]),
+                "Close":  float(k[4]),
+                "Volume": float(k[5]),
+            })
+        df = pd.DataFrame(rows).set_index("timestamp").dropna()
+        logger.info("Binance fallback OK: BTCUSDT " + binance_interval)
+        return df
+    except Exception as e:
+        logger.warning("Binance failed: " + str(e))
+        return None
+
+
 def get_data(asset="BTC", days=30, interval="hourly"):
     cache_key = asset + "_" + str(days) + "_" + interval
     cached = get_cached(cache_key)
     if cached is not None:
         return cached
 
-    symbol = "BTC/USD" if asset == "BTC" else "XAU/USD"
-    td_interval = "1h" if interval == "hourly" else "1day"
-    outputsize = min(days * 24 if interval == "hourly" else days, 500)
-
+    # ✅ 1 — Twelve Data (المصدر الأساسي)
     if TWELVEDATA_KEY:
         try:
+            td_interval = "1h" if interval == "hourly" else "1day"
+            outputsize  = min(days * 24 if interval == "hourly" else days, 500)
             r = requests.get("https://api.twelvedata.com/time_series",
-                params={"symbol": symbol, "interval": td_interval,
+                params={"symbol": "BTC/USD", "interval": td_interval,
                         "outputsize": outputsize, "apikey": TWELVEDATA_KEY, "format": "JSON"},
                 timeout=15)
             data = r.json()
@@ -251,37 +280,45 @@ def get_data(asset="BTC", days=30, interval="hourly"):
         except Exception as e:
             logger.warning("Twelve Data failed: " + str(e))
 
-    if asset == "BTC":
-        try:
-            import time; time.sleep(2)
+    # ✅ 2 — Binance (fallback أول — بيانات حقيقية)
+    df_binance = get_binance_data(days=days, interval=interval)
+    if df_binance is not None and len(df_binance) >= 20:
+        set_cache(cache_key, df_binance)
+        return df_binance
+
+    # ✅ 3 — CoinGecko (fallback أخير)
+    try:
+        import time; time.sleep(2)
+        r = requests.get("https://api.coingecko.com/api/v3/coins/bitcoin/market_chart",
+            params={"vs_currency": "usd", "days": days}, timeout=20)
+        if r.status_code == 429:
+            time.sleep(60)
             r = requests.get("https://api.coingecko.com/api/v3/coins/bitcoin/market_chart",
                 params={"vs_currency": "usd", "days": days}, timeout=20)
-            if r.status_code == 429:
-                time.sleep(60)
-                r = requests.get("https://api.coingecko.com/api/v3/coins/bitcoin/market_chart",
-                    params={"vs_currency": "usd", "days": days}, timeout=20)
-            data = r.json()
-            if "prices" not in data:
-                return None
-            df = pd.DataFrame(data["prices"], columns=["timestamp", "Close"])
-            df["Volume"] = [v[1] for v in data["total_volumes"]]
-            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-            df = df.set_index("timestamp")
-            df["High"] = df["Close"].rolling(3).max()
-            df["Low"]  = df["Close"].rolling(3).min()
-            df["Open"] = df["Close"].shift(1)
-            result = df.dropna()
-            if interval == "hourly":
-                result = result.resample("1h").interpolate(method="linear").dropna()
-            set_cache(cache_key, result)
-            return result
-        except Exception as e:
-            logger.error("CoinGecko error: " + str(e))
+        data = r.json()
+        if "prices" not in data:
+            return None
+        df = pd.DataFrame(data["prices"], columns=["timestamp", "Close"])
+        df["Volume"] = [v[1] for v in data["total_volumes"]]
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+        df = df.set_index("timestamp")
+        df["High"] = df["Close"].rolling(3).max()
+        df["Low"]  = df["Close"].rolling(3).min()
+        df["Open"] = df["Close"].shift(1)
+        result = df.dropna()
+        if interval == "hourly":
+            result = result.resample("1h").interpolate(method="linear").dropna()
+        set_cache(cache_key, result)
+        logger.info("CoinGecko fallback OK")
+        return result
+    except Exception as e:
+        logger.error("CoinGecko error: " + str(e))
 
     return None
 
 
 def get_btc_price():
+    # 1 — Twelve Data
     if TWELVEDATA_KEY:
         try:
             r = requests.get("https://api.twelvedata.com/price",
@@ -290,6 +327,14 @@ def get_btc_price():
             if "price" in data:
                 return float(data["price"])
         except: pass
+    # 2 — Binance
+    try:
+        r = requests.get("https://api.binance.com/api/v3/ticker/price",
+            params={"symbol": "BTCUSDT"}, timeout=10)
+        if r.status_code == 200:
+            return float(r.json()["price"])
+    except: pass
+    # 3 — CoinGecko
     try:
         import time; time.sleep(1)
         r = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd", timeout=10)
@@ -300,6 +345,7 @@ def get_btc_price():
 
 
 def get_prices():
+    # 1 — Twelve Data
     if TWELVEDATA_KEY:
         try:
             r1 = requests.get("https://api.twelvedata.com/price",
@@ -316,6 +362,18 @@ def get_prices():
             return {"bitcoin": {"usd": btc_price, "usd_24h_change": btc_change}}
         except Exception as e:
             logger.warning("Twelve Data prices: " + str(e))
+    # 2 — Binance
+    try:
+        r1 = requests.get("https://api.binance.com/api/v3/ticker/price",
+            params={"symbol": "BTCUSDT"}, timeout=10)
+        r2 = requests.get("https://api.binance.com/api/v3/ticker/24hr",
+            params={"symbol": "BTCUSDT"}, timeout=10)
+        if r1.status_code == 200 and r2.status_code == 200:
+            price  = float(r1.json()["price"])
+            change = float(r2.json()["priceChangePercent"])
+            return {"bitcoin": {"usd": price, "usd_24h_change": change}}
+    except: pass
+    # 3 — CoinGecko
     try:
         import time; time.sleep(1)
         r = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true", timeout=10)
@@ -323,7 +381,6 @@ def get_prices():
             return r.json()
     except: pass
     return None
-
 
 # ==================== Fibonacci ====================
 def calculate_fibonacci(df):
@@ -1018,15 +1075,13 @@ def build_analysis_msg(res, uid=0):
 # ==================== لوحات المفاتيح ====================
 def main_keyboard(uid):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(t(uid,"btn_btc"),  callback_data="trade_BTC"),
-         InlineKeyboardButton(t(uid,"btn_gold"), callback_data="trade_GOLD")],
-        [InlineKeyboardButton(t(uid,"btn_analysis_btc"),  callback_data="analysis_BTC"),
-         InlineKeyboardButton(t(uid,"btn_analysis_gold"), callback_data="analysis_GOLD")],
-        [InlineKeyboardButton(t(uid,"btn_prices"), callback_data="prices"),
-         InlineKeyboardButton(t(uid,"btn_trades"), callback_data="open_trades")],
-        [InlineKeyboardButton(t(uid,"btn_stats"),  callback_data="stats"),
-         InlineKeyboardButton(t(uid,"btn_about"),  callback_data="about")],
-        [InlineKeyboardButton(t(uid,"btn_lang"),   callback_data="change_lang")],
+        [InlineKeyboardButton(t(uid,"btn_btc"),          callback_data="trade_BTC")],
+        [InlineKeyboardButton(t(uid,"btn_analysis_btc"), callback_data="analysis_BTC")],
+        [InlineKeyboardButton(t(uid,"btn_prices"),  callback_data="prices"),
+         InlineKeyboardButton(t(uid,"btn_trades"),  callback_data="open_trades")],
+        [InlineKeyboardButton(t(uid,"btn_stats"),   callback_data="stats"),
+         InlineKeyboardButton(t(uid,"btn_about"),   callback_data="about")],
+        [InlineKeyboardButton(t(uid,"btn_lang"),    callback_data="change_lang")],
     ])
 
 def lang_keyboard():
