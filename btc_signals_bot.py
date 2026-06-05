@@ -975,7 +975,8 @@ def full_analysis(asset="BTC", uid=0):
         key_fibs.append("Fib " + pct + "%  $" + "{:,.2f}".format(val))
 
     regime, regime_strength = detect_market_regime(df_1h)
-    if regime in ("RANGING", "VOLATILE") and buy_c < 3 and sel_c < 3:
+    # في VOLATILE فقط نشترط 3 فريمات، RANGING مقبول بفريمين
+    if regime == "VOLATILE" and buy_c < 3 and sel_c < 3:
         return None
 
     divergence = "NONE"
@@ -1321,7 +1322,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 dir_ar = "شراء BUY" if new_trade['direction'] == "BUY" else "بيع SELL"
                 ai_sym = "₿ BTC" if new_trade['asset'] == "BTC" else "🥇 GOLD"
                 # احفظ الصفقة الجديدة مؤقتاً
-                pending_trade_replace[uid] = {"new": new_trade, "old": already_open}
+                pending_trade_replace[uid] = {"new": new_trade, "old": already_open, "res": res}
                 confirm_kb = InlineKeyboardMarkup([[
                     InlineKeyboardButton("✅ نعم، افتح جديدة", callback_data="confirm_replace_yes"),
                     InlineKeyboardButton("❌ لا، خلي القديمة", callback_data="confirm_replace_no"),
@@ -1364,17 +1365,12 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             if new_tr["asset"] == "BTC":
                 active_btc_trade["data"] = new_tr
             save_trades()
-            # ✅ اعمل تحليل جديد وعرض الصفقة
-            try:
-                res_new = full_analysis(new_tr["asset"], uid)
-                if res_new and res_new["final"] != "NEUTRAL":
-                    res_new["id"] = new_tr["id"]
-                    await query.message.reply_text("✅ الصفقة القديمة أُغلقت — إليك الصفقة الجديدة:")
-                    await query.message.reply_text(build_trade_msg(res_new, uid))
-                else:
-                    await query.message.reply_text("✅ الصفقة القديمة أُغلقت\n⚪ السوق تغير — لا توجد فرصة الآن")
-            except Exception as e:
-                await query.message.reply_text("✅ تم الاستبدال\n❌ خطأ في جلب الصفقة: " + str(e))
+            # ✅ عرض الصفقة المحفوظة مسبقاً من pending
+            res_stored = pending.get("res")
+            if res_stored:
+                await query.message.reply_text(build_trade_msg(res_stored, uid))
+            else:
+                await query.message.reply_text("✅ تم فتح الصفقة الجديدة #" + str(new_tr["id"]))
         else:
             await query.message.reply_text("⚠️ انتهت صلاحية الطلب، حاول مجدداً")
 
