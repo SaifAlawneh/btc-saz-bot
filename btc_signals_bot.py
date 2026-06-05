@@ -42,7 +42,9 @@ def save_trades():
 
 # تحميل الصفقات عند البدء
 _loaded_trades, _loaded_counter = load_trades()
-active_trades.extend(_loaded_trades)
+# فلتر: احتفظ بصفقات BTC فقط وتجاهل الذهب القديم
+_valid_trades = [t for t in _loaded_trades if t.get("asset") == "BTC" and t.get("entry", 0) > 10000]
+active_trades.extend(_valid_trades)
 trade_counter = _loaded_counter
 
 ALLOWED_USERS = {8490817794, 1548286220}
