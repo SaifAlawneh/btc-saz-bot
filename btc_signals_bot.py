@@ -712,8 +712,7 @@ def full_analysis(asset="BTC", uid=0):
 
     # Market Regime
     regime, regime_strength = detect_market_regime(df_1h)
-    if regime == "VOLATILE" and buy_c < 3 and sel_c < 3:
-        return None
+    # VOLATILE — تحذير فقط
 
     # RSI Divergence
     divergence = "NONE"
@@ -743,13 +742,11 @@ def full_analysis(asset="BTC", uid=0):
                 liq_sl = round(max(liq_below) * 0.998, 2)
                 sl = round(max(sl, liq_sl), 2) if liq_sl > sl * 0.99 else sl
         rr = round(abs(tp2 - price) / abs(sl - price), 2) if abs(sl - price) > 0 else 0
-        if rr < 1.5: return None
     except: pass
 
     # Monthly Bias
     monthly_bias = get_monthly_bias(df_1d)
-    if monthly_bias == "BULL" and final == "SELL" and sel_c < 3: return None
-    if monthly_bias == "BEAR" and final == "BUY"  and buy_c < 3: return None
+    # monthly bias — تحذير فقط، لا حجب
 
     # Weekly Trend
     weekly_trend = "NEUTRAL"
@@ -762,8 +759,7 @@ def full_analysis(asset="BTC", uid=0):
             we50 = safe(lw["EMA50"], wp)
             if wp > we20 and we20 > we50:   weekly_trend = "BULL"
             elif wp < we20 and we20 < we50: weekly_trend = "BEAR"
-            if weekly_trend == "BULL" and final == "SELL" and sel_c < 3: return None
-            if weekly_trend == "BEAR" and final == "BUY"  and buy_c < 3: return None
+            pass  # weekly trend — تحذير فقط في risk_warnings
     except Exception as e:
         logger.warning("Weekly: " + str(e))
 
@@ -771,9 +767,7 @@ def full_analysis(asset="BTC", uid=0):
     try:
         df_1h_c = calc_indicators(df_1h.tail(210).copy())
         e200 = safe(df_1h_c.iloc[-1]["EMA200"], float("nan"))
-        if not pd.isna(e200):
-            if final == "BUY"  and price < e200 and buy_c < 3: return None
-            if final == "SELL" and price > e200 and sel_c < 3: return None
+        pass  # EMA200 — تحذير فقط في risk_warnings
     except: pass
 
     # تحقق منطقية الأهداف
@@ -785,7 +779,32 @@ def full_analysis(asset="BTC", uid=0):
             sl=round(price+atr,2); tp1=round(price-atr,2); tp2=round(price-2*atr,2); tp3=round(price-3.5*atr,2)
 
     rr = round(abs(tp2 - price) / abs(sl - price), 2) if abs(sl - price) > 0 else 0
-    if rr < 1.5: return None
+    if rr < 1.0:
+        sl = round(price-1.2*atr,2) if final=="BUY" else round(price+1.2*atr,2)
+        rr = round(abs(tp2-price)/abs(sl-price),2) if abs(sl-price)>0 else 1.0
+
+    # ==================== تقييم المخاطر ====================
+    risk_warnings = []
+    if regime == "VOLATILE":
+        risk_warnings.append("⚡ السوق متقلب — حجم صغير")
+    elif regime == "RANGING":
+        risk_warnings.append("↔️ سوق جانبي — أهداف محدودة")
+    if monthly_bias == "BULL" and final == "SELL":
+        risk_warnings.append("📈 الشهري صاعد — SELL عكس الترند")
+    elif monthly_bias == "BEAR" and final == "BUY":
+        risk_warnings.append("📉 الشهري هابط — BUY عكس الترند")
+    if weekly_trend == "BULL" and final == "SELL":
+        risk_warnings.append("📈 الويكلي صاعد — SELL عكس الترند")
+    elif weekly_trend == "BEAR" and final == "BUY":
+        risk_warnings.append("📉 الويكلي هابط — BUY عكس الترند")
+    if divergence == "BEARISH" and final == "BUY":
+        risk_warnings.append("⚠️ RSI Divergence معاكس للاتجاه")
+    elif divergence == "BULLISH" and final == "SELL":
+        risk_warnings.append("⚠️ RSI Divergence معاكس للاتجاه")
+    warn_count = len(risk_warnings)
+    if warn_count == 0:   overall_risk = "🟢 منخفضة"
+    elif warn_count <= 2: overall_risk = "🟡 متوسطة"
+    else:                 overall_risk = "🔴 عالية"
 
     return {
         "final": final, "asset": asset,
