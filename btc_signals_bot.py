@@ -1334,11 +1334,46 @@ async def monitor_btc(context):
                 if trade.get("status") == "pending":
                     reached = (direction == "BUY" and current <= entry * 1.003) or                               (direction == "SELL" and current >= entry * 0.997)
                     if reached:
-                        trade["status"] = "active"
-                        update_msg = "🟢 #"+str(trade_id)+" السعر وصل لمستوى الدخول — الصفقة نشطة الآن!"
-                        await context.bot.send_message(chat_id=chat_id, text=update_msg)
+                        # ✅ إعادة تحليل السوق عند الدخول
+                        try:
+                            fresh = full_analysis(trade["asset"], 0)
+                            if fresh is None:
+                                # البيانات ما توفرت — نشّط الصفقة بنفس الأرقام
+                                trade["status"] = "active"
+                                await context.bot.send_message(chat_id=chat_id,
+                                    text="🟢 #"+str(trade_id)+" السعر وصل للدخول — الصفقة نشطة ✅")
+                            elif fresh["final"] != direction:
+                                # الاتجاه تغير — ألغِ الصفقة
+                                to_remove.append(trade)
+                                new_dir = "شراء BUY ⬆️" if fresh["final"] == "BUY" else "بيع SELL ⬇️"
+                                await context.bot.send_message(chat_id=chat_id,
+                                    text="⚠️ #"+str(trade_id)+" الصفقة ألغيت عند الدخول\nالسوق غيّر اتجاهه إلى: "+new_dir+"\nراجع التحليل الجديد قبل الدخول")
+                            else:
+                                # الاتجاه نفسه — حدّث SL/TP بالأرقام الجديدة
+                                trade["status"] = "active"
+                                trade["sl"]  = fresh["sl"]
+                                trade["tp1"] = fresh["tp1"]
+                                trade["tp2"] = fresh["tp2"]
+                                trade["tp3"] = fresh["tp3"]
+                                trade["atr"] = fresh["atr"]
+                                trade["orig_sl"] = fresh["sl"]
+                                conf_change = ""
+                                if fresh["confluence_txt"] != trade.get("orig_conf", fresh["confluence_txt"]):
+                                    conf_change = "\n⚠️ توافق الفريمات تغير — تحقق قبل الدخول"
+                                await context.bot.send_message(chat_id=chat_id,
+                                    text="🟢 #"+str(trade_id)+" الصفقة نشطة — أرقام محدّثة ✅\n"
+                                         "SL: $"+"{:,.2f}".format(trade["sl"])+"\n"
+                                         "TP1: $"+"{:,.2f}".format(trade["tp1"])+"\n"
+                                         "TP2: $"+"{:,.2f}".format(trade["tp2"])+"\n"
+                                         "TP3: $"+"{:,.2f}".format(trade["tp3"])+conf_change)
+                                save_trades()
+                        except Exception as e:
+                            logger.error("Pending reanalysis error: "+str(e))
+                            trade["status"] = "active"
+                            await context.bot.send_message(chat_id=chat_id,
+                                text="🟢 #"+str(trade_id)+" الصفقة نشطة ✅")
                     else:
-                        # لم يصل بعد — تحقق إذا SL ضرب قبل الدخول (invalidated)
+                        # لم يصل بعد — تحقق إذا SL ضرب قبل الدخول
                         sl_hit = (direction == "BUY" and current <= trade["sl"]) or                                  (direction == "SELL" and current >= trade["sl"])
                         if sl_hit:
                             to_remove.append(trade)
