@@ -402,26 +402,28 @@ def get_data(asset="BTC", days=30, interval="hourly"):
         except Exception as e:
             logger.warning("Twelve Data fallback failed: " + str(e))
 
-    # Fallback: CoinGecko للبيتكوين
-    try:
-        r = requests.get(
-            "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart",
-            params={"vs_currency": "usd", "days": days, "interval": interval}, timeout=15)
-        data = r.json()
-        df = pd.DataFrame(data["prices"], columns=["timestamp", "Close"])
-        df["Volume"] = [v[1] for v in data["total_volumes"]]
-        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-        df = df.set_index("timestamp")
-        df["High"] = df["Close"].rolling(3).max()
-        df["Low"]  = df["Close"].rolling(3).min()
-        df["Open"] = df["Close"].shift(1)
-        result = df.dropna()
-        set_cache(cache_key, result)
-        logger.info("CoinGecko fallback OK: BTC")
-        return result
-    except Exception as e:
-        logger.error("BTC CoinGecko Error: " + str(e))
+    # Fallback: CoinGecko للبيتكوين فقط
+    if asset == "BTC":
+        try:
+            r = requests.get(
+                "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart",
+                params={"vs_currency": "usd", "days": days, "interval": interval}, timeout=15)
+            data = r.json()
+            df = pd.DataFrame(data["prices"], columns=["timestamp", "Close"])
+            df["Volume"] = [v[1] for v in data["total_volumes"]]
+            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+            df = df.set_index("timestamp")
+            df["High"] = df["Close"].rolling(3).max()
+            df["Low"]  = df["Close"].rolling(3).min()
+            df["Open"] = df["Close"].shift(1)
+            result = df.dropna()
+            set_cache(cache_key, result)
+            logger.info("CoinGecko fallback OK: BTC")
+            return result
+        except Exception as e:
+            logger.error("BTC CoinGecko Error: " + str(e))
 
+    logger.error(asset + " all sources failed")
     return None
 
 def get_btc_price():
