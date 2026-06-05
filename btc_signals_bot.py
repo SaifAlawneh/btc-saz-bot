@@ -360,28 +360,28 @@ def find_nearest_fib(price, levels, direction):
 def get_fib_targets(price, levels, extensions, direction, atr):
     fib_vals = sorted(levels.values())
     if direction == "BUY":
-        sl_fib = max([v for v in fib_vals if v < price], default=price - atr)
-        sl  = round(min(sl_fib - 0.2*atr, price - 0.8*atr), 2)
-        tp1_c = [v for v in fib_vals if v > price + 0.5*atr]
+        # BUY: SL لازم يكون تحت سعر الدخول
+        sl = round(price - 0.8*atr, 2)
+        # TP1, TP2, TP3: فوق سعر الدخول
+        tp1_c = [v for v in fib_vals if v > price + 0.3*atr]
         tp1 = round(tp1_c[0] if tp1_c else price + 0.8*atr, 2)
-        tp2_c = [v for v in fib_vals if v > tp1 + 0.3*atr]
-        tp2 = round(max(tp2_c[0] if tp2_c else price + 1.8*atr, price + 1.5*atr), 2)
-        # TP3: أقصى حد 4 ATR من السعر (واقعي للـ scalp)
+        tp2_c = [v for v in fib_vals if v > tp1 + 0.2*atr]
+        tp2 = round(max(tp2_c[0] if tp2_c else price + 1.5*atr, price + 1.5*atr), 2)
         tp3_raw = round(price + 2.5*atr, 2)
         ext_v = sorted(extensions.values(), reverse=True)
-        tp3_fib = next((v for v in ext_v if tp2 + 0.3*atr < v < price + 3.0*atr), None)
+        tp3_fib = next((v for v in ext_v if tp2 + 0.2*atr < v < price + 3.0*atr), None)
         tp3 = round(min(tp3_fib, tp3_raw) if tp3_fib else tp3_raw, 2)
     else:
-        sl_fib = min([v for v in fib_vals if v > price], default=price + atr)
-        sl  = round(max(sl_fib + 0.2*atr, price + 0.8*atr), 2)
-        tp1_c = [v for v in reversed(fib_vals) if v < price - 0.5*atr]
+        # SELL: SL لازم يكون فوق سعر الدخول
+        sl = round(price + 0.8*atr, 2)
+        # TP1, TP2, TP3: تحت سعر الدخول
+        tp1_c = [v for v in reversed(fib_vals) if v < price - 0.3*atr]
         tp1 = round(tp1_c[0] if tp1_c else price - 0.8*atr, 2)
-        tp2_c = [v for v in reversed(fib_vals) if v < tp1 - 0.3*atr]
-        tp2 = round(min(tp2_c[0] if tp2_c else price - 1.8*atr, price - 1.5*atr), 2)
-        # TP3: أقصى حد 4 ATR من السعر (واقعي للـ scalp)
+        tp2_c = [v for v in reversed(fib_vals) if v < tp1 - 0.2*atr]
+        tp2 = round(min(tp2_c[0] if tp2_c else price - 1.5*atr, price - 1.5*atr), 2)
         tp3_raw = round(price - 2.5*atr, 2)
         ext_v = sorted(extensions.values())
-        tp3_fib = next((v for v in ext_v if price - 3.0*atr < v < tp2 - 0.3*atr), None)
+        tp3_fib = next((v for v in ext_v if price - 3.0*atr < v < tp2 - 0.2*atr), None)
         tp3 = round(max(tp3_fib, tp3_raw) if tp3_fib else tp3_raw, 2)
     rr = round(abs(tp2 - price) / abs(sl - price), 2) if abs(sl - price) > 0 else 0
     return sl, tp1, tp2, tp3, rr
