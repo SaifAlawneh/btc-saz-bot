@@ -368,9 +368,9 @@ def get_fib_targets(price, levels, extensions, direction, atr):
         tp2_c = [v for v in fib_vals if v > tp1 + 0.2*atr]
         tp2 = round(max(tp2_c[0] if tp2_c else price + 1.5*atr, price + 1.5*atr), 2)
         tp3_raw = round(price + 2.5*atr, 2)
-        ext_v = sorted(extensions.values(), reverse=True)
-        tp3_fib = next((v for v in ext_v if tp2 + 0.2*atr < v < price + 3.0*atr), None)
-        tp3 = round(min(tp3_fib, tp3_raw) if tp3_fib else tp3_raw, 2)
+        # TP3 لازم يكون على الأقل 1 ATR فوق TP2
+        tp3_min = round(tp2 + 1.0*atr, 2)
+        tp3 = round(max(tp3_raw, tp3_min), 2)
     else:
         # SELL: SL لازم يكون فوق سعر الدخول
         sl = round(price + 0.8*atr, 2)
@@ -380,9 +380,9 @@ def get_fib_targets(price, levels, extensions, direction, atr):
         tp2_c = [v for v in reversed(fib_vals) if v < tp1 - 0.2*atr]
         tp2 = round(min(tp2_c[0] if tp2_c else price - 1.5*atr, price - 1.5*atr), 2)
         tp3_raw = round(price - 2.5*atr, 2)
-        ext_v = sorted(extensions.values())
-        tp3_fib = next((v for v in ext_v if price - 3.0*atr < v < tp2 - 0.2*atr), None)
-        tp3 = round(max(tp3_fib, tp3_raw) if tp3_fib else tp3_raw, 2)
+        # TP3 لازم يكون على الأقل 1 ATR تحت TP2
+        tp3_min = round(tp2 - 1.0*atr, 2)
+        tp3 = round(min(tp3_raw, tp3_min), 2)
     rr = round(abs(tp2 - price) / abs(sl - price), 2) if abs(sl - price) > 0 else 0
     return sl, tp1, tp2, tp3, rr
 
@@ -1096,12 +1096,18 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             trade_counter += 1
             res["id"] = trade_counter
             await query.message.reply_text(build_trade_msg(res, uid))
+            entry_p = res.get("entry_price", res["price"])
+            market_p = res["price"]
+            # الصفقة pending لو السعر لم يصل لمستوى الدخول بعد (فرق أكثر من 0.3%)
+            dist_to_entry = abs(entry_p - market_p) / market_p * 100
+            is_pending = dist_to_entry > 0.3
             new_trade = {
                 "id": trade_counter, "asset": res["asset"],
-                "direction": res["final"], "entry": res.get("entry_price", res["price"]),
+                "direction": res["final"], "entry": entry_p,
                 "sl": res["sl"], "tp1": res["tp1"], "tp2": res["tp2"], "tp3": res["tp3"],
                 "atr": res["atr"], "tp1_hit": False, "tp2_hit": False,
-                "orig_sl": res["sl"], "entry_fib": res.get("entry_price", res["price"]),
+                "orig_sl": res["sl"], "entry_fib": entry_p,
+                "status": "pending" if is_pending else "active",
                 "chat_id": query.message.chat_id, "open_time": gmt_now(),
             }
             already_open = next((tr for tr in active_trades
@@ -1249,12 +1255,14 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             for tr in active_trades:
                 ai2  = "₿" if tr["asset"]=="BTC" else "🥇"
                 dire = "🔴 SELL" if tr["direction"]=="SELL" else "🟢 BUY"
-                if tr.get("tp2_hit"):
+                if tr.get("status") == "pending":
+                    status = "⏳ انتظار الدخول عند $"+"{:,.2f}".format(tr["entry"])
+                elif tr.get("tp2_hit"):
                     status = "✅✅ TP2 تم"
                 elif tr.get("tp1_hit"):
                     status = "✅ TP1 تم"
                 else:
-                    status = "🟡 قائمة — لم يصل أي هدف بعد"
+                    status = "🟢 نشطة — لم يصل أي هدف بعد"
                 lines += [
                     ai2+" #"+str(tr.get("id","?"))+"  "+dire,
                     "  💵 دخول:  $"+"{:,.2f}".format(tr["entry"]),
@@ -1319,7 +1327,24 @@ async def monitor_btc(context):
                 atr      = trade["atr"]
                 tp1      = trade["tp1"]; tp2 = trade["tp2"]; tp3 = trade["tp3"]
                 trade_id = trade.get("id","?")
+                entry    = trade["entry"]
                 update_msg= None; closed = False
+
+                # ✅ تحقق إذا الصفقة pending — انتظر السعر يوصل للدخول
+                if trade.get("status") == "pending":
+                    reached = (direction == "BUY" and current <= entry * 1.003) or                               (direction == "SELL" and current >= entry * 0.997)
+                    if reached:
+                        trade["status"] = "active"
+                        update_msg = "🟢 #"+str(trade_id)+" السعر وصل لمستوى الدخول — الصفقة نشطة الآن!"
+                        await context.bot.send_message(chat_id=chat_id, text=update_msg)
+                    else:
+                        # لم يصل بعد — تحقق إذا SL ضرب قبل الدخول (invalidated)
+                        sl_hit = (direction == "BUY" and current <= trade["sl"]) or                                  (direction == "SELL" and current >= trade["sl"])
+                        if sl_hit:
+                            to_remove.append(trade)
+                            await context.bot.send_message(chat_id=chat_id,
+                                text="❌ #"+str(trade_id)+" الصفقة ألغيت — السعر تجاوز SL قبل الدخول")
+                    continue
 
                 if direction == "BUY":
                     if current >= tp3:
