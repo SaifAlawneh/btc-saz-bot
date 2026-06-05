@@ -785,18 +785,19 @@ def full_analysis(asset="BTC", uid=0):
         pass  # EMA200 — تحذير فقط في risk_warnings
     except: pass
 
-    # تحقق منطقية الأهداف
+    # تحقق منطقية الأهداف — كل الحسابات من entry_price مش price
+    ep = entry_price  # اختصار
     if final == "BUY":
-        if not (sl < price < tp1 < tp2 < tp3):
-            sl=round(price-atr,2); tp1=round(price+atr,2); tp2=round(price+2*atr,2); tp3=round(price+3.5*atr,2)
+        if not (sl < ep < tp1 < tp2 < tp3):
+            sl=round(ep-atr,2); tp1=round(ep+atr,2); tp2=round(ep+2*atr,2); tp3=round(ep+2.5*atr,2)
     else:
-        if not (tp3 < tp2 < tp1 < price < sl):
-            sl=round(price+atr,2); tp1=round(price-atr,2); tp2=round(price-2*atr,2); tp3=round(price-3.5*atr,2)
+        if not (tp3 < tp2 < tp1 < ep < sl):
+            sl=round(ep+atr,2); tp1=round(ep-atr,2); tp2=round(ep-2*atr,2); tp3=round(ep-2.5*atr,2)
 
-    rr = round(abs(tp2 - price) / abs(sl - price), 2) if abs(sl - price) > 0 else 0
+    rr = round(abs(tp2 - ep) / abs(sl - ep), 2) if abs(sl - ep) > 0 else 0
     if rr < 1.0:
-        sl = round(price-1.2*atr,2) if final=="BUY" else round(price+1.2*atr,2)
-        rr = round(abs(tp2-price)/abs(sl-price),2) if abs(sl-price)>0 else 1.0
+        sl = round(ep-1.2*atr,2) if final=="BUY" else round(ep+1.2*atr,2)
+        rr = round(abs(tp2-ep)/abs(sl-ep),2) if abs(sl-ep)>0 else 1.0
 
     # ==================== تقييم المخاطر ====================
     risk_warnings = []
