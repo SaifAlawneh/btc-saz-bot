@@ -1226,23 +1226,46 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
     # ── الإحصائيات ──
     elif data == "stats":
         stats    = load_stats()
-        total    = stats.get("total", 0)
+        closed   = stats.get("trades", [])
         wins     = stats.get("wins", 0)
         losses   = stats.get("losses", 0)
         total_rr = stats.get("total_rr", 0.0)
-        win_rate = round(wins / total * 100) if total > 0 else 0
+        total_closed = stats.get("total", 0)
+        win_rate = round(wins / total_closed * 100) if total_closed > 0 else 0
         avg_rr   = round(total_rr / wins, 2) if wins > 0 else 0
         bar_w    = "█" * (win_rate // 10) + "░" * (10 - win_rate // 10)
         lines = [
             "╔"+"═"*26+"╗", "  📊 إحصائيات أبو مهرة", "╚"+"═"*26+"╝", "",
-            "  إجمالي الصفقات:  "+str(total),
-            "  ✅ رابحة:         "+str(wins),
-            "  ❌ خاسرة:         "+str(losses), "",
+            "━━━━  📈 الصفقات المغلقة  ━━━━",
+            "  إجمالي:      "+str(total_closed),
+            "  🏆 رابحة:    "+str(wins),
+            "  🛑 خاسرة:    "+str(losses), "",
             "  🎯 نسبة النجاح",
             "  "+bar_w+"  "+str(win_rate)+"%",
             "  ⚖️ متوسط RR:  1:"+str(avg_rr), "",
-            "━"*24, "🕐 "+gmt_now(),
         ]
+        if active_trades:
+            lines.append("━━━━  🔓 الصفقات القائمة  ━━━━")
+            for tr in active_trades:
+                ai2  = "₿" if tr["asset"]=="BTC" else "🥇"
+                dire = "🔴 SELL" if tr["direction"]=="SELL" else "🟢 BUY"
+                if tr.get("tp2_hit"):
+                    status = "✅✅ TP2 تم"
+                elif tr.get("tp1_hit"):
+                    status = "✅ TP1 تم"
+                else:
+                    status = "🟡 قائمة — لم يصل أي هدف بعد"
+                lines += [
+                    ai2+" #"+str(tr.get("id","?"))+"  "+dire,
+                    "  💵 دخول:  $"+"{:,.2f}".format(tr["entry"]),
+                    "  "+status,
+                    "  TP1: $"+"{:,.2f}".format(tr["tp1"])+"  TP2: $"+"{:,.2f}".format(tr["tp2"]),
+                    "  TP3: $"+"{:,.2f}".format(tr["tp3"])+"  SL: $"+"{:,.2f}".format(tr["sl"]),
+                    "",
+                ]
+        else:
+            lines += ["━━━━  🔓 لا توجد صفقات قائمة  ━━━━", ""]
+        lines += ["━"*24, "🕐 "+gmt_now()]
         await query.message.reply_text("\n".join(lines))
 
     elif data == "about":
