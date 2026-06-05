@@ -697,21 +697,18 @@ def full_analysis(asset="BTC", uid=0):
     fib_levels, fib_ext, swing_h, swing_l = calculate_fibonacci(df_1h)
     nearest_fib, fib_key, dist_pct = find_nearest_fib(price, fib_levels, final) if fib_levels else (price,"50.0",0)
 
-    # ✅ سعر الدخول الذكي: أقرب Fib ضمن 0.8% من السعر
-    if dist_pct <= 0.8:
-        entry_price = nearest_fib  # ادخل عند مستوى Fib
-    elif final == "BUY":
-        # BUY: ادخل عند أقرب دعم (Fib أدنى من السعر)
-        fib_vals_sorted = sorted(fib_levels.values())
-        supports = [v for v in fib_vals_sorted if v < price]
-        entry_price = round(supports[-1], 2) if supports and (price - supports[-1])/price < 0.015 else price
+    # ✅ سعر الدخول = أقرب مستوى Fib منطقي
+    fib_vals_sorted = sorted(fib_levels.values())
+    if final == "BUY":
+        # BUY: أقرب Fib تحت السعر أو عنده (دعم)
+        candidates = [v for v in fib_vals_sorted if v <= price * 1.002]
+        entry_price = round(candidates[-1], 2) if candidates else price
     else:
-        # SELL: ادخل عند أقرب مقاومة (Fib أعلى من السعر)
-        fib_vals_sorted = sorted(fib_levels.values())
-        resistances = [v for v in fib_vals_sorted if v > price]
-        entry_price = round(resistances[0], 2) if resistances and (resistances[0] - price)/price < 0.015 else price
+        # SELL: أقرب Fib فوق السعر أو عنده (مقاومة)
+        candidates = [v for v in fib_vals_sorted if v >= price * 0.998]
+        entry_price = round(candidates[0], 2) if candidates else price
 
-    sl, tp1, tp2, tp3, rr = get_fib_targets(price, fib_levels, fib_ext, final, atr)
+    sl, tp1, tp2, tp3, rr = get_fib_targets(entry_price, fib_levels, fib_ext, final, atr)
 
     risk = 100 - base_conf
     if main["rsi"] < 25 or main["rsi"] > 75: risk += 10
@@ -1100,10 +1097,10 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text(build_trade_msg(res, uid))
             new_trade = {
                 "id": trade_counter, "asset": res["asset"],
-                "direction": res["final"], "entry": res["price"],
+                "direction": res["final"], "entry": res.get("entry_price", res["price"]),
                 "sl": res["sl"], "tp1": res["tp1"], "tp2": res["tp2"], "tp3": res["tp3"],
                 "atr": res["atr"], "tp1_hit": False, "tp2_hit": False,
-                "orig_sl": res["sl"],
+                "orig_sl": res["sl"], "entry_fib": res.get("entry_price", res["price"]),
                 "chat_id": query.message.chat_id, "open_time": gmt_now(),
             }
             already_open = next((tr for tr in active_trades
@@ -1290,7 +1287,7 @@ async def auto_signals(context):
             await context.bot.send_message(chat_id=CHANNEL_ID, text=build_trade_msg(res, 0, auto=True))
             new_trade = {
                 "id": trade_counter, "asset": "BTC",
-                "direction": res["final"], "entry": res["price"],
+                "direction": res["final"], "entry": res.get("entry_price", res["price"]),
                 "sl": res["sl"], "tp1": res["tp1"], "tp2": res["tp2"], "tp3": res["tp3"],
                 "atr": res["atr"], "tp1_hit": False, "tp2_hit": False,
                 "chat_id": CHANNEL_ID, "open_time": gmt_now(),
