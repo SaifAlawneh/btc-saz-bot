@@ -906,10 +906,6 @@ def full_analysis(asset="BTC", uid=0):
     if buy_c == 3:   final="BUY";  conf_txt=t(uid,"full_confluence");    frames_conf=85
     elif sel_c == 3: final="SELL"; conf_txt=t(uid,"full_confluence");    frames_conf=85
     elif buy_c == 2 or sel_c == 2:
-        # ✅ توافق فريمين: نقبل فقط إذا الفريم الساعي قوي جداً (conf > 75)
-        main_check = results.get("1h") or list(results.values())[0]
-        if main_check["conf"] < 75:
-            return None
         final = "BUY" if buy_c == 2 else "SELL"
         conf_txt = t(uid,"partial_confluence")
         frames_conf = 65
@@ -1050,17 +1046,7 @@ def full_analysis(asset="BTC", uid=0):
     rr_check = abs(tp2 - price) / abs(sl - price) if abs(sl - price) > 0 else 0
     if rr_check < 1.5: return None
 
-    # ✅ Volume Confirmation: الحجم لازم يكون فوق المتوسط
-    try:
-        if 'Volume' in df_1h.columns and df_1h['Volume'].sum() > 0:
-            vol_ma = df_1h['Volume'].rolling(20).mean().iloc[-1]
-            vol_now = df_1h['Volume'].iloc[-1]
-            if not pd.isna(vol_ma) and vol_ma > 0:
-                if vol_now < vol_ma * 0.8:  # الحجم أقل من 80% من المتوسط = إشارة ضعيفة
-                    logger.info("Volume filter: low volume, skipping signal")
-                    return None
-    except Exception as e:
-        logger.warning("Volume filter error: " + str(e))
+    # Volume filter removed - too aggressive
 
     return {
         "final": final, "asset": asset, "weekly_trend": weekly_trend,
@@ -1370,17 +1356,25 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "confirm_replace_yes":
         pending = pending_trade_replace.pop(uid, None)
         if pending:
-            # احذف القديمة
             old_tr = pending["old"]
             if old_tr in active_trades:
                 active_trades.remove(old_tr)
-            # أضف الجديدة
             new_tr = pending["new"]
             active_trades.append(new_tr)
             if new_tr["asset"] == "BTC":
                 active_btc_trade["data"] = new_tr
             save_trades()
-            await query.message.reply_text("✅ تم! الصفقة القديمة أُغلقت وفُتحت صفقة جديدة")
+            # ✅ اعمل تحليل جديد وعرض الصفقة
+            try:
+                res_new = full_analysis(new_tr["asset"], uid)
+                if res_new and res_new["final"] != "NEUTRAL":
+                    res_new["id"] = new_tr["id"]
+                    await query.message.reply_text("✅ الصفقة القديمة أُغلقت — إليك الصفقة الجديدة:")
+                    await query.message.reply_text(build_trade_msg(res_new, uid))
+                else:
+                    await query.message.reply_text("✅ الصفقة القديمة أُغلقت\n⚪ السوق تغير — لا توجد فرصة الآن")
+            except Exception as e:
+                await query.message.reply_text("✅ تم الاستبدال\n❌ خطأ في جلب الصفقة: " + str(e))
         else:
             await query.message.reply_text("⚠️ انتهت صلاحية الطلب، حاول مجدداً")
 
