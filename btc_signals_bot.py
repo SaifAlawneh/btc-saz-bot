@@ -1091,8 +1091,9 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(t(uid,"loading_analysis"))
         try:
             res = full_analysis(asset, uid)
-            if not res or "key_fibs" not in res:
+            if not res:
                 await query.message.reply_text(t(uid,"failed")); return
+            # NEUTRAL أو صفقة — كلاهما يعرض التحليل
             await query.message.reply_text(build_analysis_msg(res, uid))
         except Exception as e:
             logger.error("Analysis handler: " + str(e))
