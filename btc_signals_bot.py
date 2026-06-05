@@ -17,7 +17,7 @@ TWELVEDATA_KEY = os.environ.get("TWELVEDATA_KEY", "")
 NEWS_API_KEY   = os.environ.get("NEWS_API_KEY", "cdf2a61f2cbe4540a41456bc4bd3a40e")
 
 AUTO_INTERVAL_MIN = 30
-MIN_CONFIDENCE    = 72
+MIN_CONFIDENCE    = 68
 SPAM_COOLDOWN     = 1800
 CACHE_TTL         = 900
 TRADES_FILE       = "active_trades.json"
@@ -789,6 +789,7 @@ def full_analysis(asset="BTC", uid=0):
 
     return {
         "final": final, "asset": asset,
+        "risk_warnings": risk_warnings, "overall_risk": overall_risk,
         "weekly_trend": weekly_trend, "regime": regime, "regime_strength": regime_strength,
         "monthly_bias": monthly_bias, "divergence": divergence,
         "session": session, "session_score": session_score,
@@ -872,6 +873,14 @@ def build_trade_msg(res, uid=0, auto=False):
     for fl in res["frame_lines"]:
         lines.append("  "+fl)
     lines.append("  "+res["confluence_txt"])
+
+    # ==================== مستوى الخطورة والتحذيرات ====================
+    overall_risk = res.get("overall_risk", "🟡 متوسطة")
+    risk_warnings = res.get("risk_warnings", [])
+    lines += ["", "━━━━  ⚠️ تقييم المخاطر  ━━━━",
+              "  مستوى الخطورة: " + overall_risk]
+    for w in risk_warnings:
+        lines.append("  " + w)
 
     lines += [
         "",
@@ -1032,8 +1041,17 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(t(uid,"loading_trade"))
         try:
             res = full_analysis(asset, uid)
-            if not res or res["final"] == "NEUTRAL":
-                await query.message.reply_text(t(uid,"no_signal")); return
+            if not res:
+                await query.message.reply_text("⚪ البيانات غير متوفرة الآن\nحاول بعد دقيقتين 🕐"); return
+            if res["final"] == "NEUTRAL":
+                fls = res.get("frame_lines", [])
+                parts = ["⚪ لا توجد إشارة واضحة الآن", ""]
+                if fls:
+                    parts.append("📊 حالة الفريمات:")
+                    for fl in fls:
+                        parts.append("  " + fl)
+                parts += ["", "💡 الفريمات غير متوافقة — انتظر إشارة أقوى"]
+                await query.message.reply_text("\n".join(parts)); return
             global trade_counter
             trade_counter += 1
             res["id"] = trade_counter
@@ -1092,8 +1110,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
         try:
             res = full_analysis(asset, uid)
             if not res:
-                await query.message.reply_text(t(uid,"failed")); return
-            # NEUTRAL أو صفقة — كلاهما يعرض التحليل
+                await query.message.reply_text("⚪ الفلاتر منعت التحليل أو البيانات غير متوفرة\n\nحاول بعد دقيقتين 🕐"); return
             await query.message.reply_text(build_analysis_msg(res, uid))
         except Exception as e:
             logger.error("Analysis handler: " + str(e))
