@@ -1,5 +1,3 @@
-
-
 import os
 import logging
 import requests
@@ -729,6 +727,139 @@ def detect_market_regime(df):
         return "UNKNOWN", 0
 
 
+def get_upcoming_events(days_ahead=7):
+    """يجيب الأحداث خلال X أيام القادمة"""
+    today = datetime.now(timezone.utc).date()
+    upcoming = []
+    for ev in ECONOMIC_CALENDAR:
+        ev_date = datetime.strptime(ev["date"], "%Y-%m-%d").date()
+        diff = (ev_date - today).days
+        if 0 <= diff <= days_ahead:
+            upcoming.append({**ev, "days_left": diff})
+    return sorted(upcoming, key=lambda x: x["days_left"])
+
+
+def detect_rsi_divergence(df, lookback=20):
+    """
+    Bullish Divergence: السعر Lower Low بس RSI Higher Low = انعكاس صعودي محتمل
+    Bearish Divergence: السعر Higher High بس RSI Lower High = انعكاس هبوطي محتمل
+    """
+    try:
+        if len(df) < lookback + 5:
+            return "NONE"
+        recent = df.tail(lookback)
+        prices = recent["Close"].values
+        rsi    = recent["RSI"].values
+
+        # إيجاد القمم والقيعان
+        price_hh = prices[-1] > max(prices[:-5])   # Higher High في السعر
+        price_ll = prices[-1] < min(prices[:-5])    # Lower Low في السعر
+        rsi_hh   = rsi[-1]   > max(rsi[:-5])        # Higher High في RSI
+        rsi_lh   = rsi[-1]   < max(rsi[:-5])        # Lower High في RSI
+        rsi_hl   = rsi[-1]   > min(rsi[:-5])        # Higher Low في RSI
+        rsi_ll2  = rsi[-1]   < min(rsi[:-5])        # Lower Low في RSI
+
+        # Bearish Divergence: سعر أعلى بس RSI أقل
+        if price_hh and rsi_lh and rsi[-1] > 55:
+            return "BEARISH"
+        # Bullish Divergence: سعر أقل بس RSI أعلى
+        if price_ll and rsi_hl and rsi[-1] < 45:
+            return "BULLISH"
+        return "NONE"
+    except:
+        return "NONE"
+
+
+def find_order_blocks(df, lookback=50):
+    """
+    Order Block = آخر شمعة هبوطية قبل حركة صعودية قوية (Bullish OB)
+    أو آخر شمعة صعودية قبل حركة هبوطية قوية (Bearish OB)
+    """
+    try:
+        if len(df) < lookback:
+            return [], []
+        recent = df.tail(lookback).copy()
+        bullish_obs = []
+        bearish_obs = []
+
+        for i in range(2, len(recent) - 2):
+            candle = recent.iloc[i]
+            next3  = recent.iloc[i+1:i+3]
+
+            # Bullish OB: شمعة حمراء (هبوطية) يليها 2+ شمعات خضراء قوية
+            if candle["Close"] < candle["Open"]:
+                if all(next3["Close"] > next3["Open"]) and                    next3["Close"].max() > candle["Open"] * 1.005:
+                    bullish_obs.append({
+                        "high": float(candle["Open"]),
+                        "low":  float(candle["Close"]),
+                        "time": str(candle.name)
+                    })
+
+            # Bearish OB: شمعة خضراء (صعودية) يليها 2+ شمعات حمراء قوية
+            if candle["Close"] > candle["Open"]:
+                if all(next3["Close"] < next3["Open"]) and                    next3["Close"].min() < candle["Open"] * 0.995:
+                    bearish_obs.append({
+                        "high": float(candle["Close"]),
+                        "low":  float(candle["Open"]),
+                        "time": str(candle.name)
+                    })
+
+        return bullish_obs[-3:], bearish_obs[-3:]
+    except:
+        return [], []
+
+
+def find_liquidity_zones(df, lookback=50):
+    """
+    Liquidity = أماكن تجمع الـ Stop Loss
+    فوق القمم السابقة (Buy Side Liquidity) = هدف للسوق قبل الهبوط
+    تحت القيعان السابقة (Sell Side Liquidity) = هدف للسوق قبل الصعود
+    """
+    try:
+        if len(df) < lookback:
+            return [], []
+        recent   = df.tail(lookback)
+        highs    = recent["High"].values
+        lows     = recent["Low"].values
+        buy_liq  = []  # فوق القمم
+        sell_liq = []  # تحت القيعان
+
+        for i in range(2, len(highs) - 2):
+            # قمة محلية = Buy Side Liquidity
+            if highs[i] > highs[i-1] and highs[i] > highs[i+1] and                highs[i] > highs[i-2] and highs[i] > highs[i+2]:
+                buy_liq.append(round(float(highs[i]), 2))
+            # قاع محلي = Sell Side Liquidity
+            if lows[i] < lows[i-1] and lows[i] < lows[i+1] and                lows[i] < lows[i-2] and lows[i] < lows[i+2]:
+                sell_liq.append(round(float(lows[i]), 2))
+
+        return sorted(buy_liq)[-3:], sorted(sell_liq)[:3]
+    except:
+        return [], []
+
+
+def get_current_session():
+    """
+    Asian:  00:00 - 08:00 GMT  (ضعيف للـ scalping)
+    London: 08:00 - 16:00 GMT  (قوي جداً)
+    NY:     13:00 - 21:00 GMT  (قوي جداً)
+    Overlap: 13:00 - 16:00 GMT (الأقوى)
+    """
+    try:
+        hour = datetime.now(timezone.utc).hour
+        if 13 <= hour < 16:
+            return "OVERLAP", 100   # London + NY overlap = الأقوى
+        elif 8 <= hour < 16:
+            return "LONDON", 85
+        elif 13 <= hour < 21:
+            return "NY", 85
+        else:
+            return "ASIAN", 40      # ضعيف
+    except:
+        return "UNKNOWN", 60
+
+
+# ==================== Correlation Filter ====================
+
 def full_analysis(asset="BTC", uid=0):
     df_1h = get_data(asset, days=14,  interval="hourly")
     df_4h = get_data(asset, days=30,  interval="hourly")
@@ -850,14 +981,12 @@ def full_analysis(asset="BTC", uid=0):
     bull_obs, bear_obs = find_order_blocks(df_1h) if df_1h is not None else ([], [])
     buy_liq, sell_liq  = find_liquidity_zones(df_1h) if df_1h is not None else ([], [])
 
-    # ==================== تحقق من OB ====================
-    # في SELL: منطقة الدخول لازم تكون قريبة من Bearish OB
-    # في BUY: منطقة الدخول لازم تكون قريبة من Bullish OB
+    # ==================== OB & Liquidity — معلومة فقط ====================
+    # يُعرض في الرسالة بس، ما يمنع الإشارة
     ob_confirmed = False
     try:
         if final == "SELL" and bear_obs:
             for ob in bear_obs:
-                # الدخول داخل أو قريب من الـ OB بـ 0.5%
                 ob_range = ob["high"] * 1.005
                 ob_floor = ob["low"]  * 0.995
                 if ob_floor <= price <= ob_range:
@@ -870,9 +999,6 @@ def full_analysis(asset="BTC", uid=0):
                 if ob_floor <= price <= ob_range:
                     ob_confirmed = True
                     break
-        # إذا ما في OB قريب — اشتراط توافق 3 فريمات
-        if not ob_confirmed and buy_c < 3 and sel_c < 3:
-            return None
     except: pass
 
     # ==================== SL عند منطقة سيولة ====================
@@ -1695,126 +1821,6 @@ async def send_daily_summary(context):
         logger.error("Daily summary error: " + str(e))
 
 
-def detect_rsi_divergence(df, lookback=20):
-    """
-    Bullish Divergence: السعر Lower Low بس RSI Higher Low = انعكاس صعودي محتمل
-    Bearish Divergence: السعر Higher High بس RSI Lower High = انعكاس هبوطي محتمل
-    """
-    try:
-        if len(df) < lookback + 5:
-            return "NONE"
-        recent = df.tail(lookback)
-        prices = recent["Close"].values
-        rsi    = recent["RSI"].values
-
-        # إيجاد القمم والقيعان
-        price_hh = prices[-1] > max(prices[:-5])   # Higher High في السعر
-        price_ll = prices[-1] < min(prices[:-5])    # Lower Low في السعر
-        rsi_hh   = rsi[-1]   > max(rsi[:-5])        # Higher High في RSI
-        rsi_lh   = rsi[-1]   < max(rsi[:-5])        # Lower High في RSI
-        rsi_hl   = rsi[-1]   > min(rsi[:-5])        # Higher Low في RSI
-        rsi_ll2  = rsi[-1]   < min(rsi[:-5])        # Lower Low في RSI
-
-        # Bearish Divergence: سعر أعلى بس RSI أقل
-        if price_hh and rsi_lh and rsi[-1] > 55:
-            return "BEARISH"
-        # Bullish Divergence: سعر أقل بس RSI أعلى
-        if price_ll and rsi_hl and rsi[-1] < 45:
-            return "BULLISH"
-        return "NONE"
-    except:
-        return "NONE"
-
-
-def find_order_blocks(df, lookback=50):
-    """
-    Order Block = آخر شمعة هبوطية قبل حركة صعودية قوية (Bullish OB)
-    أو آخر شمعة صعودية قبل حركة هبوطية قوية (Bearish OB)
-    """
-    try:
-        if len(df) < lookback:
-            return [], []
-        recent = df.tail(lookback).copy()
-        bullish_obs = []
-        bearish_obs = []
-
-        for i in range(2, len(recent) - 2):
-            candle = recent.iloc[i]
-            next3  = recent.iloc[i+1:i+3]
-
-            # Bullish OB: شمعة حمراء (هبوطية) يليها 2+ شمعات خضراء قوية
-            if candle["Close"] < candle["Open"]:
-                if all(next3["Close"] > next3["Open"]) and                    next3["Close"].max() > candle["Open"] * 1.005:
-                    bullish_obs.append({
-                        "high": float(candle["Open"]),
-                        "low":  float(candle["Close"]),
-                        "time": str(candle.name)
-                    })
-
-            # Bearish OB: شمعة خضراء (صعودية) يليها 2+ شمعات حمراء قوية
-            if candle["Close"] > candle["Open"]:
-                if all(next3["Close"] < next3["Open"]) and                    next3["Close"].min() < candle["Open"] * 0.995:
-                    bearish_obs.append({
-                        "high": float(candle["Close"]),
-                        "low":  float(candle["Open"]),
-                        "time": str(candle.name)
-                    })
-
-        return bullish_obs[-3:], bearish_obs[-3:]
-    except:
-        return [], []
-
-
-def find_liquidity_zones(df, lookback=50):
-    """
-    Liquidity = أماكن تجمع الـ Stop Loss
-    فوق القمم السابقة (Buy Side Liquidity) = هدف للسوق قبل الهبوط
-    تحت القيعان السابقة (Sell Side Liquidity) = هدف للسوق قبل الصعود
-    """
-    try:
-        if len(df) < lookback:
-            return [], []
-        recent   = df.tail(lookback)
-        highs    = recent["High"].values
-        lows     = recent["Low"].values
-        buy_liq  = []  # فوق القمم
-        sell_liq = []  # تحت القيعان
-
-        for i in range(2, len(highs) - 2):
-            # قمة محلية = Buy Side Liquidity
-            if highs[i] > highs[i-1] and highs[i] > highs[i+1] and                highs[i] > highs[i-2] and highs[i] > highs[i+2]:
-                buy_liq.append(round(float(highs[i]), 2))
-            # قاع محلي = Sell Side Liquidity
-            if lows[i] < lows[i-1] and lows[i] < lows[i+1] and                lows[i] < lows[i-2] and lows[i] < lows[i+2]:
-                sell_liq.append(round(float(lows[i]), 2))
-
-        return sorted(buy_liq)[-3:], sorted(sell_liq)[:3]
-    except:
-        return [], []
-
-
-def get_current_session():
-    """
-    Asian:  00:00 - 08:00 GMT  (ضعيف للـ scalping)
-    London: 08:00 - 16:00 GMT  (قوي جداً)
-    NY:     13:00 - 21:00 GMT  (قوي جداً)
-    Overlap: 13:00 - 16:00 GMT (الأقوى)
-    """
-    try:
-        hour = datetime.now(timezone.utc).hour
-        if 13 <= hour < 16:
-            return "OVERLAP", 100   # London + NY overlap = الأقوى
-        elif 8 <= hour < 16:
-            return "LONDON", 85
-        elif 13 <= hour < 21:
-            return "NY", 85
-        else:
-            return "ASIAN", 40      # ضعيف
-    except:
-        return "UNKNOWN", 60
-
-
-# ==================== Correlation Filter ====================
 def get_gold_btc_correlation(asset="BTC"):
     """
     يتحقق من correlation بين BTC والذهب
