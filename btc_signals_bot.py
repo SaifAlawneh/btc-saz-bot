@@ -366,9 +366,11 @@ def get_fib_targets(price, levels, extensions, direction, atr):
         tp1 = round(tp1_c[0] if tp1_c else price + 0.8*atr, 2)
         tp2_c = [v for v in fib_vals if v > tp1 + 0.3*atr]
         tp2 = round(max(tp2_c[0] if tp2_c else price + 1.8*atr, price + 1.5*atr), 2)
+        # TP3: أقصى حد 4 ATR من السعر (واقعي للـ scalp)
+        tp3_raw = round(price + 4.0*atr, 2)
         ext_v = sorted(extensions.values(), reverse=True)
-        tp3_c = [v for v in ext_v if v > tp2 + 0.5*atr]
-        tp3 = round(tp3_c[0] if tp3_c else price + 3.0*atr, 2)
+        tp3_fib = next((v for v in ext_v if tp2 + 0.3*atr < v < price + 5.0*atr), None)
+        tp3 = round(min(tp3_fib, tp3_raw) if tp3_fib else tp3_raw, 2)
     else:
         sl_fib = min([v for v in fib_vals if v > price], default=price + atr)
         sl  = round(max(sl_fib + 0.2*atr, price + 0.8*atr), 2)
@@ -376,9 +378,11 @@ def get_fib_targets(price, levels, extensions, direction, atr):
         tp1 = round(tp1_c[0] if tp1_c else price - 0.8*atr, 2)
         tp2_c = [v for v in reversed(fib_vals) if v < tp1 - 0.3*atr]
         tp2 = round(min(tp2_c[0] if tp2_c else price - 1.8*atr, price - 1.5*atr), 2)
+        # TP3: أقصى حد 4 ATR من السعر (واقعي للـ scalp)
+        tp3_raw = round(price - 4.0*atr, 2)
         ext_v = sorted(extensions.values())
-        tp3_c = [v for v in ext_v if v < tp2 - 0.5*atr]
-        tp3 = round(tp3_c[0] if tp3_c else price - 3.0*atr, 2)
+        tp3_fib = next((v for v in ext_v if price - 5.0*atr < v < tp2 - 0.3*atr), None)
+        tp3 = round(max(tp3_fib, tp3_raw) if tp3_fib else tp3_raw, 2)
     rr = round(abs(tp2 - price) / abs(sl - price), 2) if abs(sl - price) > 0 else 0
     return sl, tp1, tp2, tp3, rr
 
@@ -693,6 +697,20 @@ def full_analysis(asset="BTC", uid=0):
     fib_levels, fib_ext, swing_h, swing_l = calculate_fibonacci(df_1h)
     nearest_fib, fib_key, dist_pct = find_nearest_fib(price, fib_levels, final) if fib_levels else (price,"50.0",0)
 
+    # ✅ سعر الدخول الذكي: أقرب Fib ضمن 0.8% من السعر
+    if dist_pct <= 0.8:
+        entry_price = nearest_fib  # ادخل عند مستوى Fib
+    elif final == "BUY":
+        # BUY: ادخل عند أقرب دعم (Fib أدنى من السعر)
+        fib_vals_sorted = sorted(fib_levels.values())
+        supports = [v for v in fib_vals_sorted if v < price]
+        entry_price = round(supports[-1], 2) if supports and (price - supports[-1])/price < 0.015 else price
+    else:
+        # SELL: ادخل عند أقرب مقاومة (Fib أعلى من السعر)
+        fib_vals_sorted = sorted(fib_levels.values())
+        resistances = [v for v in fib_vals_sorted if v > price]
+        entry_price = round(resistances[0], 2) if resistances and (resistances[0] - price)/price < 0.015 else price
+
     sl, tp1, tp2, tp3, rr = get_fib_targets(price, fib_levels, fib_ext, final, atr)
 
     risk = 100 - base_conf
@@ -815,7 +833,7 @@ def full_analysis(asset="BTC", uid=0):
         "bull_obs": bull_obs, "bear_obs": bear_obs,
         "buy_liq": buy_liq, "sell_liq": sell_liq,
         "confluence_txt": conf_txt, "base_conf": base_conf,
-        "price": price, "tp1": tp1, "tp2": tp2, "tp3": tp3,
+        "price": price, "entry_price": entry_price, "tp1": tp1, "tp2": tp2, "tp3": tp3,
         "sl": sl, "rr": rr, "atr": atr,
         "risk_pct": risk, "risk_label": rl, "risk_msg": rm,
         "frame_lines": frame_lines, "rsi": main["rsi"],
@@ -851,7 +869,7 @@ def build_trade_msg(res, uid=0, auto=False):
         "╚══════════════════════════╝",
         "",
         "💵 "+t(uid,"current_price")+"   $"+"{:,.2f}".format(res["price"]),
-        "📍 "+t(uid,"entry")+"   $"+"{:,.2f}".format(res["price"]),
+        "📍 "+t(uid,"entry")+"   $"+"{:,.2f}".format(res.get("entry_price", res["price"])),
         "📐 "+t(uid,"fib_entry")+"   Fib "+res["fib_key"]+"% ($"+"{:,.2f}".format(res["nearest_fib"])+")",
         "",
         "━━━━  🎯 "+t(uid,"targets_section")+"  ━━━━",
