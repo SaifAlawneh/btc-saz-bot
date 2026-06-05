@@ -817,6 +817,16 @@ def full_analysis(asset="BTC", uid=0):
         risk_warnings.append("⚠️ RSI Divergence معاكس للاتجاه")
     elif divergence == "BULLISH" and final == "SELL":
         risk_warnings.append("⚠️ RSI Divergence معاكس للاتجاه")
+    # Counter-trend: ضيّق الأهداف
+    is_counter_trend = (final=="BUY" and weekly_trend=="BEAR") or                        (final=="SELL" and weekly_trend=="BULL")
+    if is_counter_trend:
+        risk_warnings.append("⚠️ صفقة عكس الترند الأسبوعي — خذ TP1 وTP2 فقط")
+        # TP3 = TP2 + نصف المسافة (هدف أقرب)
+        if final == "BUY":
+            tp3 = round(tp2 + abs(tp2-tp1)*0.5, 2)
+        else:
+            tp3 = round(tp2 - abs(tp1-tp2)*0.5, 2)
+
     warn_count = len(risk_warnings)
     if warn_count == 0:   overall_risk = "🟢 منخفضة"
     elif warn_count <= 2: overall_risk = "🟡 متوسطة"
@@ -881,6 +891,9 @@ def build_trade_msg(res, uid=0, auto=False):
     ]
 
     wt = res.get("weekly_trend","NEUTRAL")
+    is_counter = (res["final"]=="BUY" and wt=="BEAR") or (res["final"]=="SELL" and wt=="BULL")
+    if is_counter:
+        lines.append("  ⚠️ صفقة عكس الترند — أهداف قصيرة، SL ضيق")
     lines.append("  "+("📈" if wt=="BULL" else "📉" if wt=="BEAR" else "➡️")+" ويكلي: "+("صاعد" if wt=="BULL" else "هابط" if wt=="BEAR" else "محايد"))
 
     rg = res.get("regime","UNKNOWN")
@@ -1112,7 +1125,22 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             }
             already_open = next((tr for tr in active_trades
                 if tr["asset"] == new_trade["asset"] and tr["direction"] == new_trade["direction"]), None)
-            if already_open:
+
+            # تحقق صفقة مشابهة (دخول ضمن 1%)
+            entry_p = new_trade["entry"]
+            similar_recent = next((
+                tr for tr in active_trades
+                if tr["asset"] == new_trade["asset"] and
+                tr["direction"] == new_trade["direction"] and
+                abs(tr["entry"] - entry_p) / entry_p * 100 < 1.0
+            ), None) if not already_open else None
+
+            if similar_recent:
+                await query.message.reply_text(
+                    "⚠️ نفس الفرصة موجودة بالفعل\n"
+                    "دخول سابق: $"+"{:,.2f}".format(similar_recent["entry"])+"\n"
+                    "مشابه للسعر الحالي — لا داعي لصفقة جديدة")
+            elif already_open:
                 dir_ar = "شراء BUY" if new_trade["direction"] == "BUY" else "بيع SELL"
                 ai_sym = "₿ BTC" if new_trade["asset"] == "BTC" else "🥇 GOLD"
                 pending_trade_replace[uid] = {"new": new_trade, "old": already_open, "res": res}
@@ -1312,6 +1340,78 @@ async def auto_signals(context):
 
 # ==================== مراقبة الصفقات ====================
 async def monitor_btc(context):
+    # ✅ تحقق من فرص جديدة كل دقيقة
+    try:
+        now_ts  = datetime.now(timezone.utc).timestamp()
+        last_ts = last_signal_time.get("BTC", 0)
+        if (now_ts - last_ts) >= SPAM_COOLDOWN:
+            df_quick = get_data("BTC", days=3, interval="hourly")
+            if df_quick is not None and len(df_quick) >= 20:
+                try:
+                    df_q = calc_indicators(df_quick.tail(50).copy())
+                    last_q = df_q.iloc[-1]
+                    price_q = float(last_q["Close"])
+                    rsi_q   = safe(last_q["RSI"], 50)
+                    bb_l_q  = safe(last_q["BB_L"], price_q * 0.98)
+                    bb_u_q  = safe(last_q["BB_U"], price_q * 1.02)
+                    fib_q, _, _, _ = calculate_fibonacci(df_quick)
+
+                    # شروط الإشارة التلقائية الصارمة
+                    rsi_signal    = rsi_q < 35 or rsi_q > 65
+                    at_fib        = any(abs(price_q - v) / price_q * 100 < 0.5 for v in fib_q.values())
+                    no_open_buy   = not any(tr["asset"]=="BTC" and tr["direction"]=="BUY" for tr in active_trades)
+                    no_open_sell  = not any(tr["asset"]=="BTC" and tr["direction"]=="SELL" for tr in active_trades)
+
+                    if rsi_signal and at_fib:
+                        res = full_analysis("BTC", 0)
+                        if res and res["final"] != "NEUTRAL" and res["base_conf"] >= MIN_CONFIDENCE:
+                            # تحقق توافق 3 فريمات
+                            frame_lines = res.get("frame_lines", [])
+                            buy_frames  = sum(1 for f in frame_lines if "BUY" in f)
+                            sell_frames = sum(1 for f in frame_lines if "SELL" in f)
+                            three_frame = buy_frames == 3 or sell_frames == 3
+
+                            # تحقق ما في صفقة مفتوحة بنفس الاتجاه
+                            direction_clear = (res["final"]=="BUY" and no_open_buy) or                                              (res["final"]=="SELL" and no_open_sell)
+
+                            # تحقق ما في صفقة مشابهة في آخر ساعة
+                            entry_p = res.get("entry_price", res["price"])
+                            recent_similar = any(
+                                tr["asset"]=="BTC" and
+                                tr["direction"]==res["final"] and
+                                abs(tr["entry"] - entry_p) / entry_p * 100 < 1.0
+                                for tr in active_trades
+                            )
+
+                            if three_frame and direction_clear and not recent_similar:
+                                global trade_counter
+                                last_signal_time["BTC"] = now_ts
+                                trade_counter += 1
+                                res["id"] = trade_counter
+                                msg = build_trade_msg(res, 0, auto=True)
+                                # بعث للقناة والمستخدمين مباشرة
+                                await context.bot.send_message(chat_id=CHANNEL_ID, text=msg)
+                                for user_id in ALLOWED_USERS:
+                                    try:
+                                        await context.bot.send_message(chat_id=user_id, text="🔔 إشارة جديدة!\n\n"+msg)
+                                    except: pass
+                                new_trade = {
+                                    "id": trade_counter, "asset": "BTC",
+                                    "direction": res["final"], "entry": entry_p,
+                                    "sl": res["sl"], "tp1": res["tp1"], "tp2": res["tp2"], "tp3": res["tp3"],
+                                    "atr": res["atr"], "tp1_hit": False, "tp2_hit": False,
+                                    "orig_sl": res["sl"], "entry_fib": entry_p,
+                                    "status": "pending" if abs(entry_p - res["price"])/res["price"]*100 > 0.3 else "active",
+                                    "chat_id": CHANNEL_ID, "open_time": gmt_now(),
+                                }
+                                active_trades.append(new_trade)
+                                active_btc_trade["data"] = new_trade
+                                save_trades()
+                except Exception as e:
+                    logger.warning("Auto signal check: " + str(e))
+    except Exception as e:
+        logger.error("Auto signal outer: " + str(e))
+
     if not active_trades:
         return
     try:
@@ -1572,7 +1672,6 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.job_queue.run_repeating(auto_signals,      interval=AUTO_INTERVAL_MIN*60, first=30)
     app.job_queue.run_repeating(monitor_btc,       interval=60,                   first=30)
     app.job_queue.run_repeating(send_smart_alerts, interval=45*60,                first=120)
     app.job_queue.run_repeating(send_news,         interval=4*60*60,              first=300)
