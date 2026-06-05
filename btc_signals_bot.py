@@ -14,14 +14,13 @@ TWELVEDATA_KEY = os.environ.get("TWELVEDATA_KEY", "")
 NEWS_API_KEY   = os.environ.get("NEWS_API_KEY", "cdf2a61f2cbe4540a41456bc4bd3a40e")
 AUTO_INTERVAL_MIN = 30
 MONITOR_MIN       = 5
-MIN_CONFIDENCE    = 75
+MIN_CONFIDENCE    = 68
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 user_languages   = {}
 active_btc_trade = {}
-pending_trade_replace = {}  # ✅ صفقات بانتظار تأكيد الاستبدال
 active_trades    = []
 trade_counter    = 0
 last_signal_time = {}
@@ -904,11 +903,9 @@ def full_analysis(asset="BTC", uid=0):
         return None
 
     if buy_c == 3:   final="BUY";  conf_txt=t(uid,"full_confluence");    frames_conf=85
+    elif buy_c == 2: final="BUY";  conf_txt=t(uid,"partial_confluence"); frames_conf=65
     elif sel_c == 3: final="SELL"; conf_txt=t(uid,"full_confluence");    frames_conf=85
-    elif buy_c == 2 or sel_c == 2:
-        final = "BUY" if buy_c == 2 else "SELL"
-        conf_txt = t(uid,"partial_confluence")
-        frames_conf = 65
+    elif sel_c == 2: final="SELL"; conf_txt=t(uid,"partial_confluence"); frames_conf=65
     else:
         main2 = results.get("1h") or list(results.values())[0]
         fib_l2, fib_e2, sh2, sl2 = calculate_fibonacci(df_1h) if len(df_1h)>=20 else ({},{},0,0)
@@ -975,8 +972,7 @@ def full_analysis(asset="BTC", uid=0):
         key_fibs.append("Fib " + pct + "%  $" + "{:,.2f}".format(val))
 
     regime, regime_strength = detect_market_regime(df_1h)
-    # في VOLATILE فقط نشترط 3 فريمات، RANGING مقبول بفريمين
-    if regime == "VOLATILE" and buy_c < 3 and sel_c < 3:
+    if regime in ("RANGING", "VOLATILE") and buy_c < 3 and sel_c < 3:
         return None
 
     divergence = "NONE"
@@ -1047,8 +1043,6 @@ def full_analysis(asset="BTC", uid=0):
     rr_check = abs(tp2 - price) / abs(sl - price) if abs(sl - price) > 0 else 0
     if rr_check < 1.5: return None
 
-    # Volume filter removed - too aggressive
-
     return {
         "final": final, "asset": asset, "weekly_trend": weekly_trend,
         "regime": regime, "regime_strength": regime_strength,
@@ -1093,7 +1087,7 @@ def build_trade_msg(res, uid=0, auto=False):
         "╚══════════════════════════╝",
         "",
         "💵 السعر الحالي   $" + "{:,.2f}".format(res['price']),
-        "📍 " + t(uid,'entry') + "   $" + "{:,.2f}".format(res['price']),
+        "📍 " + t(uid,'entry') + "   $" + "{:,.2f}".format(res.get('entry_low', res['price'])) + " — $" + "{:,.2f}".format(res.get('entry_high', res['price'])) + "  ↔️",
         "📐 " + t(uid,'fib_entry') + "   Fib " + res['fib_key'] + "% ($" + "{:,.2f}".format(res['nearest_fib']) + ")",
         "",
         "━━━━  🎯 " + t(uid,'targets_section') + "  ━━━━",
@@ -1313,31 +1307,10 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 "chat_id": query.message.chat_id,
                 "open_time": gmt_now(),
             }
-            # ✅ منع التكرار مع خيار للمستخدم
-            already_open = next((
-                tr for tr in active_trades
-                if tr['asset'] == new_trade['asset'] and tr['direction'] == new_trade['direction']
-            ), None)
-            if already_open:
-                dir_ar = "شراء BUY" if new_trade['direction'] == "BUY" else "بيع SELL"
-                ai_sym = "₿ BTC" if new_trade['asset'] == "BTC" else "🥇 GOLD"
-                # احفظ الصفقة الجديدة مؤقتاً
-                pending_trade_replace[uid] = {"new": new_trade, "old": already_open, "res": res}
-                confirm_kb = InlineKeyboardMarkup([[
-                    InlineKeyboardButton("✅ نعم، افتح جديدة", callback_data="confirm_replace_yes"),
-                    InlineKeyboardButton("❌ لا، خلي القديمة", callback_data="confirm_replace_no"),
-                ]])
-                await query.message.reply_text(
-                    "⚠️ في صفقة مفتوحة بالفعل\n"
-                    + ai_sym + " — " + dir_ar + "\n\n"
-                    + "تبي تغلق القديمة وتفتح صفقة جديدة؟",
-                    reply_markup=confirm_kb
-                )
-            else:
-                active_trades.append(new_trade)
-                if res['asset'] == "BTC":
-                    active_btc_trade['data'] = new_trade
-                save_trades()
+            active_trades.append(new_trade)
+            if res['asset'] == "BTC":
+                active_btc_trade['data'] = new_trade
+            save_trades()
         except Exception as e:
             logger.error("Trade handler error: " + str(e))
             await query.message.reply_text(t(uid,"error") + str(e))
@@ -1353,30 +1326,6 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error("Analysis handler error: " + str(e))
             await query.message.reply_text(t(uid,"error") + str(e))
-
-    elif data == "confirm_replace_yes":
-        pending = pending_trade_replace.pop(uid, None)
-        if pending:
-            old_tr = pending["old"]
-            if old_tr in active_trades:
-                active_trades.remove(old_tr)
-            new_tr = pending["new"]
-            active_trades.append(new_tr)
-            if new_tr["asset"] == "BTC":
-                active_btc_trade["data"] = new_tr
-            save_trades()
-            # ✅ عرض الصفقة المحفوظة مسبقاً من pending
-            res_stored = pending.get("res")
-            if res_stored:
-                await query.message.reply_text(build_trade_msg(res_stored, uid))
-            else:
-                await query.message.reply_text("✅ تم فتح الصفقة الجديدة #" + str(new_tr["id"]))
-        else:
-            await query.message.reply_text("⚠️ انتهت صلاحية الطلب، حاول مجدداً")
-
-    elif data == "confirm_replace_no":
-        pending_trade_replace.pop(uid, None)
-        await query.message.reply_text("👍 تم الإبقاء على الصفقة القديمة")
 
     elif data == 'prices':
         try:
@@ -1487,15 +1436,10 @@ async def auto_signals(context):
                     "chat_id": CHANNEL_ID,
                     "open_time": gmt_now(),
                 }
-                already_open = any(
-                    tr['asset'] == new_trade['asset'] and tr['direction'] == new_trade['direction']
-                    for tr in active_trades
-                )
-                if not already_open:
-                    active_trades.append(new_trade)
-                    if asset == "BTC":
-                        active_btc_trade['data'] = new_trade
-                    save_trades()
+                active_trades.append(new_trade)
+                if asset == "BTC":
+                    active_btc_trade['data'] = new_trade
+                save_trades()
     except Exception as e:
         logger.error("❌ Auto: " + str(e))
 
