@@ -118,7 +118,7 @@ TEXTS = {
         "footer": "⚠️ للأغراض التعليمية فقط",
         "updated_gmt": "آخر تحديث (GMT)",
         "update_tp1_hit": "✅ الهدف الأول تم! تم نقل SL للدخول",
-        "update_tp2_hit": "✅✅ الهدف الثاني تم! تم نقل SL للـ TP1",
+        "update_tp2_hit": "✅✅ الهدف الثاني تم! تم نقل SL للـ TP2",
         "update_sl_moved": "📊 تم تحريك وقف الخسارة للأمان",
         "current_price": "السعر الحالي",
         "trend_bull": "📈 الاتجاه: صاعد", "trend_bear": "📉 الاتجاه: هابط",
@@ -184,7 +184,7 @@ TEXTS = {
         "footer": "⚠️ For educational purposes only",
         "updated_gmt": "Last update (GMT)",
         "update_tp1_hit": "✅ TP1 reached! SL moved to entry",
-        "update_tp2_hit": "✅✅ TP2 reached! SL moved to TP1",
+        "update_tp2_hit": "✅✅ TP2 reached! SL moved to TP2",
         "update_sl_moved": "📊 Stop Loss moved to safety",
         "current_price": "Current Price",
         "trend_bull": "📈 Trend: Bullish", "trend_bear": "📉 Trend: Bearish",
@@ -1103,6 +1103,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 "direction": res["final"], "entry": res["price"],
                 "sl": res["sl"], "tp1": res["tp1"], "tp2": res["tp2"], "tp3": res["tp3"],
                 "atr": res["atr"], "tp1_hit": False, "tp2_hit": False,
+                "orig_sl": res["sl"],
                 "chat_id": query.message.chat_id, "open_time": gmt_now(),
             }
             already_open = next((tr for tr in active_trades
@@ -1239,6 +1240,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             "━━━━  📈 الصفقات المغلقة  ━━━━",
             "  إجمالي:      "+str(total_closed),
             "  🏆 رابحة:    "+str(wins),
+            "  🟡 تعادل:    "+str(stats.get("breakeven", 0)),
             "  🛑 خاسرة:    "+str(losses), "",
             "  🎯 نسبة النجاح",
             "  "+bar_w+"  "+str(win_rate)+"%",
@@ -1329,11 +1331,20 @@ async def monitor_btc(context):
                         trade["tp1_hit"] = True; trade["sl"] = trade["entry"]
                         update_msg = "✅ #"+str(trade_id)+" "+t(uid,"update_tp1_hit")
                     elif trade["tp1_hit"] and not trade["tp2_hit"] and current >= tp2:
-                        trade["tp2_hit"] = True; trade["sl"] = tp1
+                        trade["tp2_hit"] = True; trade["sl"] = tp2
                         update_msg = "✅✅ #"+str(trade_id)+" "+t(uid,"update_tp2_hit")
                     elif current <= trade["sl"]:
-                        update_msg = "🛑 #"+str(trade_id)+" وقف الخسارة تم! صفقة مغلقة"
-                        record_trade_result(trade_id, "loss"); closed = True
+                        if trade.get("tp2_hit"):
+                            rr_partial = round(abs(tp2 - trade["entry"]) / abs(trade["entry"] - trade.get("orig_sl", trade["sl"])), 2) if abs(trade["entry"] - trade.get("orig_sl", trade["sl"])) > 0 else 1.0
+                            update_msg = "✅ #"+str(trade_id)+" SL عند TP2 — ربح جزئي محقق 🎉"
+                            record_trade_result(trade_id, "win", rr_partial)
+                        elif trade.get("tp1_hit"):
+                            update_msg = "🟡 #"+str(trade_id)+" SL عند الدخول — تعادل (Break Even)"
+                            record_trade_result(trade_id, "breakeven")
+                        else:
+                            update_msg = "🛑 #"+str(trade_id)+" وقف الخسارة تم! صفقة مغلقة"
+                            record_trade_result(trade_id, "loss")
+                        closed = True
                     elif trade["tp1_hit"] and current > tp1 + 0.5*atr:
                         new_sl = round(current - 0.8*atr, 2)
                         if new_sl > trade["sl"]:
@@ -1347,11 +1358,20 @@ async def monitor_btc(context):
                         trade["tp1_hit"] = True; trade["sl"] = trade["entry"]
                         update_msg = "✅ #"+str(trade_id)+" "+t(uid,"update_tp1_hit")
                     elif trade["tp1_hit"] and not trade["tp2_hit"] and current <= tp2:
-                        trade["tp2_hit"] = True; trade["sl"] = tp1
+                        trade["tp2_hit"] = True; trade["sl"] = tp2
                         update_msg = "✅✅ #"+str(trade_id)+" "+t(uid,"update_tp2_hit")
                     elif current >= trade["sl"]:
-                        update_msg = "🛑 #"+str(trade_id)+" وقف الخسارة تم! صفقة مغلقة"
-                        record_trade_result(trade_id, "loss"); closed = True
+                        if trade.get("tp2_hit"):
+                            rr_partial = round(abs(tp2 - trade["entry"]) / abs(trade["entry"] - trade.get("orig_sl", trade["sl"])), 2) if abs(trade["entry"] - trade.get("orig_sl", trade["sl"])) > 0 else 1.0
+                            update_msg = "✅ #"+str(trade_id)+" SL عند TP2 — ربح جزئي محقق 🎉"
+                            record_trade_result(trade_id, "win", rr_partial)
+                        elif trade.get("tp1_hit"):
+                            update_msg = "🟡 #"+str(trade_id)+" SL عند الدخول — تعادل (Break Even)"
+                            record_trade_result(trade_id, "breakeven")
+                        else:
+                            update_msg = "🛑 #"+str(trade_id)+" وقف الخسارة تم! صفقة مغلقة"
+                            record_trade_result(trade_id, "loss")
+                        closed = True
                     elif trade["tp1_hit"] and current < tp1 - 0.5*atr:
                         new_sl = round(current + 0.8*atr, 2)
                         if new_sl < trade["sl"]:
@@ -1449,6 +1469,8 @@ def record_trade_result(trade_id, result, rr=0):
     stats["total"] += 1
     if result == "win":
         stats["wins"] += 1; stats["total_rr"] += rr
+    elif result == "breakeven":
+        stats["breakeven"] = stats.get("breakeven", 0) + 1
     else:
         stats["losses"] += 1
     stats["trades"].append({"id":trade_id,"result":result,"rr":rr,"time":gmt_now()})
