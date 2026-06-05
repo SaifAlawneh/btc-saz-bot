@@ -859,6 +859,294 @@ def get_current_session():
         return "UNKNOWN", 60
 
 
+
+# ==================== Full Analysis ====================
+def full_analysis(asset="BTC", uid=0):
+    try:
+        df_1h = get_data(asset, days=14,  interval="hourly")
+        df_4h = get_data(asset, days=30,  interval="hourly")
+        df_1d = get_data(asset, days=90,  interval="daily")
+        df_1w = get_data(asset, days=365, interval="daily")
+    except Exception as e:
+        logger.error("Data fetch error: " + str(e))
+        return None
+
+    if df_1h is None or len(df_1h) < 20:
+        logger.warning("Insufficient 1H data for " + asset)
+        return None
+
+    session, session_score = get_current_session()
+
+    if df_4h is not None and len(df_4h) > 0:
+        try:
+            df_4h = df_4h.resample('4h').agg({
+                'Open':'first','High':'max','Low':'min','Close':'last','Volume':'sum'}).dropna()
+        except:
+            df_4h = None
+
+    frames = {"1h": df_1h, "4h": df_4h, "1d": df_1d}
+    results = {}
+    for label, df in frames.items():
+        if df is not None and len(df) >= 20:
+            try:
+                results[label] = analyze_frame(df, uid)
+            except Exception as e:
+                logger.warning("Frame " + label + " error: " + str(e))
+
+    if len(results) < 2:
+        return None
+
+    buy_c = sum(1 for r in results.values() if r['direction'] == "BUY")
+    sel_c = sum(1 for r in results.values() if r['direction'] == "SELL")
+
+    if session == "ASIAN" and buy_c < 3 and sel_c < 3:
+        return None
+
+    if buy_c == 3:   final="BUY";  conf_txt=t(uid,"full_confluence");    frames_conf=85
+    elif buy_c == 2: final="BUY";  conf_txt=t(uid,"partial_confluence"); frames_conf=65
+    elif sel_c == 3: final="SELL"; conf_txt=t(uid,"full_confluence");    frames_conf=85
+    elif sel_c == 2: final="SELL"; conf_txt=t(uid,"partial_confluence"); frames_conf=65
+    else:
+        main2 = results.get("1h") or list(results.values())[0]
+        fib_l2, fib_e2, sh2, sl2 = calculate_fibonacci(df_1h) if len(df_1h)>=20 else ({},{},0,0)
+        nf2, fk2, dp2 = find_nearest_fib(main2['price'], fib_l2, "NEUTRAL") if fib_l2 else (main2['price'],"50.0",0)
+        kf2 = ["Fib "+k+"%  $"+"{:,.2f}".format(v) for k,v in sorted(fib_l2.items(), key=lambda x: float(x[0]))][:5]
+        fl2 = []
+        icons2 = {"1h":t(uid,"frame_1h"),"4h":t(uid,"frame_4h"),"1d":t(uid,"frame_1d")}
+        for k,r in results.items():
+            icon = "🟢" if r['direction']=="BUY" else "🔴"
+            fl2.append(icon+" "+icons2.get(k,"")+": "+r['direction']+" ("+str(r['conf'])+"%)")
+        return {"final":"NEUTRAL","asset":asset,"confluence_txt":t(uid,"no_confluence"),"base_conf":0,
+                "price":main2['price'],"tp1":0,"tp2":0,"tp3":0,"sl":0,"rr":0,"atr":main2['atr'],
+                "risk_pct":50,"risk_label":t(uid,"risk_med"),"risk_msg":t(uid,"risk_med_msg"),
+                "frame_lines":fl2,"ind_details":main2['details'],
+                "rsi":main2['rsi'],"support":main2['support'],"resistance":main2['resistance'],
+                "macd_bull":main2['macd_bull'],"ema_bull":main2['ema_bull'],
+                "ema_bear":main2['ema_bear'],"bb_zone":main2['bb_zone'],
+                "fib_levels":fib_l2,"fib_ext":fib_e2,"key_fibs":kf2,
+                "nearest_fib":nf2,"fib_key":fk2,"swing_h":sh2,"swing_l":sl2,
+                "weekly_trend":"NEUTRAL","regime":"UNKNOWN","regime_strength":0,"monthly_bias":"NEUTRAL",
+                "divergence":"NONE","session":session,"session_score":session_score,
+                "gold_corr":"NEUTRAL","bull_obs":[],"bear_obs":[],"buy_liq":[],"sell_liq":[],
+                "entry_low":main2['price'],"entry_high":main2['price'],
+                "leverage_ar":"","leverage_en":"","tf_ar":"","tf_en":"","hold_ar":"","hold_en":""}
+
+    main  = results.get("1h") or list(results.values())[0]
+    price = main['price']
+    atr   = main['atr']
+    base_conf = max(50, min(round(frames_conf * 0.6 + main['conf'] * 0.4), 89))
+
+    if len(df_1h) >= 20:
+        fib_levels, fib_ext, swing_h, swing_l = calculate_fibonacci(df_1h)
+    else:
+        fib_levels, fib_ext, swing_h, swing_l = {}, {}, price*1.02, price*0.98
+
+    nearest_fib, fib_key, dist_pct = find_nearest_fib(price, fib_levels, final) if fib_levels else (price,"50.0",0)
+
+    entry_buffer = round(max(price * 0.003, atr * 0.2), 2)
+    if final == 'BUY':
+        entry_low  = round(price - entry_buffer, 2)
+        entry_high = round(price + entry_buffer * 0.5, 2)
+    else:
+        entry_low  = round(price - entry_buffer * 0.5, 2)
+        entry_high = round(price + entry_buffer, 2)
+
+    sl, tp1, tp2, tp3, rr = get_fib_targets(price, fib_levels, fib_ext, final, atr)
+
+    risk = 100 - base_conf
+    if main['rsi'] < 25 or main['rsi'] > 75: risk += 10
+    if dist_pct > 2: risk += 5
+    risk = min(risk, 99)
+    if risk < 30:   rl=t(uid,"risk_low");  rm=t(uid,"risk_low_msg")
+    elif risk < 55: rl=t(uid,"risk_med");  rm=t(uid,"risk_med_msg")
+    else:           rl=t(uid,"risk_high"); rm=t(uid,"risk_high_msg")
+
+    frame_lines = []
+    icons = {"1h": t(uid,"frame_1h"), "4h": t(uid,"frame_4h"), "1d": t(uid,"frame_1d")}
+    for k, r in results.items():
+        icon = "🟢" if r['direction'] == "BUY" else "🔴"
+        frame_lines.append(icon + " " + icons.get(k,'') + ": " + r['direction'] + " (" + str(r['conf']) + "%)")
+
+    key_fibs = []
+    for pct, val in sorted(fib_levels.items(), key=lambda x: float(x[0])):
+        key_fibs.append("Fib " + pct + "%  $" + "{:,.2f}".format(val))
+
+    regime, regime_strength = detect_market_regime(df_1h)
+    if regime in ("RANGING", "VOLATILE") and buy_c < 3 and sel_c < 3:
+        return None
+
+    divergence = "NONE"
+    try:
+        df_div = calc_indicators(df_1h.tail(30).copy())
+        divergence = detect_rsi_divergence(df_div)
+        if divergence == "BEARISH" and final == "SELL": base_conf = min(base_conf + 8, 89)
+        elif divergence == "BULLISH" and final == "BUY": base_conf = min(base_conf + 8, 89)
+        elif divergence == "BEARISH" and final == "BUY": base_conf = max(base_conf - 10, 50)
+        elif divergence == "BULLISH" and final == "SELL": base_conf = max(base_conf - 10, 50)
+    except: pass
+
+    bull_obs, bear_obs = find_order_blocks(df_1h)
+    buy_liq, sell_liq  = find_liquidity_zones(df_1h)
+
+    try:
+        if final == "SELL" and buy_liq:
+            liq_above = [lv for lv in buy_liq if lv > price]
+            if liq_above:
+                liq_sl = round(min(liq_above) * 1.002, 2)
+                sl = round(min(sl, liq_sl), 2) if liq_sl < sl * 1.01 else sl
+        elif final == "BUY" and sell_liq:
+            liq_below = [lv for lv in sell_liq if lv < price]
+            if liq_below:
+                liq_sl = round(max(liq_below) * 0.998, 2)
+                sl = round(max(sl, liq_sl), 2) if liq_sl > sl * 0.99 else sl
+        rr = round(abs(tp2 - price) / abs(sl - price), 2) if abs(sl - price) > 0 else 0
+        if rr < 1.5: return None
+    except: pass
+
+    monthly_bias = get_monthly_bias(df_1d)
+    if monthly_bias == "BULL" and final == "SELL" and sel_c < 3: return None
+    if monthly_bias == "BEAR" and final == "BUY"  and buy_c < 3: return None
+
+    weekly_trend = "NEUTRAL"
+    try:
+        if df_1w is not None and len(df_1w) >= 20:
+            df_1w_c = calc_indicators(df_1w.tail(200).copy())
+            last_w  = df_1w_c.iloc[-1]
+            w_price = float(last_w["Close"])
+            w_ema20 = float(last_w.get("EMA21", w_price))
+            w_ema50 = float(last_w.get("EMA50", w_price))
+            if not pd.isna(w_ema20) and not pd.isna(w_ema50):
+                if w_price > w_ema20 and w_ema20 > w_ema50: weekly_trend = "BULL"
+                elif w_price < w_ema20 and w_ema20 < w_ema50: weekly_trend = "BEAR"
+                if weekly_trend == "BULL" and final == "SELL" and sel_c < 3: return None
+                if weekly_trend == "BEAR" and final == "BUY"  and buy_c < 3: return None
+    except Exception as e:
+        logger.warning("Weekly filter error: " + str(e))
+
+    try:
+        df_1h_c = calc_indicators(df_1h.tail(210).copy())
+        ema200_val = float(df_1h_c.iloc[-1].get("EMA200", float('nan')))
+        if not pd.isna(ema200_val):
+            if final == "BUY"  and price < ema200_val and buy_c < 3: return None
+            if final == "SELL" and price > ema200_val and sel_c < 3: return None
+    except: pass
+
+    if final == "BUY":
+        if not (sl < price < tp1 < tp2 < tp3):
+            sl=round(price-1.0*atr,2); tp1=round(price+1.0*atr,2)
+            tp2=round(price+2.0*atr,2); tp3=round(price+3.5*atr,2)
+    else:
+        if not (tp3 < tp2 < tp1 < price < sl):
+            sl=round(price+1.0*atr,2); tp1=round(price-1.0*atr,2)
+            tp2=round(price-2.0*atr,2); tp3=round(price-3.5*atr,2)
+
+    rr_check = abs(tp2 - price) / abs(sl - price) if abs(sl - price) > 0 else 0
+    if rr_check < 1.5: return None
+
+    return {
+        "final": final, "asset": asset, "weekly_trend": weekly_trend,
+        "regime": regime, "regime_strength": regime_strength,
+        "monthly_bias": monthly_bias, "divergence": divergence,
+        "session": session, "session_score": session_score, "gold_corr": "NEUTRAL",
+        "bull_obs": bull_obs, "bear_obs": bear_obs,
+        "buy_liq": buy_liq, "sell_liq": sell_liq,
+        "confluence_txt": conf_txt, "base_conf": base_conf,
+        "price": price, "entry_low": entry_low, "entry_high": entry_high,
+        "tp1": tp1, "tp2": tp2, "tp3": tp3, "sl": sl, "rr": rr, "atr": atr,
+        "risk_pct": risk, "risk_label": rl, "risk_msg": rm,
+        "frame_lines": frame_lines, "ind_details": main['ind_details'] if 'ind_details' in main else [],
+        "rsi": main['rsi'], "support": main['support'], "resistance": main['resistance'],
+        "macd_bull": main['macd_bull'], "ema_bull": main['ema_bull'],
+        "ema_bear": main['ema_bear'], "bb_zone": main['bb_zone'],
+        "fib_levels": fib_levels, "fib_ext": fib_ext, "key_fibs": key_fibs[:5],
+        "nearest_fib": nearest_fib, "fib_key": fib_key,
+        "swing_h": swing_h, "swing_l": swing_l,
+        "leverage_ar": "10x — 15x\n⚠️ لا تتجاوز 15x للمبتدئين",
+        "leverage_en": "10x — 15x\n⚠️ Max 15x for beginners",
+        "tf_ar": "1 ساعة", "tf_en": "1 Hour",
+        "hold_ar": "2 — 8 ساعات", "hold_en": "2 — 8 Hours",
+    }
+
+
+# ==================== بناء رسالة الصفقة ====================
+def build_trade_msg(res, uid=0, auto=False):
+    lang    = user_languages.get(uid, "ar")
+    ai      = "₿" if res['asset'] == "BTC" else "🥇"
+    an      = "BTC/USD" if res['asset'] == "BTC" else "XAU/USD"
+    is_sell = res['final'] == "SELL"
+    dir_emoji = "🔴" if is_sell else "🟢"
+    dir_txt   = t(uid,"sell") if is_sell else t(uid,"buy")
+    header    = t(uid,"auto_header") if auto else t(uid,"trade_header")
+    trade_num = res.get("id", "")
+    trade_num_str = "  #" + str(trade_num) if trade_num else ""
+
+    lines = [
+        "╔══════════════════════════╗",
+        "  " + ai + " " + an + "  " + dir_emoji + "  " + dir_txt + trade_num_str,
+        "  ⚡ " + header,
+        "╚══════════════════════════╝",
+        "",
+        "💵 السعر الحالي   $" + "{:,.2f}".format(res['price']),
+        "📍 " + t(uid,'entry') + "   $" + "{:,.2f}".format(res.get('entry_low', res['price'])) + " — $" + "{:,.2f}".format(res.get('entry_high', res['price'])) + "  ↔️",
+        "📐 " + t(uid,'fib_entry') + "   Fib " + res['fib_key'] + "% ($" + "{:,.2f}".format(res['nearest_fib']) + ")",
+        "",
+        "━━━━  🎯 " + t(uid,'targets_section') + "  ━━━━",
+        "  TP1  ›  $" + "{:,.2f}".format(res['tp1']),
+        "  TP2  ›  $" + "{:,.2f}".format(res['tp2']),
+        "  TP3  ›  $" + "{:,.2f}".format(res['tp3']),
+        "  🛑 " + t(uid,'sl') + "   ›  $" + "{:,.2f}".format(res['sl']),
+        "  ⚖️  " + t(uid,'rr') + ":  1:" + str(res['rr']),
+        "",
+        "━━━━  🔗 " + t(uid,'confluence') + "  ━━━━",
+    ]
+
+    wt = res.get("weekly_trend", "NEUTRAL")
+    wt_emoji = "📈" if wt=="BULL" else "📉" if wt=="BEAR" else "➡️"
+    wt_txt   = "صاعد" if wt=="BULL" else "هابط" if wt=="BEAR" else "محايد"
+    lines.append("  " + wt_emoji + " ويكلي: " + wt_txt)
+
+    rg = res.get("regime", "UNKNOWN")
+    rg_map = {"TRENDING_UP":"📈 ترند صاعد","TRENDING_DOWN":"📉 ترند هابط",
+              "RANGING":"↔️ سوق جانبي","VOLATILE":"⚡ تقلب عالي","UNKNOWN":"❓"}
+    lines.append("  " + rg_map.get(rg, rg))
+
+    mb = res.get("monthly_bias", "NEUTRAL")
+    mb_txt = "📈 شهري: صاعد" if mb=="BULL" else "📉 شهري: هابط" if mb=="BEAR" else "➡️ شهري: محايد"
+    lines.append("  " + mb_txt)
+
+    div = res.get("divergence", "NONE")
+    if div == "BEARISH": lines.append("  📉 RSI Divergence هابط ⚠️")
+    elif div == "BULLISH": lines.append("  📈 RSI Divergence صاعد ✅")
+
+    obs = res.get("bear_obs" if is_sell else "bull_obs", [])
+    if obs:
+        ob = obs[-1]
+        ob_label = "🔴 سبب الدخول: منطقة بيع قوية" if is_sell else "🟢 سبب الدخول: منطقة شراء قوية"
+        lines.append("  " + ob_label)
+        lines.append("     $" + "{:,.0f}".format(ob["low"]) + " — $" + "{:,.0f}".format(ob["high"]))
+
+    liq = res.get("sell_liq" if is_sell else "buy_liq", [])
+    if liq:
+        lines.append("  🎯 $" + "{:,.0f}".format(liq[0]) + " — منطقة سيولة")
+        lines.append("     ⚠️ قد ينعكس السوق عندها")
+
+    for fl in res['frame_lines']:
+        lines.append("  " + fl)
+    lines.append("  " + res['confluence_txt'])
+
+    lines += [
+        "",
+        "━━━━  📡 مناطق مهمة  ━━━━",
+        "  🟢 دعم:       $" + "{:,.2f}".format(res['support']),
+        "  🔴 مقاومة:   $" + "{:,.2f}".format(res['resistance']),
+        "",
+        "━━━━━━━━━━━━━━━━━━━━━━━━",
+        "🕐 " + t(uid,'updated_gmt') + ":  " + gmt_now(),
+        t(uid,'footer'),
+    ]
+    return "\n".join(lines)
+
+
 def build_update_msg(trade, current_price, update_type, uid=0):
     dir_txt = t(uid,"buy") if trade['direction'] == "BUY" else t(uid,"sell")
     lines = [
