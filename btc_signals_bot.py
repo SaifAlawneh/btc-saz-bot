@@ -1025,10 +1025,11 @@ def lang_keyboard():
     ]])
 
 def confirm_keyboard():
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ نعم، افتح جديدة", callback_data="confirm_replace_yes"),
-        InlineKeyboardButton("❌ لا، خلي القديمة", callback_data="confirm_replace_no"),
-    ]])
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ أغلق القديمة وافتح جديدة", callback_data="confirm_replace_yes")],
+        [InlineKeyboardButton("➕ خلي القديمة وافتح جديدة أيضاً", callback_data="confirm_add_new")],
+        [InlineKeyboardButton("❌ خلي القديمة فقط", callback_data="confirm_replace_no")],
+    ])
 
 
 # ==================== هاندلرز ====================
@@ -1137,6 +1138,19 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             save_trades()
             # ✅ عرض الصفقة المحفوظة مباشرة بدون تحليل جديد
             await query.message.reply_text(build_trade_msg(res_old, uid))
+        else:
+            await query.message.reply_text("⚠️ انتهت صلاحية الطلب، اطلب صفقة جديدة")
+
+    elif data == "confirm_add_new":
+        pending = pending_trade_replace.pop(uid, None)
+        if pending:
+            new_tr  = pending["new"]
+            res_stored = pending["res"]
+            active_trades.append(new_tr)
+            if new_tr["asset"] == "BTC":
+                active_btc_trade["data"] = new_tr
+            save_trades()
+            await query.message.reply_text(build_trade_msg(res_stored, uid))
         else:
             await query.message.reply_text("⚠️ انتهت صلاحية الطلب، اطلب صفقة جديدة")
 
