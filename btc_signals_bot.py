@@ -1126,20 +1126,20 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             already_open = next((tr for tr in active_trades
                 if tr["asset"] == new_trade["asset"] and tr["direction"] == new_trade["direction"]), None)
 
-            # تحقق صفقة مشابهة (دخول ضمن 1%)
+            # تحقق صفقة مشابهة (دخول ضمن 0.5%) — حتى لو already_open
             entry_p = new_trade["entry"]
             similar_recent = next((
                 tr for tr in active_trades
                 if tr["asset"] == new_trade["asset"] and
                 tr["direction"] == new_trade["direction"] and
-                abs(tr["entry"] - entry_p) / entry_p * 100 < 1.0
-            ), None) if not already_open else None
+                abs(tr["entry"] - entry_p) / entry_p * 100 < 0.5
+            ), None)
 
             if similar_recent:
                 await query.message.reply_text(
                     "⚠️ نفس الفرصة موجودة بالفعل\n"
                     "دخول سابق: $"+"{:,.2f}".format(similar_recent["entry"])+"\n"
-                    "مشابه للسعر الحالي — لا داعي لصفقة جديدة")
+                    "الفرق أقل من 0.5% — لا داعي لصفقة جديدة")
             elif already_open:
                 dir_ar = "شراء BUY" if new_trade["direction"] == "BUY" else "بيع SELL"
                 ai_sym = "₿ BTC" if new_trade["asset"] == "BTC" else "🥇 GOLD"
