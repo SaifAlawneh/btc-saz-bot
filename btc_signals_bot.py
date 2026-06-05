@@ -1077,6 +1077,10 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
         asset = data.split("_")[1]
         await query.message.reply_text(t(uid,"loading_trade"))
         try:
+            # ✅ مسح الكاش عشان يجيب بيانات محدثة عند كل طلب يدوي
+            keys_to_clear = [k for k in _cache if k.startswith(asset)]
+            for k in keys_to_clear:
+                _cache.pop(k, None)
             res = full_analysis(asset, uid)
             if not res:
                 await query.message.reply_text("⚪ البيانات غير متوفرة الآن\nحاول بعد دقيقتين 🕐"); return
@@ -1145,6 +1149,10 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
         asset = data.split("_")[1]
         await query.message.reply_text(t(uid,"loading_analysis"))
         try:
+            # ✅ مسح الكاش عشان يجيب بيانات محدثة
+            keys_to_clear = [k for k in _cache if k.startswith(asset)]
+            for k in keys_to_clear:
+                _cache.pop(k, None)
             res = full_analysis(asset, uid)
             if not res:
                 await query.message.reply_text("⚪ الفلاتر منعت التحليل أو البيانات غير متوفرة\n\nحاول بعد دقيقتين 🕐"); return
