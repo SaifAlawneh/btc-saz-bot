@@ -1544,7 +1544,8 @@ async def monitor_btc(context):
                         trade["tp1_hit"] = True; trade["sl"] = trade["entry"]
                         update_msg = "✅ #"+str(trade_id)+" "+t(uid,"update_tp1_hit")
                     elif trade["tp1_hit"] and not trade["tp2_hit"] and current >= tp2:
-                        trade["tp2_hit"] = True; trade["sl"] = tp2
+                        trade["tp2_hit"] = True
+                        trade["sl"] = round(tp2 - 0.25 * abs(tp1 - tp2), 2)
                         update_msg = "✅✅ #"+str(trade_id)+" "+t(uid,"update_tp2_hit")
                     elif current <= trade["sl"]:
                         if trade.get("tp2_hit"):
@@ -1571,7 +1572,8 @@ async def monitor_btc(context):
                         trade["tp1_hit"] = True; trade["sl"] = trade["entry"]
                         update_msg = "✅ #"+str(trade_id)+" "+t(uid,"update_tp1_hit")
                     elif trade["tp1_hit"] and not trade["tp2_hit"] and current <= tp2:
-                        trade["tp2_hit"] = True; trade["sl"] = tp2
+                        trade["tp2_hit"] = True
+                        trade["sl"] = round(tp2 + 0.25 * abs(tp1 - tp2), 2)
                         update_msg = "✅✅ #"+str(trade_id)+" "+t(uid,"update_tp2_hit")
                     elif current >= trade["sl"]:
                         if trade.get("tp2_hit"):
