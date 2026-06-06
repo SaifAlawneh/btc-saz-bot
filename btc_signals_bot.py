@@ -1603,22 +1603,33 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             if not result:
                 await query.message.reply_text("❌ ما توفرت بيانات كافية للـ Backtest"); return
             lang = user_languages.get(uid, "ar")
-            w = result["win_rate"]
+            w  = result["win_rate"]
             bar = "█" * (w // 10) + "░" * (10 - w // 10)
+            loss_pct = round(result["losses"]/result["total"]*100) if result["total"]>0 else 0
             lines = [
                 "╔══════════════════════════╗",
                 ("  🧪 Backtest — آخر "+str(result["days"])+" يوم") if lang=="ar" else ("  🧪 Backtest — Last "+str(result["days"])+" days"),
                 "╚══════════════════════════╝",
                 "",
-                "  📊 "+("الإشارات" if lang=="ar" else "Signals")+":      "+str(result["total"]),
-                "  ✅ "+("رابحة" if lang=="ar" else "Wins")+":        "+str(result["wins"])+" — "+str(result["win_rate"])+"%",
-                "  🛑 "+("خاسرة" if lang=="ar" else "Losses")+":       "+str(result["losses"])+" — "+str(round(result["losses"]/result["total"]*100) if result["total"]>0 else 0)+"%",
-                "  🟡 "+("تعادل" if lang=="ar" else "Breakeven")+":      "+str(result["breakeven"]),
+                "  📊 "+("الإجمالي" if lang=="ar" else "Total")+":       "+str(result["total"]),
+                "  ✅ "+("رابحة" if lang=="ar" else "Wins")+":         "+str(result["wins"])+" — "+str(w)+"%",
+                "  🛑 "+("خاسرة" if lang=="ar" else "Losses")+":        "+str(result["losses"])+" — "+str(loss_pct)+"%",
+                "  🟡 "+("تعادل" if lang=="ar" else "Breakeven")+":       "+str(result["breakeven"]),
                 "",
                 "  "+bar+"  "+str(w)+"%",
                 "",
                 "  ⚖️ "+("متوسط RR" if lang=="ar" else "Avg RR")+":    1:"+str(result["avg_rr"]),
                 "  📈 "+("أفضل RR" if lang=="ar" else "Best RR")+":     1:"+str(result["best_rr"]),
+                "",
+                "━━━━  🟢 BUY  ━━━━",
+                "  "+("إشارات" if lang=="ar" else "Signals")+": "+str(result["buy_total"])
+                    +"  ✅ "+str(result["buy_wins"])+" ("+str(result["buy_rate"])+"%)"
+                    +"  🛑 "+str(result["buy_losses"]),
+                "",
+                "━━━━  🔴 SELL  ━━━━",
+                "  "+("إشارات" if lang=="ar" else "Signals")+": "+str(result["sell_total"])
+                    +"  ✅ "+str(result["sell_wins"])+" ("+str(result["sell_rate"])+"%)"
+                    +"  🛑 "+str(result["sell_losses"]),
                 "",
                 "━━━━━━━━━━━━━━━━━━━━━━━━",
                 "🕐 "+gmt_now(),
@@ -1751,10 +1762,26 @@ def run_backtest(days=90):
         avg_rr   = round(sum(s["rr"] for s in signals if s["result"]=="win") / wins, 1) if wins > 0 else 0
         best_rr  = max((s["rr"] for s in signals if s["result"]=="win"), default=0)
 
+        # BUY stats
+        buy_sigs   = [s for s in signals if s["direction"] == "BUY"]
+        buy_wins   = sum(1 for s in buy_sigs if s["result"] == "win")
+        buy_losses = sum(1 for s in buy_sigs if s["result"] == "loss")
+        buy_rate   = round(buy_wins / len(buy_sigs) * 100) if buy_sigs else 0
+
+        # SELL stats
+        sell_sigs   = [s for s in signals if s["direction"] == "SELL"]
+        sell_wins   = sum(1 for s in sell_sigs if s["result"] == "win")
+        sell_losses = sum(1 for s in sell_sigs if s["result"] == "loss")
+        sell_rate   = round(sell_wins / len(sell_sigs) * 100) if sell_sigs else 0
+
         return {
             "total": total_s, "wins": wins, "losses": losses,
             "breakeven": breakevn, "win_rate": win_rate,
-            "avg_rr": avg_rr, "best_rr": best_rr, "days": days
+            "avg_rr": avg_rr, "best_rr": best_rr, "days": days,
+            "buy_total": len(buy_sigs), "buy_wins": buy_wins,
+            "buy_losses": buy_losses, "buy_rate": buy_rate,
+            "sell_total": len(sell_sigs), "sell_wins": sell_wins,
+            "sell_losses": sell_losses, "sell_rate": sell_rate,
         }
     except Exception as e:
         logger.error("Backtest: "+str(e))
