@@ -920,7 +920,7 @@ def full_analysis(asset="BTC", uid=0):
 def build_trade_msg(res, uid=0, auto=False):
     lang    = user_languages.get(uid, "ar")
     ai      = "₿" if res["asset"] == "BTC" else "🥇"
-    an      = "BTC/USD" if res["asset"] == "BTC" else "XAU/USD"
+    an      = "BTC/USD"
     is_sell = res["final"] == "SELL"
     dir_emoji = "🔴" if is_sell else "🟢"
     dir_txt   = t(uid,"sell") if is_sell else t(uid,"buy")
@@ -1029,7 +1029,7 @@ def build_update_msg(trade, current_price, update_type, uid=0):
 
 def build_analysis_msg(res, uid=0):
     ai = "₿" if res["asset"] == "BTC" else "🥇"
-    an = "BTC/USD" if res["asset"] == "BTC" else "XAU/USD"
+    an = "BTC/USD"
     if res["final"] == "BUY" and res["base_conf"] > 60:
         trend = t(uid,"trend_bull"); summary = t(uid,"summary_bull")
     elif res["final"] == "SELL" and res["base_conf"] > 60:
@@ -1145,6 +1145,22 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
         asset = data.split("_")[1]
         await query.message.reply_text(t(uid,"loading_trade"))
         try:
+            # ✅ تحقق من التشابه قبل التحليل
+            current_price_check = get_btc_price()
+            if current_price_check:
+                # ✅ تشابه مبني على ATR من الصفقة القائمة
+                early_similar = next((
+                    tr for tr in active_trades
+                    if tr["asset"] == asset and
+                    abs(tr["entry"] - current_price_check) < 0.5 * tr.get("atr", current_price_check * 0.015)
+                ), None)
+                if early_similar:
+                    await query.message.reply_text(
+                        "⚠️ نفس الفرصة موجودة بالفعل\n"
+                        "دخول قائم: $"+"{:,.2f}".format(early_similar["entry"])+"\n"
+                        "السعر الحالي قريب — لا داعي لصفقة جديدة")
+                    return
+
             # ✅ مسح الكاش عشان يجيب بيانات محدثة عند كل طلب يدوي
             keys_to_clear = [k for k in _cache if k.startswith(asset)]
             for k in keys_to_clear:
@@ -1184,11 +1200,13 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
 
             # تحقق صفقة مشابهة (دخول ضمن 0.5%) — حتى لو already_open
             entry_p = new_trade["entry"]
+            # ✅ تشابه مبني على ATR بدل نسبة ثابتة — أذكى وأدق
+            avg_atr = new_trade.get("atr", entry_p * 0.015)
             similar_recent = next((
                 tr for tr in active_trades
                 if tr["asset"] == new_trade["asset"] and
                 tr["direction"] == new_trade["direction"] and
-                abs(tr["entry"] - entry_p) / entry_p * 100 < 0.5
+                abs(tr["entry"] - entry_p) < 0.5 * avg_atr
             ), None)
 
             if similar_recent:
@@ -1380,7 +1398,8 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
         if sig:
             res_sig   = sig["res"]
             entry_p   = sig["entry_p"]
-            chat_id_s = sig.get("chat_id", uid)
+            chat_ids_s = sig.get("chat_ids", [uid])
+            chat_id_s  = chat_ids_s[0] if chat_ids_s else uid
             dist_to_entry = abs(entry_p - res_sig["price"]) / res_sig["price"] * 100
             is_pending = dist_to_entry > 0.1
             new_trade = {
@@ -1398,14 +1417,46 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 active_btc_trade["data"] = new_trade
             save_trades()
             status_txt = "⏳ انتظار الدخول عند $"+"{:,.2f}".format(entry_p) if is_pending else "🟢 نشطة"
-            await query.message.reply_text(
-                "✅ #"+str(sig_id)+" تم تفعيل الصفقة\n"+status_txt)
+            confirm_msg = "✅ #"+str(sig_id)+" تم تفعيل الصفقة\n"+status_txt
+            # بعث لكل المستخدمين
+            for cid in chat_ids_s:
+                try:
+                    await context.bot.send_message(chat_id=cid, text=confirm_msg)
+                except: pass
         else:
             await query.message.reply_text("⚠️ انتهت صلاحية الإشارة")
 
     elif data.startswith("ignore_signal_"):
         sig_id = int(data.split("_")[2])
         pending_signals.pop(sig_id, None)
+
+    elif data.startswith("update_entry_"):
+        trade_id = int(data.split("_")[2])
+        trade = next((tr for tr in active_trades if tr.get("id") == trade_id), None)
+        if trade and "pending_update" in trade:
+            upd = trade["pending_update"]
+            old_entry = trade["entry"]
+            trade["entry"]  = upd["entry"]
+            trade["sl"]     = upd["sl"]
+            trade["tp1"]    = upd["tp1"]
+            trade["tp2"]    = upd["tp2"]
+            trade["tp3"]    = upd["tp3"]
+            trade["orig_sl"]= upd["sl"]
+            trade.pop("pending_update", None)
+            trade["entry_update_sent"] = False  # ✅ reset للتحديث القادم
+            save_trades()
+            await query.message.reply_text(
+                "✅ #"+str(trade_id)+" تم تحديث مستوى الدخول\n"
+                "القديم: $"+"{:,.2f}".format(old_entry)+" → الجديد: $"+"{:,.2f}".format(upd["entry"]))
+        else:
+            await query.message.reply_text("⚠️ انتهت صلاحية التحديث")
+
+    elif data.startswith("ignore_entry_"):
+        trade_id = int(data.split("_")[2])
+        trade = next((tr for tr in active_trades if tr.get("id") == trade_id), None)
+        if trade:
+            trade.pop("pending_update", None)
+            trade["entry_update_sent"] = False  # ✅ reset للتحديث القادم
 
     elif data.startswith("keep_active_"):
         trade_id = int(data.split("_")[2])
@@ -1467,19 +1518,21 @@ async def check_pending_trades(context):
                          "الفريمات: "+opp_dir)
 
             elif matching < total_frames and matching > 0:
-                # فريمات تغيرت جزئياً — خيار للمستخدم
-                frame_status = ""
-                icons = {"1h": "ساعة", "4h": "4 ساعات", "1d": "يومي"}
-                for fl in frame_lines:
-                    frame_status += "  " + fl + "\n"
-                pending_trade_replace[trade_id] = {"trade": trade}
-                kb = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("✅ خلي الصفقة", callback_data="keep_pending_"+str(trade_id)),
-                     InlineKeyboardButton("❌ ألغِ", callback_data="cancel_pending_"+str(trade_id))]
-                ])
-                await context.bot.send_message(chat_id=chat_id,
-                    text="📊 #"+str(trade_id)+" تغيير في الفريمات\n"+frame_status,
-                    reply_markup=kb)
+                # فريمات تغيرت جزئياً — خيار للمستخدم (مرة وحدة لكل حالة)
+                alert_key = "frame_alert_"+str(buy_frames)+str(sell_frames)
+                if trade.get("last_frame_alert") != alert_key:
+                    trade["last_frame_alert"] = alert_key
+                    frame_status = ""
+                    for fl in frame_lines:
+                        frame_status += "  " + fl + "\n"
+                    pending_trade_replace[trade_id] = {"trade": trade}
+                    kb = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("✅ خلي الصفقة", callback_data="keep_pending_"+str(trade_id)),
+                         InlineKeyboardButton("❌ ألغِ", callback_data="cancel_pending_"+str(trade_id))]
+                    ])
+                    await context.bot.send_message(chat_id=chat_id,
+                        text="📊 #"+str(trade_id)+" تغيير في الفريمات\n"+frame_status,
+                        reply_markup=kb)
     except Exception as e:
         logger.error("check_pending_trades: "+str(e))
 
@@ -1488,7 +1541,8 @@ async def check_pending_trades(context):
     if not active_only:
         return
     try:
-        res2 = full_analysis("BTC", 0)
+        # ✅ نفس نتيجة التحليل — ما نستدعي full_analysis مرة ثانية
+        res2 = res if res else full_analysis("BTC", 0)
         if not res2:
             return
         frame_lines2 = res2.get("frame_lines", [])
@@ -1523,13 +1577,16 @@ async def check_pending_trades(context):
             ])
 
             if opposite == total_frames2:
-                # فريمات انقلبت كلياً
-                frame_status = ""
-                for fl in frame_lines2:
-                    frame_status += "  " + fl + "\n"
-                await context.bot.send_message(chat_id=chat_id,
-                    text="⚠️ #"+str(trade_id)+" الفريمات انقلبت كلياً\n"+frame_status+"\nتوصية: "+rec_full,
-                    reply_markup=kb_active)
+                # فريمات انقلبت كلياً — مرة وحدة
+                alert_key3 = "flip_alert_"+str(buy_frames2)+str(sell_frames2)
+                if trade.get("last_active_alert") != alert_key3:
+                    trade["last_active_alert"] = alert_key3
+                    frame_status = ""
+                    for fl in frame_lines2:
+                        frame_status += "  " + fl + "\n"
+                    await context.bot.send_message(chat_id=chat_id,
+                        text="⚠️ #"+str(trade_id)+" الفريمات انقلبت كلياً\n"+frame_status+"\nتوصية: "+rec_full,
+                        reply_markup=kb_active)
 
             elif matching < total_frames2 and matching > 0:
                 # فريمات تغيرت جزئياً
@@ -1582,10 +1639,12 @@ async def monitor_btc(context):
 
                             # تحقق ما في صفقة مشابهة في آخر ساعة
                             entry_p = res.get("entry_price", res["price"])
+                            # ✅ تشابه مبني على ATR
+                            sig_atr = res.get("atr", entry_p * 0.015)
                             recent_similar = any(
                                 tr["asset"]=="BTC" and
                                 tr["direction"]==res["final"] and
-                                abs(tr["entry"] - entry_p) / entry_p * 100 < 1.0
+                                abs(tr["entry"] - entry_p) < 0.5 * sig_atr
                                 for tr in active_trades
                             )
 
@@ -1614,17 +1673,18 @@ async def monitor_btc(context):
                                     [InlineKeyboardButton("✅ فعّل الصفقة", callback_data="activate_signal_"+str(trade_counter)),
                                      InlineKeyboardButton("❌ تجاهل", callback_data="ignore_signal_"+str(trade_counter))]
                                 ])
-                                # حفظ الإشارة في pending_signals
+                                # حفظ الإشارة في pending_signals مع كل chat_ids
                                 pending_signals[trade_counter] = {
                                     "res": res, "entry_p": entry_p,
-                                    "timestamp": now_ts, "price": res["price"]
+                                    "timestamp": now_ts, "price": res["price"],
+                                    "chat_ids": []
                                 }
-                                # بعث للمستخدمين
+                                # بعث للمستخدمين وحفظ كل chat_id
                                 for user_id in ALLOWED_USERS:
                                     try:
                                         await context.bot.send_message(chat_id=user_id,
                                             text=signal_msg, reply_markup=kb_signal)
-                                        pending_signals[trade_counter]["chat_id"] = user_id
+                                        pending_signals[trade_counter]["chat_ids"].append(user_id)
                                     except: pass
                 except Exception as e:
                     logger.warning("Auto signal check: " + str(e))
@@ -1639,7 +1699,7 @@ async def monitor_btc(context):
             for sig_id, sig in list(pending_signals.items()):
                 sig_price = sig["price"]
                 sig_ts    = sig["timestamp"]
-                chat_id   = sig.get("chat_id", list(ALLOWED_USERS)[0])
+                sig_chats = sig.get("chat_ids", list(ALLOWED_USERS))
                 current   = get_btc_price()
                 expired   = False
                 reason    = ""
@@ -1668,7 +1728,10 @@ async def monitor_btc(context):
                         msg = "⏰ #"+str(sig_id)+" انتهت صلاحية الإشارة"
                         if reason:
                             msg += "\n" + reason
-                        await context.bot.send_message(chat_id=chat_id, text=msg)
+                        for cid in sig_chats:
+                            try:
+                                await context.bot.send_message(chat_id=cid, text=msg)
+                            except: pass
                     except: pass
 
             for sig_id in to_expire:
@@ -1758,6 +1821,41 @@ async def monitor_btc(context):
                                     text="🎯 #"+str(trade_id)+" السعر يقترب من الدخول\n"
                                          "الدخول: $"+"{:,.2f}".format(entry)+"\n"
                                          "السعر: $"+"{:,.2f}".format(current)+" — المسافة: "+str(round(dist_pct,2))+"%")
+
+                            # ✅ تحديث مستوى الدخول لو السعر تجاوزه بأكثر من 1%
+                            entry_passed = (
+                                (direction == "SELL" and current < entry * 0.99) or
+                                (direction == "BUY"  and current > entry * 1.01)
+                            )
+                            if entry_passed and not trade.get("entry_update_sent"):
+                                try:
+                                    fresh_e = full_analysis(trade["asset"], 0)
+                                    if fresh_e and fresh_e["final"] == direction:
+                                        new_entry = fresh_e.get("entry_price", fresh_e["price"])
+                                        if abs(new_entry - entry) / entry * 100 > 0.1:
+                                            trade["entry_update_sent"] = True
+                                            kb_update = InlineKeyboardMarkup([[
+                                                InlineKeyboardButton("✅ حدّث الصفقة", callback_data="update_entry_"+str(trade_id)),
+                                                InlineKeyboardButton("❌ تجاهل", callback_data="ignore_entry_"+str(trade_id))
+                                            ]])
+                                            # حفظ الأرقام الجديدة مؤقتاً
+                                            trade["pending_update"] = {
+                                                "entry": new_entry,
+                                                "sl": fresh_e["sl"],
+                                                "tp1": fresh_e["tp1"],
+                                                "tp2": fresh_e["tp2"],
+                                                "tp3": fresh_e["tp3"],
+                                            }
+                                            await context.bot.send_message(chat_id=chat_id,
+                                                text="📊 #"+str(trade_id)+" تحديث مستوى الدخول\n"
+                                                     "الدخول القديم: $"+"{:,.2f}".format(entry)+"\n"
+                                                     "الدخول الجديد: $"+"{:,.2f}".format(new_entry)+" — Fib "+fresh_e.get("fib_key","")+"\n"
+                                                     "SL: $"+"{:,.2f}".format(fresh_e["sl"])+" | "
+                                                     "TP1: $"+"{:,.2f}".format(fresh_e["tp1"])+" | "
+                                                     "TP2: $"+"{:,.2f}".format(fresh_e["tp2"]),
+                                                reply_markup=kb_update)
+                                except Exception as e:
+                                    logger.warning("Entry update: "+str(e))
 
                             # تحقق عكس الاتجاه — شرطان معاً
                             counter_pct = abs(current - entry) / entry * 100
@@ -1889,7 +1987,12 @@ async def send_smart_alerts(context):
                    "","  💵 السعر: $"+"{:,.2f}".format(price),""]
             for a in alerts: msg.append("  "+a)
             msg += ["","━━━━━━━━━━━━━━━━━━━━━━━━","🕐 "+gmt_now(),"⚠️ للأغراض التعليمية فقط"]
-            await context.bot.send_message(chat_id=CHANNEL_ID, text="\n".join(msg))
+            full_msg = "\n".join(msg)
+            await context.bot.send_message(chat_id=CHANNEL_ID, text=full_msg)
+            for user_id in ALLOWED_USERS:
+                try:
+                    await context.bot.send_message(chat_id=user_id, text=full_msg)
+                except: pass
     except Exception as e:
         logger.error("Smart alerts: " + str(e))
 
@@ -1967,7 +2070,12 @@ async def send_daily_summary(context):
                              +"  دخول: $"+"{:,.0f}".format(tr["entry"]))
             lines.append("")
         lines += ["━━━━━━━━━━━━━━━━━━━━━━━━","🕐 "+gmt_now(),"⚠️ للأغراض التعليمية فقط"]
-        await context.bot.send_message(chat_id=CHANNEL_ID, text="\n".join(lines))
+        full_summary = "\n".join(lines)
+        await context.bot.send_message(chat_id=CHANNEL_ID, text=full_summary)
+        for user_id in ALLOWED_USERS:
+            try:
+                await context.bot.send_message(chat_id=user_id, text=full_summary)
+            except: pass
     except Exception as e:
         logger.error("Daily summary: " + str(e))
 
