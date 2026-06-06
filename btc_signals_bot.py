@@ -35,6 +35,7 @@ pending_signals       = {}  # trade_id: {res, timestamp, chat_id}
 trade_counter         = 0
 _cache                = {}
 _econ_cache           = {"data": None, "ts": 0}  # cache للأحداث الاقتصادية
+_news_notified        = {}  # يتتبع الأحداث اللي بُعث عنها تنبيه — منفصل عن الـ cache
 
 ALLOWED_USERS = {8490817794, 1548286220}
 
@@ -778,8 +779,8 @@ def full_analysis(asset="BTC", uid=0):
     buy_c = sum(1 for r in results.values() if r["direction"] == "BUY")
     sel_c = sum(1 for r in results.values() if r["direction"] == "SELL")
 
-    # Session filter
-    if session == "ASIAN" and buy_c < 3 and sel_c < 3:
+    # Session filter — نسمح بتوافق 3 فريمات حتى في الجلسة الآسيوية
+    if session == "ASIAN" and buy_c < 2 and sel_c < 2:
         return None
 
     if   buy_c == 3: final="BUY";  conf_txt=t(uid,"full_confluence");    frames_conf=85
@@ -864,19 +865,19 @@ def full_analysis(asset="BTC", uid=0):
     bull_obs, bear_obs = find_order_blocks(df_1h)
     buy_liq, sell_liq  = find_liquidity_zones(df_1h)
 
-    # SL عند منطقة سيولة
+    # SL عند منطقة سيولة — نستخدم entry_price للمقارنة مش price
     try:
         if final == "SELL" and buy_liq:
-            liq_above = [lv for lv in buy_liq if lv > price]
+            liq_above = [lv for lv in buy_liq if lv > entry_price]
             if liq_above:
                 liq_sl = round(min(liq_above) * 1.002, 2)
                 sl = round(min(sl, liq_sl), 2) if liq_sl < sl * 1.01 else sl
         elif final == "BUY" and sell_liq:
-            liq_below = [lv for lv in sell_liq if lv < price]
+            liq_below = [lv for lv in sell_liq if lv < entry_price]
             if liq_below:
                 liq_sl = round(max(liq_below) * 0.998, 2)
                 sl = round(max(sl, liq_sl), 2) if liq_sl > sl * 0.99 else sl
-        rr = round(abs(tp2 - price) / abs(sl - price), 2) if abs(sl - price) > 0 else 0
+        rr = round(abs(tp2 - entry_price) / abs(sl - entry_price), 2) if abs(sl - entry_price) > 0 else 0
     except: pass
 
     # Monthly Bias
@@ -998,7 +999,7 @@ def build_trade_msg(res, uid=0, auto=False):
         "",
         "💵 "+t(uid,"current_price")+"   $"+"{:,.2f}".format(res["price"]),
         "📍 "+t(uid,"entry")+"   $"+"{:,.2f}".format(res.get("entry_price", res["price"])),
-        "📐 "+t(uid,"fib_entry")+"   Fib "+res["fib_key"]+"% ($"+"{:,.2f}".format(res["nearest_fib"])+")",
+        "📐 "+t(uid,"fib_entry")+"   Fib "+res["fib_key"]+"% ($"+"{:,.2f}".format(res.get("entry_price", res["nearest_fib"]))+")",
         "",
         "━━━━  🎯 "+t(uid,"targets_section")+"  ━━━━",
         "  TP1  ›  $"+"{:,.2f}".format(res["tp1"]),
@@ -1767,16 +1768,45 @@ async def monitor_btc(context):
     except Exception as e:
         logger.error("Auto signal outer: " + str(e))
 
+    # ==================== سيناريو 3: تنبيه خبر قادم خلال 30 دقيقة ====================
+    if not active_trades:
+        try:
+            ev30 = get_upcoming_event(hours=0.5)
+            if ev30:
+                ev30_key = ev30.get("event","") + ev30.get("time","")[:10]
+                if not _news_notified.get(ev30_key):
+                    _news_notified[ev30_key] = True
+                    mins = ev30["mins_left"]
+                    news_msg = (
+                        "📰 تنبيه اقتصادي\n"
+                        +ev30.get("event","")+" — خلال "+str(mins)+" دقيقة\n"
+                        "تأثير متوقع: 🔴 عالي\n"
+                        "تجنب فتح صفقات جديدة"
+                    )
+                    for user_id in ALLOWED_USERS:
+                        try:
+                            await context.bot.send_message(chat_id=user_id, text=news_msg)
+                        except: pass
+        except Exception as e:
+            logger.warning("Scenario 3 news: "+str(e))
+
     # ==================== مراقبة الإشارات المعلقة ====================
     if pending_signals:
         try:
             now_ts2 = datetime.now(timezone.utc).timestamp()
             to_expire = []
+            # ✅ جيب السعر والتحليل مرة وحدة قبل الـ loop
+            current_for_expiry = get_btc_price()
+            fresh_for_expiry   = None
+            try:
+                fresh_for_expiry = full_analysis("BTC", 0)
+            except: pass
+
             for sig_id, sig in list(pending_signals.items()):
                 sig_price = sig["price"]
                 sig_ts    = sig["timestamp"]
                 sig_chats = sig.get("chat_ids", list(ALLOWED_USERS))
-                current   = get_btc_price()
+                current   = current_for_expiry
                 expired   = False
                 reason    = ""
 
@@ -1786,13 +1816,10 @@ async def monitor_btc(context):
                         expired = True
                         reason  = "السعر تحرك بعيداً عن نقطة الدخول"
 
-                if not expired:
-                    try:
-                        fresh = full_analysis("BTC", 0)
-                        if fresh and fresh["final"] != sig["res"]["final"]:
-                            expired = True
-                            reason  = "الفريمات تغيرت — الفرصة لم تعد قائمة"
-                    except: pass
+                if not expired and fresh_for_expiry:
+                    if fresh_for_expiry["final"] != sig["res"]["final"]:
+                        expired = True
+                        reason  = "الفريمات تغيرت — الفرصة لم تعد قائمة"
 
                 if not expired and (now_ts2 - sig_ts) > 1800:
                     expired = True
@@ -1898,20 +1925,22 @@ async def monitor_btc(context):
                                          "الدخول: $"+"{:,.2f}".format(entry)+"\n"
                                          "السعر: $"+"{:,.2f}".format(current)+" — المسافة: "+str(round(dist_pct,2))+"%")
 
-                            # ✅ سيناريو 1: صفقة pending + خبر قادم (مرة وحدة)
-                            if not trade.get("news_alert_sent"):
-                                try:
-                                    ev = get_upcoming_event(hours=2)
-                                    if ev:
-                                        trade["news_alert_sent"] = True
+                            # ✅ سيناريو 1: صفقة pending + خبر قادم (تنبيه لكل حدث جديد)
+                            try:
+                                ev = get_upcoming_event(hours=2)
+                                if ev:
+                                    ev_key = ev.get("event", "")
+                                    last_ev = trade.get("last_news_event", "")
+                                    if ev_key != last_ev:
+                                        trade["last_news_event"] = ev_key
                                         mins = ev["mins_left"]
                                         hours_txt = str(mins//60)+" ساعة "+str(mins%60)+" دقيقة" if mins >= 60 else str(mins)+" دقيقة"
                                         await context.bot.send_message(chat_id=chat_id,
                                             text="⚠️ #"+str(trade_id)+" خبر مهم قادم\n"
-                                                 +ev["event"]+" — خلال "+hours_txt+"\n"
+                                                 +ev_key+" — خلال "+hours_txt+"\n"
                                                  "تأثير متوقع: 🔴 عالي\n"
                                                  "الصفقة معلقة — كن حذراً")
-                                except: pass
+                            except: pass
 
                             # ✅ تحديث مستوى الدخول لو السعر تجاوزه بأكثر من 1%
                             entry_passed = (
@@ -2078,7 +2107,7 @@ async def send_smart_alerts(context):
             try:
                 ev30 = get_upcoming_event(hours=0.5)
                 if ev30 and not _econ_cache.get("news_notified_30"):
-                    _econ_cache["news_notified_30"] = True
+                    _news_notified[ev30_key] = True
                     mins = ev30["mins_left"]
                     news_msg = (
                         "📰 تنبيه اقتصادي\n"
@@ -2090,8 +2119,7 @@ async def send_smart_alerts(context):
                         try:
                             await context.bot.send_message(chat_id=user_id, text=news_msg)
                         except: pass
-                elif not ev30:
-                    _econ_cache["news_notified_30"] = False
+                # no reset needed — old events expire naturally
             except: pass
 
         if alerts:
