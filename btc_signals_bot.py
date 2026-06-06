@@ -691,10 +691,10 @@ def find_liquidity_zones(df, lookback=50):
 # ==================== Session ====================
 def get_current_session():
     hour = datetime.now(timezone.utc).hour
-    if 13 <= hour < 16:  return "OVERLAP", 100
-    elif 8 <= hour < 16: return "LONDON", 85
-    elif 13 <= hour < 21:return "NY", 85
-    else:                return "ASIAN", 40
+    if 13 <= hour < 16:   return "OVERLAP", 100
+    elif 16 <= hour < 21: return "NY", 85
+    elif 8 <= hour < 13:  return "LONDON", 85
+    else:                 return "ASIAN", 40
 
 
 # ==================== الأحداث الاقتصادية ====================
