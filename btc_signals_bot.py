@@ -15,6 +15,7 @@ BOT_TOKEN      = os.environ.get("BOT_TOKEN",  "YOUR_BOT_TOKEN_HERE")
 CHANNEL_ID     = os.environ.get("CHANNEL_ID", "@btc_signals_saz")
 TWELVEDATA_KEY = os.environ.get("TWELVEDATA_KEY", "")
 NEWS_API_KEY   = os.environ.get("NEWS_API_KEY", "cdf2a61f2cbe4540a41456bc4bd3a40e")
+FINNHUB_KEY    = os.environ.get("FINNHUB_KEY", "")
 
 MIN_CONFIDENCE    = 68
 SPAM_COOLDOWN     = 1800
@@ -33,6 +34,7 @@ last_signal_time      = {}
 pending_signals       = {}  # trade_id: {res, timestamp, chat_id}
 trade_counter         = 0
 _cache                = {}
+_econ_cache           = {"data": None, "ts": 0}  # cache للأحداث الاقتصادية
 
 ALLOWED_USERS = {8490817794, 1548286220}
 
@@ -676,6 +678,66 @@ def get_current_session():
     elif 8 <= hour < 16: return "LONDON", 85
     elif 13 <= hour < 21:return "NY", 85
     else:                return "ASIAN", 40
+
+
+# ==================== الأحداث الاقتصادية ====================
+def get_economic_events():
+    """يجيب الأحداث الاقتصادية القادمة من Finnhub — cache 30 دقيقة"""
+    if not FINNHUB_KEY:
+        return []
+    now_ts = datetime.now(timezone.utc).timestamp()
+    if _econ_cache["data"] is not None and (now_ts - _econ_cache["ts"]) < 1800:
+        return _econ_cache["data"]
+    try:
+        from datetime import timedelta
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
+        r = requests.get("https://finnhub.io/api/v1/calendar/economic",
+            params={"from": today, "to": tomorrow, "token": FINNHUB_KEY},
+            timeout=10)
+        if r.status_code != 200:
+            return []
+        data = r.json().get("economicCalendar", [])
+        # فلتر الأحداث HIGH impact المتعلقة بـ USD
+        keywords = ["CPI", "Fed", "Federal Reserve", "GDP", "NFP", "PPI",
+                    "Interest Rate", "Inflation", "Employment", "FOMC"]
+        high_events = []
+        for ev in data:
+            if ev.get("impact", "").upper() == "HIGH" and                ev.get("country", "").upper() in ["US", "USD"] and                any(kw.lower() in ev.get("event", "").lower() for kw in keywords):
+                high_events.append({
+                    "event": ev.get("event", ""),
+                    "time": ev.get("time", ""),
+                    "impact": ev.get("impact", "")
+                })
+        _econ_cache["data"] = high_events
+        _econ_cache["ts"]   = now_ts
+        logger.info(f"Economic events: {len(high_events)} high impact events")
+        return high_events
+    except Exception as e:
+        logger.warning("Finnhub economic: " + str(e))
+        return []
+
+
+def get_upcoming_event(hours=2):
+    """يرجع أقرب حدث اقتصادي مهم خلال X ساعات — أو None"""
+    try:
+        events = get_economic_events()
+        if not events:
+            return None
+        now_ts = datetime.now(timezone.utc).timestamp()
+        for ev in events:
+            try:
+                ev_time = datetime.fromisoformat(ev["time"].replace("Z", "+00:00"))
+                ev_ts   = ev_time.timestamp()
+                mins_left = (ev_ts - now_ts) / 60
+                if 0 < mins_left <= hours * 60:
+                    ev["mins_left"] = int(mins_left)
+                    return ev
+            except: continue
+        return None
+    except Exception as e:
+        logger.warning("get_upcoming_event: " + str(e))
+        return None
 
 
 # ==================== Full Analysis ====================
@@ -1660,6 +1722,16 @@ async def monitor_btc(context):
                                 dir_emoji = "🔴" if res["final"]=="SELL" else "🟢"
                                 dir_txt   = "بيع SELL ⬇️" if res["final"]=="SELL" else "شراء BUY ⬆️"
                                 fl_txt = "\n".join(["  "+fl for fl in res.get("frame_lines",[])])
+                                # ✅ سيناريو 2: تحقق من خبر قادم قبل بناء الإشارة
+                                news_warning = ""
+                                try:
+                                    ev = get_upcoming_event(hours=2)
+                                    if ev:
+                                        mins = ev["mins_left"]
+                                        hours_txt = str(mins//60)+" ساعة "+str(mins%60)+" دقيقة" if mins >= 60 else str(mins)+" دقيقة"
+                                        news_warning = "\n⚠️ "+ev["event"]+" خلال "+hours_txt
+                                except: pass
+
                                 signal_msg = (
                                     "🔔 إشارة جديدة — ₿ BTC/USD\n"
                                     +dir_emoji+" "+dir_txt+"\n\n"
@@ -1671,6 +1743,7 @@ async def monitor_btc(context):
                                     "TP3: $"+"{:,.2f}".format(res["tp3"])+"\n"
                                     "RR: 1:"+str(res["rr"])+"\n\n"
                                     +fl_txt
+                                    +news_warning
                                 )
                                 kb_signal = InlineKeyboardMarkup([
                                     [InlineKeyboardButton("✅ فعّل الصفقة", callback_data="activate_signal_"+str(trade_counter)),
@@ -1824,6 +1897,21 @@ async def monitor_btc(context):
                                     text="🎯 #"+str(trade_id)+" السعر يقترب من الدخول\n"
                                          "الدخول: $"+"{:,.2f}".format(entry)+"\n"
                                          "السعر: $"+"{:,.2f}".format(current)+" — المسافة: "+str(round(dist_pct,2))+"%")
+
+                            # ✅ سيناريو 1: صفقة pending + خبر قادم (مرة وحدة)
+                            if not trade.get("news_alert_sent"):
+                                try:
+                                    ev = get_upcoming_event(hours=2)
+                                    if ev:
+                                        trade["news_alert_sent"] = True
+                                        mins = ev["mins_left"]
+                                        hours_txt = str(mins//60)+" ساعة "+str(mins%60)+" دقيقة" if mins >= 60 else str(mins)+" دقيقة"
+                                        await context.bot.send_message(chat_id=chat_id,
+                                            text="⚠️ #"+str(trade_id)+" خبر مهم قادم\n"
+                                                 +ev["event"]+" — خلال "+hours_txt+"\n"
+                                                 "تأثير متوقع: 🔴 عالي\n"
+                                                 "الصفقة معلقة — كن حذراً")
+                                except: pass
 
                             # ✅ تحديث مستوى الدخول لو السعر تجاوزه بأكثر من 1%
                             entry_passed = (
@@ -1984,6 +2072,27 @@ async def send_smart_alerts(context):
         bb_l = safe(last["BB_L"], price * 0.98)
         if (bb_u - bb_l) / bb_u * 100 < 2:
             alerts.append("💥 Bollinger Squeeze — حركة قوية قادمة!")
+
+        # ✅ سيناريو 3: تنبيه خبر قادم خلال 30 دقيقة لو ما في صفقات
+        if not active_trades:
+            try:
+                ev30 = get_upcoming_event(hours=0.5)
+                if ev30 and not _econ_cache.get("news_notified_30"):
+                    _econ_cache["news_notified_30"] = True
+                    mins = ev30["mins_left"]
+                    news_msg = (
+                        "📰 تنبيه اقتصادي\n"
+                        +ev30["event"]+" — خلال "+str(mins)+" دقيقة\n"
+                        "تأثير متوقع: 🔴 عالي\n"
+                        "تجنب فتح صفقات جديدة"
+                    )
+                    for user_id in ALLOWED_USERS:
+                        try:
+                            await context.bot.send_message(chat_id=user_id, text=news_msg)
+                        except: pass
+                elif not ev30:
+                    _econ_cache["news_notified_30"] = False
+            except: pass
 
         if alerts:
             msg = ["╔══════════════════════════╗","  ⚡ تنبيه ذكي — ₿ BTC/USD","╚══════════════════════════╝",
