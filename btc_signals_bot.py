@@ -1688,7 +1688,7 @@ def run_backtest(days=180):
 
                 # فلتر السوق الجانبي
                 ema_spread = abs(e9 - e50) / price * 100
-                if ema_spread < 0.15: continue  # سوق جانبي — تجاهل
+                if ema_spread < 0.25: continue  # سوق جانبي — تجاهل
 
                 # Volume — نقاط إضافية فقط مش شرط إلزامي
                 try:
@@ -1716,7 +1716,7 @@ def run_backtest(days=180):
                 total = sb + ss
                 if total == 0: continue
                 conf = round(max(sb, ss) / total * 100)
-                if conf < 60: continue
+                if conf < 65: continue
 
                 direction = "BUY" if sb > ss else "SELL"
 
