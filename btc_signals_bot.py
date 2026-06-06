@@ -1659,10 +1659,14 @@ def run_backtest(days=90):
                 macd_s= safe(last["MACD_S"], 0)
                 macd_h= safe(last["MACD_H"], 0)
 
+                # فلتر الاتجاه العام — ما نفتح BUY في downtrend والعكس
+                trend_bull = e21 > e50
+                trend_bear = e21 < e50
+
                 # شروط الإشارة
                 sb = ss = 0
-                if rsi < 35:   sb += 30
-                elif rsi > 65: ss += 30
+                if rsi < 30:   sb += 30  # شددنا من 35 لـ 30
+                elif rsi > 70: ss += 30  # شددنا من 65 لـ 70
                 if macd_v > macd_s and macd_h > 0: sb += 20
                 elif macd_v < macd_s and macd_h < 0: ss += 20
                 if e9 > e21 > e50: sb += 20
@@ -1676,13 +1680,17 @@ def run_backtest(days=90):
                 if conf < 68: continue
 
                 direction = "BUY" if sb > ss else "SELL"
+
+                # فلتر الاتجاه — نمنع الصفقات عكس الترند
+                if direction == "BUY" and trend_bear: continue
+                if direction == "SELL" and trend_bull: continue
                 sl  = round(price - 0.8*atr, 2) if direction=="BUY" else round(price + 0.8*atr, 2)
                 tp1 = round(price + 0.8*atr, 2) if direction=="BUY" else round(price - 0.8*atr, 2)
                 tp2 = round(price + 1.6*atr, 2) if direction=="BUY" else round(price - 1.6*atr, 2)
 
                 # تحقق النتيجة على الـ 48 ساعة القادمة
-                future = df.iloc[i:i+48]
-                if len(future) < 10: continue
+                future = df.iloc[i:i+72]
+                if len(future) < 20: continue
 
                 result = "loss"
                 best_rr = 0
