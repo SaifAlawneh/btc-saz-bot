@@ -1359,6 +1359,20 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
         lines += ["━"*24, "🕐 "+gmt_now()]
         await query.message.reply_text("\n".join(lines))
 
+    elif data.startswith("keep_pending_"):
+        trade_id = int(data.split("_")[2])
+        pending_trade_replace.pop(trade_id, None)
+        await query.message.reply_text("✅ الصفقة #"+str(trade_id)+" لا تزال قائمة")
+
+    elif data.startswith("cancel_pending_"):
+        trade_id = int(data.split("_")[2])
+        pending_trade_replace.pop(trade_id, None)
+        trade = next((tr for tr in active_trades if tr.get("id") == trade_id), None)
+        if trade:
+            active_trades.remove(trade)
+            save_trades()
+        await query.message.reply_text("❌ الصفقة #"+str(trade_id)+" ألغيت")
+
     elif data == "about":
         await query.message.reply_text(t(uid,"about_text"))
 
@@ -1391,6 +1405,66 @@ async def auto_signals(context):
                 save_trades()
     except Exception as e:
         logger.error("Auto signals: " + str(e))
+
+
+# ==================== مراقبة الصفقات المعلقة ====================
+async def check_pending_trades(context):
+    """كل 15 دقيقة — يتحقق من صحة الصفقات الـ pending"""
+    pending = [tr for tr in active_trades if tr.get("status") == "pending"]
+    if not pending:
+        return
+    try:
+        res = full_analysis("BTC", 0)
+        if not res:
+            return
+        frame_lines = res.get("frame_lines", [])
+        buy_frames  = sum(1 for f in frame_lines if "BUY" in f)
+        sell_frames = sum(1 for f in frame_lines if "SELL" in f)
+
+        for trade in list(pending):
+            direction = trade["direction"]
+            trade_id  = trade.get("id", "?")
+            chat_id   = trade["chat_id"]
+
+            # تحقق توافق الفريمات مع اتجاه الصفقة
+            if direction == "SELL":
+                matching = sell_frames
+                opposite = buy_frames
+                opp_dir  = "BUY ⬆️"
+            else:
+                matching = buy_frames
+                opposite = sell_frames
+                opp_dir  = "SELL ⬇️"
+
+            total_frames = buy_frames + sell_frames
+
+            if total_frames == 0:
+                continue
+
+            if opposite == total_frames:
+                # فريمات انقلبت كلياً — إلغاء تلقائي
+                active_trades.remove(trade)
+                save_trades()
+                await context.bot.send_message(chat_id=chat_id,
+                    text="⚠️ #"+str(trade_id)+" الصفقة ألغيت\n"
+                         "الفريمات: "+opp_dir)
+
+            elif matching < total_frames and matching > 0:
+                # فريمات تغيرت جزئياً — خيار للمستخدم
+                frame_status = ""
+                icons = {"1h": "ساعة", "4h": "4 ساعات", "1d": "يومي"}
+                for fl in frame_lines:
+                    frame_status += "  " + fl + "\n"
+                pending_trade_replace[trade_id] = {"trade": trade}
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("✅ خلي الصفقة", callback_data="keep_pending_"+str(trade_id)),
+                     InlineKeyboardButton("❌ ألغِ", callback_data="cancel_pending_"+str(trade_id))]
+                ])
+                await context.bot.send_message(chat_id=chat_id,
+                    text="📊 #"+str(trade_id)+" تغيير في الفريمات\n"+frame_status,
+                    reply_markup=kb)
+    except Exception as e:
+        logger.error("check_pending_trades: "+str(e))
 
 
 # ==================== مراقبة الصفقات ====================
@@ -1528,14 +1602,28 @@ async def monitor_btc(context):
                             await context.bot.send_message(chat_id=chat_id,
                                 text="🟢 #"+str(trade_id)+" الصفقة نشطة ✅")
                     else:
-                        # لم يصل بعد — تحقق إذا SL ضرب قبل الدخول
                         sl_hit = (direction == "BUY" and current <= trade["sl"]) or                                  (direction == "SELL" and current >= trade["sl"])
+
                         if sl_hit:
+                            # SL تجاوز قبل الدخول — إلغاء + رسالة
                             to_remove.append(trade)
                             await context.bot.send_message(chat_id=chat_id,
-                                text="❌ #"+str(trade_id)+" الصفقة ألغيت — السعر تجاوز SL قبل الدخول")
+                                text="⚠️ #"+str(trade_id)+" السعر تجاوز مستوى الوقف\n"
+                                     "الدخول: $"+"{:,.2f}".format(entry)+" — SL: $"+"{:,.2f}".format(trade["sl"])+"\n"
+                                     "السعر الحالي: $"+"{:,.2f}".format(current)+"\n"
+                                     "الصفقة ألغيت من القائمة")
+
                         else:
-                            # ✅ تحقق عكس الاتجاه — شرطان معاً
+                            # تنبيه الاقتراب 0.5% — مرة وحدة
+                            dist_pct = abs(current - entry) / entry * 100
+                            if dist_pct <= 0.5 and not trade.get("entry_alert_sent"):
+                                trade["entry_alert_sent"] = True
+                                await context.bot.send_message(chat_id=chat_id,
+                                    text="🎯 #"+str(trade_id)+" السعر يقترب من الدخول\n"
+                                         "الدخول: $"+"{:,.2f}".format(entry)+"\n"
+                                         "السعر: $"+"{:,.2f}".format(current)+" — المسافة: "+str(round(dist_pct,2))+"%")
+
+                            # تحقق عكس الاتجاه — شرطان معاً
                             counter_pct = abs(current - entry) / entry * 100
                             counter_move = (
                                 (direction == "SELL" and current > entry * 1.02) or
@@ -1548,11 +1636,9 @@ async def monitor_btc(context):
                                         to_remove.append(trade)
                                         new_dir = "شراء BUY ⬆️" if fresh["final"]=="BUY" else "بيع SELL ⬇️"
                                         await context.bot.send_message(chat_id=chat_id,
-                                            text="⚠️ #"+str(trade_id)+" الصفقة ألغيت تلقائياً\n"
-                                                 "السبب: السوق تحرك عكس الاتجاه\n"
+                                            text="⚠️ #"+str(trade_id)+" الصفقة ألغيت\n"
                                                  "السعر تحرك "+str(round(counter_pct,1))+"% عكس الدخول\n"
-                                                 "الفريمات تغيرت إلى: "+new_dir+"\n"
-                                                 "راجع التحليل قبل الدخول مجدداً")
+                                                 "الفريمات: "+new_dir)
                                 except Exception as e:
                                     logger.warning("Counter move check: "+str(e))
                     continue
@@ -1750,7 +1836,8 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.job_queue.run_repeating(monitor_btc,       interval=60,                   first=30)
+    app.job_queue.run_repeating(monitor_btc,          interval=60,      first=30)
+    app.job_queue.run_repeating(check_pending_trades, interval=15*60,  first=60)
     app.job_queue.run_repeating(send_smart_alerts, interval=45*60,                first=120)
     app.job_queue.run_repeating(send_news,         interval=4*60*60,              first=300)
     app.job_queue.run_daily(send_daily_summary, time=__import__("datetime").time(6, 0, 0))
