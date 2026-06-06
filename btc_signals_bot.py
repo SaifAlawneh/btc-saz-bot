@@ -1534,6 +1534,27 @@ async def monitor_btc(context):
                             to_remove.append(trade)
                             await context.bot.send_message(chat_id=chat_id,
                                 text="❌ #"+str(trade_id)+" الصفقة ألغيت — السعر تجاوز SL قبل الدخول")
+                        else:
+                            # ✅ تحقق عكس الاتجاه — شرطان معاً
+                            counter_pct = abs(current - entry) / entry * 100
+                            counter_move = (
+                                (direction == "SELL" and current > entry * 1.02) or
+                                (direction == "BUY"  and current < entry * 0.98)
+                            )
+                            if counter_move:
+                                try:
+                                    fresh = full_analysis(trade["asset"], 0)
+                                    if fresh and fresh["final"] != direction:
+                                        to_remove.append(trade)
+                                        new_dir = "شراء BUY ⬆️" if fresh["final"]=="BUY" else "بيع SELL ⬇️"
+                                        await context.bot.send_message(chat_id=chat_id,
+                                            text="⚠️ #"+str(trade_id)+" الصفقة ألغيت تلقائياً\n"
+                                                 "السبب: السوق تحرك عكس الاتجاه\n"
+                                                 "السعر تحرك "+str(round(counter_pct,1))+"% عكس الدخول\n"
+                                                 "الفريمات تغيرت إلى: "+new_dir+"\n"
+                                                 "راجع التحليل قبل الدخول مجدداً")
+                                except Exception as e:
+                                    logger.warning("Counter move check: "+str(e))
                     continue
 
                 if direction == "BUY":
