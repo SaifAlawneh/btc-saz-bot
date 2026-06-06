@@ -1600,7 +1600,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "backtest":
         await query.message.reply_text(t(uid,"loading_backtest"))
         try:
-            result = run_backtest(days=90)
+            result = run_backtest(days=180)
             if not result:
                 await query.message.reply_text("❌ ما توفرت بيانات كافية للـ Backtest"); return
             lang = user_languages.get(uid, "ar")
@@ -1718,9 +1718,11 @@ def run_backtest(days=180):
 
                 direction = "BUY" if sb > ss else "SELL"
 
-                # فلتر الاتجاه — نمنع الصفقات عكس الترند
-                if direction == "BUY" and trend_bear: continue
-                if direction == "SELL" and trend_bull: continue
+                # فلتر الاتجاه — عقوبة نقاط بدل منع كامل
+                if direction == "BUY" and trend_bear:
+                    ss += 15  # يضعف إشارة BUY في downtrend
+                if direction == "SELL" and trend_bull:
+                    sb += 15  # يضعف إشارة SELL في uptrend
 
 
                 sl  = round(price - 0.8*atr, 2) if direction=="BUY" else round(price + 0.8*atr, 2)
