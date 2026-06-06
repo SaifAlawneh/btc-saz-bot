@@ -1626,9 +1626,14 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
 def run_backtest(days=90):
     """يشغّل backtest على بيانات BTC التاريخية"""
     try:
+        # جرب Binance أولاً، بعدين get_data كـ fallback
         df = get_binance_data(days=days, interval="hourly")
         if df is None or len(df) < 100:
+            df = get_data("BTC", days=days, interval="hourly")
+        if df is None or len(df) < 100:
+            logger.warning("Backtest: insufficient data, len="+str(len(df) if df is not None else 0))
             return None
+        logger.info("Backtest: got "+str(len(df))+" candles")
 
         signals = []
         step = 24  # تحقق كل 24 ساعة
