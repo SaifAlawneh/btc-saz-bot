@@ -30,6 +30,7 @@ active_trades         = []
 active_btc_trade      = {}
 pending_trade_replace = {}
 last_signal_time      = {}
+pending_signals       = {}  # trade_id: {res, timestamp, chat_id}
 trade_counter         = 0
 _cache                = {}
 
@@ -1373,6 +1374,39 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             save_trades()
         await query.message.reply_text("❌ الصفقة #"+str(trade_id)+" ألغيت")
 
+    elif data.startswith("activate_signal_"):
+        sig_id = int(data.split("_")[2])
+        sig = pending_signals.pop(sig_id, None)
+        if sig:
+            res_sig   = sig["res"]
+            entry_p   = sig["entry_p"]
+            chat_id_s = sig.get("chat_id", uid)
+            dist_to_entry = abs(entry_p - res_sig["price"]) / res_sig["price"] * 100
+            is_pending = dist_to_entry > 0.1
+            new_trade = {
+                "id": sig_id, "asset": "BTC",
+                "direction": res_sig["final"], "entry": entry_p,
+                "sl": res_sig["sl"], "tp1": res_sig["tp1"],
+                "tp2": res_sig["tp2"], "tp3": res_sig["tp3"],
+                "atr": res_sig["atr"], "tp1_hit": False, "tp2_hit": False,
+                "orig_sl": res_sig["sl"], "entry_fib": entry_p,
+                "status": "pending" if is_pending else "active",
+                "chat_id": chat_id_s, "open_time": gmt_now(),
+            }
+            active_trades.append(new_trade)
+            if res_sig["asset"] == "BTC":
+                active_btc_trade["data"] = new_trade
+            save_trades()
+            status_txt = "⏳ انتظار الدخول عند $"+"{:,.2f}".format(entry_p) if is_pending else "🟢 نشطة"
+            await query.message.reply_text(
+                "✅ #"+str(sig_id)+" تم تفعيل الصفقة\n"+status_txt)
+        else:
+            await query.message.reply_text("⚠️ انتهت صلاحية الإشارة")
+
+    elif data.startswith("ignore_signal_"):
+        sig_id = int(data.split("_")[2])
+        pending_signals.pop(sig_id, None)
+
     elif data.startswith("keep_active_"):
         trade_id = int(data.split("_")[2])
         # صمت — المستخدم قرر يبقيها
@@ -1560,29 +1594,87 @@ async def monitor_btc(context):
                                 last_signal_time["BTC"] = now_ts
                                 trade_counter += 1
                                 res["id"] = trade_counter
-                                msg = build_trade_msg(res, 0, auto=True)
-                                # بعث للقناة والمستخدمين مباشرة
-                                await context.bot.send_message(chat_id=CHANNEL_ID, text=msg)
+                                # بناء رسالة الإشارة
+                                dir_emoji = "🔴" if res["final"]=="SELL" else "🟢"
+                                dir_txt   = "بيع SELL ⬇️" if res["final"]=="SELL" else "شراء BUY ⬆️"
+                                fl_txt = "\n".join(["  "+fl for fl in res.get("frame_lines",[])])
+                                signal_msg = (
+                                    "🔔 إشارة جديدة — ₿ BTC/USD\n"
+                                    +dir_emoji+" "+dir_txt+"\n\n"
+                                    "💵 السعر: $"+"{:,.2f}".format(res["price"])+"\n"
+                                    "📍 الدخول: $"+"{:,.2f}".format(entry_p)+"\n"
+                                    "SL: $"+"{:,.2f}".format(res["sl"])+"\n"
+                                    "TP1: $"+"{:,.2f}".format(res["tp1"])+" | "
+                                    "TP2: $"+"{:,.2f}".format(res["tp2"])+" | "
+                                    "TP3: $"+"{:,.2f}".format(res["tp3"])+"\n"
+                                    "RR: 1:"+str(res["rr"])+"\n\n"
+                                    +fl_txt
+                                )
+                                kb_signal = InlineKeyboardMarkup([
+                                    [InlineKeyboardButton("✅ فعّل الصفقة", callback_data="activate_signal_"+str(trade_counter)),
+                                     InlineKeyboardButton("❌ تجاهل", callback_data="ignore_signal_"+str(trade_counter))]
+                                ])
+                                # حفظ الإشارة في pending_signals
+                                pending_signals[trade_counter] = {
+                                    "res": res, "entry_p": entry_p,
+                                    "timestamp": now_ts, "price": res["price"]
+                                }
+                                # بعث للمستخدمين
                                 for user_id in ALLOWED_USERS:
                                     try:
-                                        await context.bot.send_message(chat_id=user_id, text="🔔 إشارة جديدة!\n\n"+msg)
+                                        await context.bot.send_message(chat_id=user_id,
+                                            text=signal_msg, reply_markup=kb_signal)
+                                        pending_signals[trade_counter]["chat_id"] = user_id
                                     except: pass
-                                new_trade = {
-                                    "id": trade_counter, "asset": "BTC",
-                                    "direction": res["final"], "entry": entry_p,
-                                    "sl": res["sl"], "tp1": res["tp1"], "tp2": res["tp2"], "tp3": res["tp3"],
-                                    "atr": res["atr"], "tp1_hit": False, "tp2_hit": False,
-                                    "orig_sl": res["sl"], "entry_fib": entry_p,
-                                    "status": "pending" if abs(entry_p - res["price"])/res["price"]*100 > 0.3 else "active",
-                                    "chat_id": CHANNEL_ID, "open_time": gmt_now(),
-                                }
-                                active_trades.append(new_trade)
-                                active_btc_trade["data"] = new_trade
-                                save_trades()
                 except Exception as e:
                     logger.warning("Auto signal check: " + str(e))
     except Exception as e:
         logger.error("Auto signal outer: " + str(e))
+
+    # ==================== مراقبة الإشارات المعلقة ====================
+    if pending_signals:
+        try:
+            now_ts2 = datetime.now(timezone.utc).timestamp()
+            to_expire = []
+            for sig_id, sig in list(pending_signals.items()):
+                sig_price = sig["price"]
+                sig_ts    = sig["timestamp"]
+                chat_id   = sig.get("chat_id", list(ALLOWED_USERS)[0])
+                current   = get_btc_price()
+                expired   = False
+                reason    = ""
+
+                if current:
+                    price_moved = abs(current - sig_price) / sig_price * 100
+                    if price_moved > 1.5:
+                        expired = True
+                        reason  = "السعر تحرك بعيداً عن نقطة الدخول"
+
+                if not expired:
+                    try:
+                        fresh = full_analysis("BTC", 0)
+                        if fresh and fresh["final"] != sig["res"]["final"]:
+                            expired = True
+                            reason  = "الفريمات تغيرت — الفرصة لم تعد قائمة"
+                    except: pass
+
+                if not expired and (now_ts2 - sig_ts) > 1800:
+                    expired = True
+                    reason  = ""
+
+                if expired:
+                    to_expire.append(sig_id)
+                    try:
+                        msg = "⏰ #"+str(sig_id)+" انتهت صلاحية الإشارة"
+                        if reason:
+                            msg += "\n" + reason
+                        await context.bot.send_message(chat_id=chat_id, text=msg)
+                    except: pass
+
+            for sig_id in to_expire:
+                pending_signals.pop(sig_id, None)
+        except Exception as e:
+            logger.error("Pending signals monitor: "+str(e))
 
     if not active_trades:
         return
