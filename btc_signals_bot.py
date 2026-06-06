@@ -1377,36 +1377,6 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(t(uid,"about_text"))
 
 
-# ==================== إشارات تلقائية ====================
-async def auto_signals(context):
-    try:
-        res = full_analysis("BTC", 0)
-        if res and res["final"] != "NEUTRAL" and res["base_conf"] >= MIN_CONFIDENCE:
-            global trade_counter
-            now_ts  = datetime.now(timezone.utc).timestamp()
-            last_ts = last_signal_time.get("BTC", 0)
-            if (now_ts - last_ts) < SPAM_COOLDOWN:
-                return
-            last_signal_time["BTC"] = now_ts
-            trade_counter += 1
-            res["id"] = trade_counter
-            await context.bot.send_message(chat_id=CHANNEL_ID, text=build_trade_msg(res, 0, auto=True))
-            new_trade = {
-                "id": trade_counter, "asset": "BTC",
-                "direction": res["final"], "entry": res.get("entry_price", res["price"]),
-                "sl": res["sl"], "tp1": res["tp1"], "tp2": res["tp2"], "tp3": res["tp3"],
-                "atr": res["atr"], "tp1_hit": False, "tp2_hit": False,
-                "chat_id": CHANNEL_ID, "open_time": gmt_now(),
-            }
-            already_open = any(tr["asset"] == "BTC" and tr["direction"] == new_trade["direction"] for tr in active_trades)
-            if not already_open:
-                active_trades.append(new_trade)
-                active_btc_trade["data"] = new_trade
-                save_trades()
-    except Exception as e:
-        logger.error("Auto signals: " + str(e))
-
-
 # ==================== مراقبة الصفقات المعلقة ====================
 async def check_pending_trades(context):
     """كل 15 دقيقة — يتحقق من صحة الصفقات الـ pending"""
@@ -1561,7 +1531,8 @@ async def monitor_btc(context):
 
                 # ✅ تحقق إذا الصفقة pending — انتظر السعر يوصل للدخول
                 if trade.get("status") == "pending":
-                    reached = (direction == "BUY" and current <= entry * 1.003) or                               (direction == "SELL" and current >= entry * 0.997)
+                    reached = (direction == "BUY" and current <= entry * 1.001) or \
+                              (direction == "SELL" and current >= entry * 0.999)
                     if reached:
                         # ✅ إعادة تحليل السوق عند الدخول
                         try:
@@ -1576,7 +1547,7 @@ async def monitor_btc(context):
                                 to_remove.append(trade)
                                 new_dir = "شراء BUY ⬆️" if fresh["final"] == "BUY" else "بيع SELL ⬇️"
                                 await context.bot.send_message(chat_id=chat_id,
-                                    text="⚠️ #"+str(trade_id)+" الصفقة ألغيت عند الدخول\nالسوق غيّر اتجاهه إلى: "+new_dir+"\nراجع التحليل الجديد قبل الدخول")
+                                    text="⚠️ #"+str(trade_id)+" الصفقة ألغيت\nالاتجاه: "+new_dir)
                             else:
                                 # الاتجاه نفسه — حدّث SL/TP بالأرقام الجديدة
                                 trade["status"] = "active"
@@ -1649,11 +1620,12 @@ async def monitor_btc(context):
                         record_trade_result(trade_id, "win", trade.get("rr",0)); closed = True
                     elif not trade["tp1_hit"] and current >= tp1:
                         trade["tp1_hit"] = True; trade["sl"] = trade["entry"]
-                        update_msg = "✅ #"+str(trade_id)+" "+t(uid,"update_tp1_hit")
+                        update_msg = "✅ #"+str(trade_id)+" الهدف الأول تم\nSL انتقل للدخول: $"+"{:,.2f}".format(trade["entry"])
                     elif trade["tp1_hit"] and not trade["tp2_hit"] and current >= tp2:
                         trade["tp2_hit"] = True
-                        trade["sl"] = round(tp2 - 0.25 * abs(tp1 - tp2), 2)
-                        update_msg = "✅✅ #"+str(trade_id)+" "+t(uid,"update_tp2_hit")
+                        new_sl_tp2 = round(tp2 - 0.25 * abs(tp1 - tp2), 2)
+                        trade["sl"] = new_sl_tp2
+                        update_msg = "✅✅ #"+str(trade_id)+" الهدف الثاني تم\nSL انتقل لـ $"+"{:,.2f}".format(new_sl_tp2)
                     elif current <= trade["sl"]:
                         if trade.get("tp2_hit"):
                             rr_partial = round(abs(tp2 - trade["entry"]) / abs(trade["entry"] - trade.get("orig_sl", trade["sl"])), 2) if abs(trade["entry"] - trade.get("orig_sl", trade["sl"])) > 0 else 1.0
@@ -1669,19 +1641,22 @@ async def monitor_btc(context):
                     elif trade["tp1_hit"] and current > tp1 + 0.5*atr:
                         new_sl = round(current - 0.8*atr, 2)
                         if new_sl > trade["sl"]:
+                            moved = new_sl - trade["sl"]
                             trade["sl"] = new_sl
-                            update_msg = "📊 #"+str(trade_id)+" "+t(uid,"update_sl_moved")
+                            if moved >= atr:
+                                update_msg = "📊 #"+str(trade_id)+" SL تحرك لـ $"+"{:,.2f}".format(new_sl)
                 else:
                     if current <= tp3:
                         update_msg = "🏆 #"+str(trade_id)+" الهدف الثالث تم! صفقة مغلقة بنجاح 🎉"
                         record_trade_result(trade_id, "win", trade.get("rr",0)); closed = True
                     elif not trade["tp1_hit"] and current <= tp1:
                         trade["tp1_hit"] = True; trade["sl"] = trade["entry"]
-                        update_msg = "✅ #"+str(trade_id)+" "+t(uid,"update_tp1_hit")
+                        update_msg = "✅ #"+str(trade_id)+" الهدف الأول تم\nSL انتقل للدخول: $"+"{:,.2f}".format(trade["entry"])
                     elif trade["tp1_hit"] and not trade["tp2_hit"] and current <= tp2:
                         trade["tp2_hit"] = True
-                        trade["sl"] = round(tp2 + 0.25 * abs(tp1 - tp2), 2)
-                        update_msg = "✅✅ #"+str(trade_id)+" "+t(uid,"update_tp2_hit")
+                        new_sl_tp2 = round(tp2 + 0.25 * abs(tp1 - tp2), 2)
+                        trade["sl"] = new_sl_tp2
+                        update_msg = "✅✅ #"+str(trade_id)+" الهدف الثاني تم\nSL انتقل لـ $"+"{:,.2f}".format(new_sl_tp2)
                     elif current >= trade["sl"]:
                         if trade.get("tp2_hit"):
                             rr_partial = round(abs(tp2 - trade["entry"]) / abs(trade["entry"] - trade.get("orig_sl", trade["sl"])), 2) if abs(trade["entry"] - trade.get("orig_sl", trade["sl"])) > 0 else 1.0
@@ -1697,8 +1672,10 @@ async def monitor_btc(context):
                     elif trade["tp1_hit"] and current < tp1 - 0.5*atr:
                         new_sl = round(current + 0.8*atr, 2)
                         if new_sl < trade["sl"]:
+                            moved = trade["sl"] - new_sl
                             trade["sl"] = new_sl
-                            update_msg = "📊 #"+str(trade_id)+" "+t(uid,"update_sl_moved")
+                            if moved >= atr:
+                                update_msg = "📊 #"+str(trade_id)+" SL تحرك لـ $"+"{:,.2f}".format(new_sl)
 
                 if update_msg:
                     await context.bot.send_message(chat_id=chat_id,
