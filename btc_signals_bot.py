@@ -1373,6 +1373,19 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             save_trades()
         await query.message.reply_text("❌ الصفقة #"+str(trade_id)+" ألغيت")
 
+    elif data.startswith("keep_active_"):
+        trade_id = int(data.split("_")[2])
+        # صمت — المستخدم قرر يبقيها
+        pass
+
+    elif data.startswith("close_active_"):
+        trade_id = int(data.split("_")[2])
+        trade = next((tr for tr in active_trades if tr.get("id") == trade_id), None)
+        if trade:
+            active_trades.remove(trade)
+            save_trades()
+            await query.message.reply_text("✅ #"+str(trade_id)+" تم إغلاق الصفقة من القائمة")
+
     elif data == "about":
         await query.message.reply_text(t(uid,"about_text"))
 
@@ -1435,6 +1448,66 @@ async def check_pending_trades(context):
                     reply_markup=kb)
     except Exception as e:
         logger.error("check_pending_trades: "+str(e))
+
+    # ==================== مراقبة الصفقات النشطة ====================
+    active_only = [tr for tr in active_trades if tr.get("status") == "active"]
+    if not active_only:
+        return
+    try:
+        res2 = full_analysis("BTC", 0)
+        if not res2:
+            return
+        frame_lines2 = res2.get("frame_lines", [])
+        buy_frames2  = sum(1 for f in frame_lines2 if "BUY" in f)
+        sell_frames2 = sum(1 for f in frame_lines2 if "SELL" in f)
+
+        for trade in list(active_only):
+            direction = trade["direction"]
+            trade_id  = trade.get("id", "?")
+            chat_id   = trade["chat_id"]
+
+            if direction == "SELL":
+                matching = sell_frames2
+                opposite = buy_frames2
+                opp_dir  = "BUY ⬆️"
+                rec_partial = "الصفقة لا زالت منطقية"
+                rec_full    = "فكر بإغلاق الصفقة — الاتجاه تغير"
+            else:
+                matching = buy_frames2
+                opposite = sell_frames2
+                opp_dir  = "SELL ⬇️"
+                rec_partial = "الصفقة لا زالت منطقية"
+                rec_full    = "فكر بإغلاق الصفقة — الاتجاه تغير"
+
+            total_frames2 = buy_frames2 + sell_frames2
+            if total_frames2 == 0:
+                continue
+
+            kb_active = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ خلي الصفقة", callback_data="keep_active_"+str(trade_id)),
+                 InlineKeyboardButton("❌ أغلق من القائمة", callback_data="close_active_"+str(trade_id))]
+            ])
+
+            if opposite == total_frames2:
+                # فريمات انقلبت كلياً
+                frame_status = ""
+                for fl in frame_lines2:
+                    frame_status += "  " + fl + "\n"
+                await context.bot.send_message(chat_id=chat_id,
+                    text="⚠️ #"+str(trade_id)+" الفريمات انقلبت كلياً\n"+frame_status+"\nتوصية: "+rec_full,
+                    reply_markup=kb_active)
+
+            elif matching < total_frames2 and matching > 0:
+                # فريمات تغيرت جزئياً
+                frame_status = ""
+                for fl in frame_lines2:
+                    frame_status += "  " + fl + "\n"
+                await context.bot.send_message(chat_id=chat_id,
+                    text="📊 #"+str(trade_id)+" تغيير في الفريمات\n"+frame_status+"\nتوصية: "+rec_partial,
+                    reply_markup=kb_active)
+
+    except Exception as e:
+        logger.error("check_active_trades: "+str(e))
 
 
 # ==================== مراقبة الصفقات ====================
