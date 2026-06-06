@@ -17,7 +17,7 @@ TWELVEDATA_KEY = os.environ.get("TWELVEDATA_KEY", "")
 NEWS_API_KEY   = os.environ.get("NEWS_API_KEY", "cdf2a61f2cbe4540a41456bc4bd3a40e")
 FINNHUB_KEY    = os.environ.get("FINNHUB_KEY", "")
 
-MIN_CONFIDENCE    = 68
+MIN_CONFIDENCE    = 72
 SPAM_COOLDOWN     = 1800
 CACHE_TTL         = 900
 TRADES_FILE       = "active_trades.json"
@@ -525,10 +525,10 @@ def analyze_frame(df, uid=0):
     details = []
 
     rsi = safe(last["RSI"], 50.0)
-    if rsi < 30:   sb += 25; details.append(t(uid,"ind_rsi_oversold") + " (" + str(round(rsi,1)) + ") 🟢")
-    elif rsi < 45: sb += 12; details.append(t(uid,"ind_rsi_buy")      + " (" + str(round(rsi,1)) + ")")
-    elif rsi > 70: ss += 25; details.append(t(uid,"ind_rsi_overbought")+ " (" + str(round(rsi,1)) + ") 🔴")
-    elif rsi > 55: ss += 12; details.append(t(uid,"ind_rsi_sell")      + " (" + str(round(rsi,1)) + ")")
+    if rsi < 30:   sb += 30; details.append(t(uid,"ind_rsi_oversold") + " (" + str(round(rsi,1)) + ") 🟢")
+    elif rsi < 40: sb += 10; details.append(t(uid,"ind_rsi_buy")      + " (" + str(round(rsi,1)) + ")")
+    elif rsi > 70: ss += 30; details.append(t(uid,"ind_rsi_overbought")+ " (" + str(round(rsi,1)) + ") 🔴")
+    elif rsi > 60: ss += 10; details.append(t(uid,"ind_rsi_sell")      + " (" + str(round(rsi,1)) + ")")
 
     macd_v = safe(last["MACD"], 0); macd_s = safe(last["MACD_S"], 0); macd_h = safe(last["MACD_H"], 0)
     if macd_v > macd_s and macd_h > 0: sb += 20; details.append(t(uid,"ind_macd_pos"))
@@ -567,9 +567,14 @@ def analyze_frame(df, uid=0):
     except: pass
 
     try:
-        if bool(last.get("Vol_High", False)):
-            if sb > ss: sb += 10
-            else: ss += 10
+        vol_high = bool(last.get("Vol_High", False))
+        if vol_high:
+            if sb > ss: sb += 15
+            else: ss += 15
+        else:
+            # حجم منخفض — نخفض الثقة
+            if sb > ss: sb = max(0, sb - 10)
+            else: ss = max(0, ss - 10)
     except: pass
 
     direction = "BUY" if sb > ss else "SELL"
@@ -801,6 +806,12 @@ def full_analysis(asset="BTC", uid=0):
 
     # Session filter — نسمح بتوافق 3 فريمات حتى في الجلسة الآسيوية
     if session == "ASIAN" and buy_c < 2 and sel_c < 2:
+        return None
+
+    # Regime filter — ما نعطي إشارات في السوق الجانبي
+    regime_check, _ = detect_market_regime(df_1h)
+    if regime_check == "RANGING":
+        logger.info("Regime filter: RANGING — no signal")
         return None
 
     if   buy_c == 3: final="BUY";  conf_txt=t(uid,"full_confluence");    frames_conf=85
@@ -1659,25 +1670,42 @@ def run_backtest(days=90):
                 macd_s= safe(last["MACD_S"], 0)
                 macd_h= safe(last["MACD_H"], 0)
 
-                # فلتر الاتجاه العام — ما نفتح BUY في downtrend والعكس
+                # فلتر الاتجاه العام
                 trend_bull = e21 > e50
                 trend_bear = e21 < e50
 
+                # فلتر السوق الجانبي
+                ema_spread = abs(e9 - e50) / price * 100
+                if ema_spread < 0.5: continue  # سوق جانبي — تجاهل
+
+                # Volume confirmation
+                vol_ma = safe(last.get("Vol_MA", 0) if hasattr(last, 'get') else 0, 0)
+                vol    = safe(last.get("Volume", 0) if hasattr(last, 'get') else 0, 0)
+                vol_ok = vol > vol_ma * 1.2 if vol_ma > 0 else True
+
                 # شروط الإشارة
                 sb = ss = 0
-                if rsi < 30:   sb += 30  # شددنا من 35 لـ 30
-                elif rsi > 70: ss += 30  # شددنا من 65 لـ 70
+                if rsi < 30:   sb += 30
+                elif rsi < 40: sb += 10
+                elif rsi > 70: ss += 30
+                elif rsi > 60: ss += 10
                 if macd_v > macd_s and macd_h > 0: sb += 20
                 elif macd_v < macd_s and macd_h < 0: ss += 20
                 if e9 > e21 > e50: sb += 20
                 elif e9 < e21 < e50: ss += 20
                 if price <= bb_l: sb += 15
                 elif price >= bb_u: ss += 15
+                if vol_ok:
+                    if sb > ss: sb += 15
+                    else: ss += 15
+                else:
+                    if sb > ss: sb = max(0, sb - 10)
+                    else: ss = max(0, ss - 10)
 
                 total = sb + ss
                 if total == 0: continue
                 conf = round(max(sb, ss) / total * 100)
-                if conf < 68: continue
+                if conf < 72: continue
 
                 direction = "BUY" if sb > ss else "SELL"
 
