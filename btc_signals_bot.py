@@ -1597,7 +1597,8 @@ async def check_pending_trades(context):
                          InlineKeyboardButton("❌ ألغِ", callback_data="cancel_pending_"+str(trade_id))]
                     ])
                     await context.bot.send_message(chat_id=chat_id,
-                        text="📊 #"+str(trade_id)+" تغيير في الفريمات\n"+frame_status,
+                        text="📊 #"+str(trade_id)+" تغيير في الفريمات\n"+frame_status+
+                             "\nتوصية: الصفقة لا زالت منطقية — الأغلبية مع الاتجاه",
                         reply_markup=kb)
     except Exception as e:
         logger.error("check_pending_trades: "+str(e))
