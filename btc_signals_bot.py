@@ -973,11 +973,18 @@ def full_analysis(asset="BTC", uid=0):
     is_counter_trend = (final=="BUY" and weekly_trend=="BEAR") or                        (final=="SELL" and weekly_trend=="BULL")
     if is_counter_trend:
         risk_warnings.append("⚠️ صفقة عكس الترند الأسبوعي — خذ TP1 وTP2 فقط")
-        # TP3 = TP2 + نصف المسافة (هدف أقرب)
         if final == "BUY":
             tp3 = round(tp2 + abs(tp2-tp1)*0.5, 2)
         else:
             tp3 = round(tp2 - abs(tp1-tp2)*0.5, 2)
+
+    # ✅ فلتر SELL إضافي — لازم الويكلي والشهري هابطين معاً
+    if final == "SELL":
+        if not (weekly_trend == "BEAR" and monthly_bias == "BEAR"):
+            # SELL عكس الترند العام — نرفع الـ confidence المطلوب
+            if base_conf < 80:
+                logger.info("SELL filter: weekly/monthly not both BEAR — conf "+str(base_conf)+" < 80, blocking")
+                return None
 
     warn_count = len(risk_warnings)
     if warn_count == 0:   overall_risk = "🟢 منخفضة"
@@ -1723,6 +1730,9 @@ def run_backtest(days=90):
                 # فلتر الاتجاه — نمنع الصفقات عكس الترند
                 if direction == "BUY" and trend_bear: continue
                 if direction == "SELL" and trend_bull: continue
+
+                # فلتر SELL إضافي — نشترط RSI فوق 65 للـ SELL
+                if direction == "SELL" and rsi < 65: continue
                 sl  = round(price - 0.8*atr, 2) if direction=="BUY" else round(price + 0.8*atr, 2)
                 tp1 = round(price + 0.8*atr, 2) if direction=="BUY" else round(price - 0.8*atr, 2)
                 tp2 = round(price + 1.6*atr, 2) if direction=="BUY" else round(price - 1.6*atr, 2)
