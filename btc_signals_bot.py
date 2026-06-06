@@ -22,6 +22,7 @@ SPAM_COOLDOWN     = 1800
 CACHE_TTL         = 900
 TRADES_FILE       = "active_trades.json"
 STATS_FILE        = "trade_stats.json"
+LANGUAGES_FILE    = "user_languages.json"
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -39,6 +40,18 @@ _news_notified        = {}  # يتتبع الأحداث اللي بُعث عنه
 
 ALLOWED_USERS = {8490817794, 1548286220}
 
+def load_languages():
+    try:
+        with open(LANGUAGES_FILE) as f:
+            data = json.load(f)
+            return {int(k): v for k, v in data.items()}
+    except:
+        return {}
+
+def save_languages():
+    with open(LANGUAGES_FILE, "w") as f:
+        json.dump({str(k): v for k, v in user_languages.items()}, f)
+
 def load_trades():
     try:
         with open(TRADES_FILE) as f:
@@ -50,6 +63,9 @@ def load_trades():
 def save_trades():
     with open(TRADES_FILE, "w") as f:
         json.dump({"trades": active_trades, "counter": trade_counter}, f)
+
+_loaded_languages = load_languages()
+user_languages.update(_loaded_languages)
 
 _loaded_trades, _loaded_counter = load_trades()
 _valid_trades = [t for t in _loaded_trades if t.get("asset") == "BTC" and t.get("entry", 0) > 10000]
@@ -1196,9 +1212,11 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
     # ── اللغة ──
     if data == "lang_ar":
         user_languages[uid] = "ar"
+        save_languages()
         await query.message.reply_text(t(uid,"welcome"), reply_markup=main_keyboard(uid))
     elif data == "lang_en":
         user_languages[uid] = "en"
+        save_languages()
         await query.message.reply_text(t(uid,"welcome"), reply_markup=main_keyboard(uid))
     elif data == "change_lang":
         await query.message.reply_text(t(uid,"choose_lang"), reply_markup=lang_keyboard())
