@@ -978,13 +978,7 @@ def full_analysis(asset="BTC", uid=0):
         else:
             tp3 = round(tp2 - abs(tp1-tp2)*0.5, 2)
 
-    # ✅ فلتر SELL إضافي — لازم الويكلي والشهري هابطين معاً
-    if final == "SELL":
-        if not (weekly_trend == "BEAR" and monthly_bias == "BEAR"):
-            # SELL عكس الترند العام — نرفع الـ confidence المطلوب
-            if base_conf < 80:
-                logger.info("SELL filter: weekly/monthly not both BEAR — conf "+str(base_conf)+" < 80, blocking")
-                return None
+
 
     warn_count = len(risk_warnings)
     if warn_count == 0:   overall_risk = "🟢 منخفضة"
@@ -1652,7 +1646,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ==================== Backtest ====================
-def run_backtest(days=90):
+def run_backtest(days=180):
     """يشغّل backtest على بيانات BTC التاريخية"""
     try:
         # جرب Binance أولاً، بعدين get_data كـ fallback
@@ -1694,19 +1688,19 @@ def run_backtest(days=90):
 
                 # فلتر السوق الجانبي
                 ema_spread = abs(e9 - e50) / price * 100
-                if ema_spread < 0.5: continue  # سوق جانبي — تجاهل
+                if ema_spread < 0.3: continue  # سوق جانبي — تجاهل
 
-                # Volume confirmation
+                # Volume — نقاط إضافية فقط مش شرط إلزامي
                 vol_ma = safe(last.get("Vol_MA", 0) if hasattr(last, 'get') else 0, 0)
                 vol    = safe(last.get("Volume", 0) if hasattr(last, 'get') else 0, 0)
-                vol_ok = vol > vol_ma * 1.2 if vol_ma > 0 else True
+                vol_ok = vol > vol_ma * 1.2 if vol_ma > 0 else False
 
                 # شروط الإشارة
                 sb = ss = 0
-                if rsi < 30:   sb += 30
-                elif rsi < 40: sb += 10
-                elif rsi > 70: ss += 30
-                elif rsi > 60: ss += 10
+                if rsi < 35:   sb += 30
+                elif rsi < 45: sb += 10
+                elif rsi > 65: ss += 30
+                elif rsi > 55: ss += 10
                 if macd_v > macd_s and macd_h > 0: sb += 20
                 elif macd_v < macd_s and macd_h < 0: ss += 20
                 if e9 > e21 > e50: sb += 20
@@ -1714,16 +1708,13 @@ def run_backtest(days=90):
                 if price <= bb_l: sb += 15
                 elif price >= bb_u: ss += 15
                 if vol_ok:
-                    if sb > ss: sb += 15
-                    else: ss += 15
-                else:
-                    if sb > ss: sb = max(0, sb - 10)
-                    else: ss = max(0, ss - 10)
+                    if sb > ss: sb += 10
+                    else: ss += 10
 
                 total = sb + ss
                 if total == 0: continue
                 conf = round(max(sb, ss) / total * 100)
-                if conf < 72: continue
+                if conf < 68: continue
 
                 direction = "BUY" if sb > ss else "SELL"
 
@@ -1731,8 +1722,7 @@ def run_backtest(days=90):
                 if direction == "BUY" and trend_bear: continue
                 if direction == "SELL" and trend_bull: continue
 
-                # فلتر SELL إضافي — نشترط RSI فوق 65 للـ SELL
-                if direction == "SELL" and rsi < 65: continue
+
                 sl  = round(price - 0.8*atr, 2) if direction=="BUY" else round(price + 0.8*atr, 2)
                 tp1 = round(price + 0.8*atr, 2) if direction=="BUY" else round(price - 0.8*atr, 2)
                 tp2 = round(price + 1.6*atr, 2) if direction=="BUY" else round(price - 1.6*atr, 2)
