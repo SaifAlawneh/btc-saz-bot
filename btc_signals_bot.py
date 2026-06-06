@@ -1177,15 +1177,33 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                         parts.append("  " + fl)
                 parts += ["", "💡 الفريمات غير متوافقة — انتظر إشارة أقوى"]
                 await query.message.reply_text("\n".join(parts)); return
+            entry_p = res.get("entry_price", res["price"])
+            market_p = res["price"]
+
+            # ✅ تحقق من التشابه قبل العرض
+            avg_atr = res.get("atr", entry_p * 0.015)
+            similar_recent = next((
+                tr for tr in active_trades
+                if tr["asset"] == res["asset"] and
+                tr["direction"] == res["final"] and
+                abs(tr["entry"] - entry_p) < 0.5 * avg_atr
+            ), None)
+
+            if similar_recent:
+                await query.message.reply_text(
+                    "⚠️ نفس الفرصة موجودة بالفعل\n"
+                    "دخول سابق: $"+"{:,.2f}".format(similar_recent["entry"])+"\n"
+                    "لا داعي لصفقة جديدة")
+                return
+
+            # ✅ عرض الصفقة بعد التحقق
             global trade_counter
             trade_counter += 1
             res["id"] = trade_counter
             await query.message.reply_text(build_trade_msg(res, uid))
-            entry_p = res.get("entry_price", res["price"])
-            market_p = res["price"]
-            # الصفقة pending لو السعر لم يصل لمستوى الدخول بعد (فرق أكثر من 0.3%)
+
             dist_to_entry = abs(entry_p - market_p) / market_p * 100
-            is_pending = dist_to_entry > 0.3
+            is_pending = dist_to_entry > 0.1
             new_trade = {
                 "id": trade_counter, "asset": res["asset"],
                 "direction": res["final"], "entry": entry_p,
@@ -1197,24 +1215,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             }
             already_open = next((tr for tr in active_trades
                 if tr["asset"] == new_trade["asset"] and tr["direction"] == new_trade["direction"]), None)
-
-            # تحقق صفقة مشابهة (دخول ضمن 0.5%) — حتى لو already_open
-            entry_p = new_trade["entry"]
-            # ✅ تشابه مبني على ATR بدل نسبة ثابتة — أذكى وأدق
-            avg_atr = new_trade.get("atr", entry_p * 0.015)
-            similar_recent = next((
-                tr for tr in active_trades
-                if tr["asset"] == new_trade["asset"] and
-                tr["direction"] == new_trade["direction"] and
-                abs(tr["entry"] - entry_p) < 0.5 * avg_atr
-            ), None)
-
-            if similar_recent:
-                await query.message.reply_text(
-                    "⚠️ نفس الفرصة موجودة بالفعل\n"
-                    "دخول سابق: $"+"{:,.2f}".format(similar_recent["entry"])+"\n"
-                    "الفرق أقل من 0.5% — لا داعي لصفقة جديدة")
-            elif already_open:
+            if already_open:
                 dir_ar = "شراء BUY" if new_trade["direction"] == "BUY" else "بيع SELL"
                 ai_sym = "₿ BTC" if new_trade["asset"] == "BTC" else "🥇 GOLD"
                 pending_trade_replace[uid] = {"new": new_trade, "old": already_open, "res": res}
@@ -1415,6 +1416,8 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             active_trades.append(new_trade)
             if res_sig["asset"] == "BTC":
                 active_btc_trade["data"] = new_trade
+            # ✅ reset entry_update_sent للتحديث القادم
+            new_trade["entry_update_sent"] = False
             save_trades()
             status_txt = "⏳ انتظار الدخول عند $"+"{:,.2f}".format(entry_p) if is_pending else "🟢 نشطة"
             confirm_msg = "✅ #"+str(sig_id)+" تم تفعيل الصفقة\n"+status_txt
@@ -1541,8 +1544,8 @@ async def check_pending_trades(context):
     if not active_only:
         return
     try:
-        # ✅ نفس نتيجة التحليل — ما نستدعي full_analysis مرة ثانية
-        res2 = res if res else full_analysis("BTC", 0)
+        # ✅ استدعاء مستقل — لا يعتمد على res من scope خارجي
+        res2 = full_analysis("BTC", 0)
         if not res2:
             return
         frame_lines2 = res2.get("frame_lines", [])
