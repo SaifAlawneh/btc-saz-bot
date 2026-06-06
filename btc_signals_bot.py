@@ -1285,6 +1285,11 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
 
             dist_to_entry = abs(entry_p - market_p) / market_p * 100
             is_pending = dist_to_entry > 0.1
+            # ✅ حفظ snapshot للفريمات وقت الفتح
+            frame_snapshot = {
+                "buy": sum(1 for f in res.get("frame_lines", []) if "BUY" in f),
+                "sell": sum(1 for f in res.get("frame_lines", []) if "SELL" in f),
+            }
             new_trade = {
                 "id": trade_counter, "asset": res["asset"],
                 "direction": res["final"], "entry": entry_p,
@@ -1293,6 +1298,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 "orig_sl": res["sl"], "entry_fib": entry_p,
                 "status": "pending" if is_pending else "active",
                 "chat_id": query.message.chat_id, "open_time": gmt_now(),
+                "frame_snapshot": frame_snapshot,
             }
             # تحقق من صفقة مفتوحة — نفس الاتجاه أو معاكس
             already_open = next((tr for tr in active_trades
@@ -1498,6 +1504,10 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             chat_id_s  = chat_ids_s[0] if chat_ids_s else uid
             dist_to_entry = abs(entry_p - res_sig["price"]) / res_sig["price"] * 100
             is_pending = dist_to_entry > 0.1
+            sig_frame_snapshot = {
+                "buy": sum(1 for f in res_sig.get("frame_lines", []) if "BUY" in f),
+                "sell": sum(1 for f in res_sig.get("frame_lines", []) if "SELL" in f),
+            }
             new_trade = {
                 "id": sig_id, "asset": "BTC",
                 "direction": res_sig["final"], "entry": entry_p,
@@ -1507,6 +1517,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 "orig_sl": res_sig["sl"], "entry_fib": entry_p,
                 "status": "pending" if is_pending else "active",
                 "chat_id": chat_id_s, "open_time": gmt_now(),
+                "frame_snapshot": sig_frame_snapshot,
             }
             active_trades.append(new_trade)
             if res_sig["asset"] == "BTC":
@@ -1616,22 +1627,26 @@ async def check_pending_trades(context):
                          "الفريمات: "+opp_dir)
 
             elif matching < total_frames and matching > 0:
-                # فريمات تغيرت جزئياً — خيار للمستخدم (مرة وحدة لكل حالة)
-                alert_key = "frame_alert_"+str(buy_frames)+str(sell_frames)
-                if trade.get("last_frame_alert") != alert_key:
-                    trade["last_frame_alert"] = alert_key
-                    frame_status = ""
-                    for fl in frame_lines:
-                        frame_status += "  " + fl + "\n"
-                    pending_trade_replace[trade_id] = {"trade": trade}
-                    kb = InlineKeyboardMarkup([
-                        [InlineKeyboardButton("✅ خلي الصفقة", callback_data="keep_pending_"+str(trade_id)),
-                         InlineKeyboardButton("❌ ألغِ", callback_data="cancel_pending_"+str(trade_id))]
-                    ])
-                    await context.bot.send_message(chat_id=chat_id,
-                        text="📊 #"+str(trade_id)+" تغيير في الفريمات\n"+frame_status+
-                             "\nتوصية: الصفقة لا زالت منطقية — الأغلبية مع الاتجاه",
-                        reply_markup=kb)
+                # تنبيه فقط لو الفريمات تغيرت عن وقت الفتح
+                snap      = trade.get("frame_snapshot", {})
+                snap_buy  = snap.get("buy", -1)
+                snap_sell = snap.get("sell", -1)
+                if buy_frames != snap_buy or sell_frames != snap_sell:
+                    alert_key = "frame_alert_"+str(buy_frames)+str(sell_frames)
+                    if trade.get("last_frame_alert") != alert_key:
+                        trade["last_frame_alert"] = alert_key
+                        frame_status = ""
+                        for fl in frame_lines:
+                            frame_status += "  " + fl + "\n"
+                        pending_trade_replace[trade_id] = {"trade": trade}
+                        kb = InlineKeyboardMarkup([
+                            [InlineKeyboardButton("✅ خلي الصفقة", callback_data="keep_pending_"+str(trade_id)),
+                             InlineKeyboardButton("❌ ألغِ", callback_data="cancel_pending_"+str(trade_id))]
+                        ])
+                        await context.bot.send_message(chat_id=chat_id,
+                            text="📊 #"+str(trade_id)+" تغيير في الفريمات\n"+frame_status+
+                                 "\nتوصية: الصفقة لا زالت منطقية — الأغلبية مع الاتجاه",
+                            reply_markup=kb)
     except Exception as e:
         logger.error("check_pending_trades: "+str(e))
 
@@ -1688,13 +1703,22 @@ async def check_pending_trades(context):
                         reply_markup=kb_active)
 
             elif matching < total_frames2 and matching > 0:
-                # فريمات تغيرت جزئياً
-                frame_status = ""
-                for fl in frame_lines2:
-                    frame_status += "  " + fl + "\n"
-                await context.bot.send_message(chat_id=chat_id,
-                    text="📊 #"+str(trade_id)+" تغيير في الفريمات\n"+frame_status+"\nتوصية: "+rec_partial,
-                    reply_markup=kb_active)
+                # تحقق إذا الفريمات تغيرت فعلاً عن وقت الفتح
+                snap2     = trade.get("frame_snapshot", {})
+                snap_buy2 = snap2.get("buy", total_frames2)
+                snap_sell2= snap2.get("sell", 0)
+                if buy_frames2 == snap_buy2 and sell_frames2 == snap_sell2:
+                    pass  # نفس الفريمات — لا تنبيه
+                else:
+                    alert_key2 = "active_alert_"+str(buy_frames2)+str(sell_frames2)
+                    if trade.get("last_active_alert") != alert_key2:
+                        trade["last_active_alert"] = alert_key2
+                        frame_status = ""
+                        for fl in frame_lines2:
+                            frame_status += "  " + fl + "\n"
+                        await context.bot.send_message(chat_id=chat_id,
+                            text="📊 #"+str(trade_id)+" تغيير في الفريمات\n"+frame_status+"\nتوصية: "+rec_partial,
+                            reply_markup=kb_active)
 
     except Exception as e:
         logger.error("check_active_trades: "+str(e))
