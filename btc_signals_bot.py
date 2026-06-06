@@ -1294,14 +1294,28 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 "status": "pending" if is_pending else "active",
                 "chat_id": query.message.chat_id, "open_time": gmt_now(),
             }
+            # تحقق من صفقة مفتوحة — نفس الاتجاه أو معاكس
             already_open = next((tr for tr in active_trades
                 if tr["asset"] == new_trade["asset"] and tr["direction"] == new_trade["direction"]), None)
+            opposite_open = next((tr for tr in active_trades
+                if tr["asset"] == new_trade["asset"] and tr["direction"] != new_trade["direction"]), None)
+
             if already_open:
-                dir_ar = "شراء BUY" if new_trade["direction"] == "BUY" else "بيع SELL"
-                ai_sym = "₿ BTC" if new_trade["asset"] == "BTC" else "🥇 GOLD"
+                dir_ar  = "شراء BUY" if new_trade["direction"] == "BUY" else "بيع SELL"
+                ai_sym  = "₿ BTC" if new_trade["asset"] == "BTC" else "🥇 GOLD"
                 pending_trade_replace[uid] = {"new": new_trade, "old": already_open, "res": res}
                 await query.message.reply_text(
                     "⚠️ في صفقة مفتوحة بالفعل\n"+ai_sym+" — "+dir_ar+"\n\nتبي تغلق القديمة وتفتح صفقة جديدة؟",
+                    reply_markup=confirm_keyboard())
+
+            elif opposite_open:
+                old_dir  = "شراء BUY ⬆️" if opposite_open["direction"] == "BUY" else "بيع SELL ⬇️"
+                new_dir  = "بيع SELL ⬇️" if new_trade["direction"] == "SELL" else "شراء BUY ⬆️"
+                ai_sym   = "₿ BTC" if new_trade["asset"] == "BTC" else "🥇 GOLD"
+                pending_trade_replace[uid] = {"new": new_trade, "old": opposite_open, "res": res}
+                await query.message.reply_text(
+                    "⚠️ في صفقة "+old_dir+" قائمة\n"+ai_sym+"\n\n"
+                    "الآن في إشارة "+new_dir+" — اتجاه معاكس",
                     reply_markup=confirm_keyboard())
             else:
                 active_trades.append(new_trade)
