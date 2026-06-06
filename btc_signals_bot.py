@@ -17,7 +17,7 @@ TWELVEDATA_KEY = os.environ.get("TWELVEDATA_KEY", "")
 NEWS_API_KEY   = os.environ.get("NEWS_API_KEY", "cdf2a61f2cbe4540a41456bc4bd3a40e")
 FINNHUB_KEY    = os.environ.get("FINNHUB_KEY", "")
 
-MIN_CONFIDENCE    = 72
+MIN_CONFIDENCE    = 68
 SPAM_COOLDOWN     = 1800
 CACHE_TTL         = 900
 TRADES_FILE       = "active_trades.json"
@@ -101,8 +101,7 @@ TEXTS = {
         "btn_prices": "💰 الأسعار", "btn_about": "ℹ️ عن البوت",
         "btn_lang": "🌐 اللغة", "btn_trades": "📋 الصفقات المفتوحة",
         "btn_stats": "📊 الإحصائيات",
-        "btn_backtest": "🧪 Backtest",
-        "loading_backtest": "⏳ جاري حساب الـ Backtest...\nقد يأخذ حتى دقيقة",
+
         "no_open_trades": "📭 لا توجد صفقات مفتوحة حالياً",
         "loading_trade": "⏳ جاري تحليل السوق...",
         "loading_analysis": "⏳ جاري التحليل...",
@@ -169,8 +168,7 @@ TEXTS = {
         "btn_prices": "💰 Prices", "btn_about": "ℹ️ About",
         "btn_lang": "🌐 Language", "btn_trades": "📋 Open Trades",
         "btn_stats": "📊 Statistics",
-        "btn_backtest": "🧪 Backtest",
-        "loading_backtest": "⏳ Running Backtest...\nMay take up to a minute",
+
         "no_open_trades": "📭 No open trades at the moment",
         "loading_trade": "⏳ Analyzing market...",
         "loading_analysis": "⏳ Analyzing...",
@@ -525,10 +523,10 @@ def analyze_frame(df, uid=0):
     details = []
 
     rsi = safe(last["RSI"], 50.0)
-    if rsi < 30:   sb += 30; details.append(t(uid,"ind_rsi_oversold") + " (" + str(round(rsi,1)) + ") 🟢")
-    elif rsi < 40: sb += 10; details.append(t(uid,"ind_rsi_buy")      + " (" + str(round(rsi,1)) + ")")
-    elif rsi > 70: ss += 30; details.append(t(uid,"ind_rsi_overbought")+ " (" + str(round(rsi,1)) + ") 🔴")
-    elif rsi > 60: ss += 10; details.append(t(uid,"ind_rsi_sell")      + " (" + str(round(rsi,1)) + ")")
+    if rsi < 30:   sb += 25; details.append(t(uid,"ind_rsi_oversold") + " (" + str(round(rsi,1)) + ") 🟢")
+    elif rsi < 45: sb += 12; details.append(t(uid,"ind_rsi_buy")      + " (" + str(round(rsi,1)) + ")")
+    elif rsi > 70: ss += 25; details.append(t(uid,"ind_rsi_overbought")+ " (" + str(round(rsi,1)) + ") 🔴")
+    elif rsi > 55: ss += 12; details.append(t(uid,"ind_rsi_sell")      + " (" + str(round(rsi,1)) + ")")
 
     macd_v = safe(last["MACD"], 0); macd_s = safe(last["MACD_S"], 0); macd_h = safe(last["MACD_H"], 0)
     if macd_v > macd_s and macd_h > 0: sb += 20; details.append(t(uid,"ind_macd_pos"))
@@ -567,14 +565,9 @@ def analyze_frame(df, uid=0):
     except: pass
 
     try:
-        vol_high = bool(last.get("Vol_High", False))
-        if vol_high:
-            if sb > ss: sb += 15
-            else: ss += 15
-        else:
-            # حجم منخفض — نخفض الثقة
-            if sb > ss: sb = max(0, sb - 10)
-            else: ss = max(0, ss - 10)
+        if bool(last.get("Vol_High", False)):
+            if sb > ss: sb += 10
+            else: ss += 10
     except: pass
 
     direction = "BUY" if sb > ss else "SELL"
@@ -806,12 +799,6 @@ def full_analysis(asset="BTC", uid=0):
 
     # Session filter — نسمح بتوافق 3 فريمات حتى في الجلسة الآسيوية
     if session == "ASIAN" and buy_c < 2 and sel_c < 2:
-        return None
-
-    # Regime filter — ما نعطي إشارات في السوق الجانبي
-    regime_check, _ = detect_market_regime(df_1h)
-    if regime_check == "RANGING":
-        logger.info("Regime filter: RANGING — no signal")
         return None
 
     if   buy_c == 3: final="BUY";  conf_txt=t(uid,"full_confluence");    frames_conf=85
@@ -1177,7 +1164,6 @@ def main_keyboard(uid):
          InlineKeyboardButton(t(uid,"btn_trades"),  callback_data="open_trades")],
         [InlineKeyboardButton(t(uid,"btn_stats"),   callback_data="stats"),
          InlineKeyboardButton(t(uid,"btn_about"),   callback_data="about")],
-        [InlineKeyboardButton(t(uid,"btn_backtest"),callback_data="backtest")],
         [InlineKeyboardButton(t(uid,"btn_lang"),    callback_data="change_lang")],
     ])
 
@@ -1597,199 +1583,8 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             save_trades()
             await query.message.reply_text("✅ #"+str(trade_id)+" تم إغلاق الصفقة من القائمة")
 
-    elif data == "backtest":
-        await query.message.reply_text(t(uid,"loading_backtest"))
-        try:
-            result = run_backtest(days=180)
-            if not result:
-                await query.message.reply_text("❌ ما توفرت بيانات كافية للـ Backtest"); return
-            lang = user_languages.get(uid, "ar")
-            w  = result["win_rate"]
-            bar = "█" * (w // 10) + "░" * (10 - w // 10)
-            loss_pct = round(result["losses"]/result["total"]*100) if result["total"]>0 else 0
-            lines = [
-                "╔══════════════════════════╗",
-                ("  🧪 Backtest — آخر "+str(result["days"])+" يوم") if lang=="ar" else ("  🧪 Backtest — Last "+str(result["days"])+" days"),
-                "╚══════════════════════════╝",
-                "",
-                "  📊 "+("الإجمالي" if lang=="ar" else "Total")+":       "+str(result["total"]),
-                "  ✅ "+("رابحة" if lang=="ar" else "Wins")+":         "+str(result["wins"])+" — "+str(w)+"%",
-                "  🛑 "+("خاسرة" if lang=="ar" else "Losses")+":        "+str(result["losses"])+" — "+str(loss_pct)+"%",
-                "  🟡 "+("تعادل" if lang=="ar" else "Breakeven")+":       "+str(result["breakeven"]),
-                "",
-                "  "+bar+"  "+str(w)+"%",
-                "",
-                "  ⚖️ "+("متوسط RR" if lang=="ar" else "Avg RR")+":    1:"+str(result["avg_rr"]),
-                "  📈 "+("أفضل RR" if lang=="ar" else "Best RR")+":     1:"+str(result["best_rr"]),
-                "",
-                "━━━━  🟢 BUY  ━━━━",
-                "  "+("إشارات" if lang=="ar" else "Signals")+": "+str(result["buy_total"])
-                    +"  ✅ "+str(result["buy_wins"])+" ("+str(result["buy_rate"])+"%)"
-                    +"  🛑 "+str(result["buy_losses"]),
-                "",
-                "━━━━  🔴 SELL  ━━━━",
-                "  "+("إشارات" if lang=="ar" else "Signals")+": "+str(result["sell_total"])
-                    +"  ✅ "+str(result["sell_wins"])+" ("+str(result["sell_rate"])+"%)"
-                    +"  🛑 "+str(result["sell_losses"]),
-                "",
-                "━━━━━━━━━━━━━━━━━━━━━━━━",
-                "🕐 "+gmt_now(),
-                "⚠️ "+("للأغراض التعليمية فقط" if lang=="ar" else "For educational purposes only"),
-            ]
-            await query.message.reply_text("\n".join(lines))
-        except Exception as e:
-            logger.error("Backtest handler: "+str(e))
-            await query.message.reply_text(t(uid,"error")+str(e))
-
     elif data == "about":
         await query.message.reply_text(t(uid,"about_text"))
-
-
-# ==================== Backtest ====================
-def run_backtest(days=180):
-    """يشغّل backtest على بيانات BTC التاريخية"""
-    try:
-        # جرب Binance أولاً، بعدين get_data كـ fallback
-        df = get_binance_data(days=days, interval="hourly")
-        if df is None or len(df) < 100:
-            df = get_data("BTC", days=days, interval="hourly")
-        if df is None or len(df) < 100:
-            logger.warning("Backtest: insufficient data, len="+str(len(df) if df is not None else 0))
-            return None
-        logger.info("Backtest: got "+str(len(df))+" candles")
-
-        signals = []
-        step = 24  # تحقق كل 24 ساعة
-
-        for i in range(200, len(df) - 50, step):
-            try:
-                window = df.iloc[:i].copy()
-                if len(window) < 100:
-                    continue
-
-                # حساب المؤشرات
-                w = calc_indicators(window.tail(100).copy())
-                last = w.iloc[-1]
-                price = float(last["Close"])
-                rsi   = safe(last["RSI"], 50)
-                atr   = safe(last["ATR"], price * 0.01)
-                bb_l  = safe(last["BB_L"], price * 0.98)
-                bb_u  = safe(last["BB_U"], price * 1.02)
-                e9    = safe(last["EMA9"],  price)
-                e21   = safe(last["EMA21"], price)
-                e50   = safe(last["EMA50"], price)
-                macd_v= safe(last["MACD"],   0)
-                macd_s= safe(last["MACD_S"], 0)
-                macd_h= safe(last["MACD_H"], 0)
-
-                # فلتر الاتجاه العام
-                trend_bull = e21 > e50
-                trend_bear = e21 < e50
-
-                # فلتر السوق الجانبي
-                ema_spread = abs(e9 - e50) / price * 100
-                if ema_spread < 0.25: continue  # سوق جانبي — تجاهل
-
-                # Volume — نقاط إضافية فقط مش شرط إلزامي
-                try:
-                    vol_ma = float(last["Vol_MA"]) if "Vol_MA" in last.index and not pd.isna(last["Vol_MA"]) else 0
-                    vol    = float(last["Volume"])  if "Volume"  in last.index and not pd.isna(last["Volume"])  else 0
-                    vol_ok = vol > vol_ma * 1.2 if vol_ma > 0 else False
-                except: vol_ok = False
-
-                # شروط الإشارة
-                sb = ss = 0
-                if rsi < 35:   sb += 30
-                elif rsi < 45: sb += 10
-                elif rsi > 65: ss += 30
-                elif rsi > 55: ss += 10
-                if macd_v > macd_s and macd_h > 0: sb += 20
-                elif macd_v < macd_s and macd_h < 0: ss += 20
-                if e9 > e21 > e50: sb += 20
-                elif e9 < e21 < e50: ss += 20
-                if price <= bb_l: sb += 15
-                elif price >= bb_u: ss += 15
-                if vol_ok:
-                    if sb > ss: sb += 10
-                    else: ss += 10
-
-                total = sb + ss
-                if total == 0: continue
-                conf = round(max(sb, ss) / total * 100)
-                if conf < 65: continue
-
-                direction = "BUY" if sb > ss else "SELL"
-
-                # فلتر الاتجاه — عقوبة نقاط بدل منع كامل
-                if direction == "BUY" and trend_bear:
-                    ss += 15  # يضعف إشارة BUY في downtrend
-                if direction == "SELL" and trend_bull:
-                    sb += 15  # يضعف إشارة SELL في uptrend
-
-
-                sl  = round(price - 0.8*atr, 2) if direction=="BUY" else round(price + 0.8*atr, 2)
-                tp1 = round(price + 0.8*atr, 2) if direction=="BUY" else round(price - 0.8*atr, 2)
-                tp2 = round(price + 1.6*atr, 2) if direction=="BUY" else round(price - 1.6*atr, 2)
-
-                # تحقق النتيجة على الـ 48 ساعة القادمة
-                future = df.iloc[i:i+72]
-                if len(future) < 20: continue
-
-                result = "loss"
-                best_rr = 0
-                for _, row in future.iterrows():
-                    h = float(row["High"]); l = float(row["Low"])
-                    if direction == "BUY":
-                        if l <= sl: result = "loss"; break
-                        if h >= tp2: result = "win"; best_rr = round(abs(tp2-price)/abs(sl-price),1); break
-                        if h >= tp1: result = "breakeven"
-                    else:
-                        if h >= sl: result = "loss"; break
-                        if l <= tp2: result = "win"; best_rr = round(abs(tp2-price)/abs(sl-price),1); break
-                        if l <= tp1: result = "breakeven"
-
-                signals.append({
-                    "direction": direction, "price": price,
-                    "result": result, "rr": best_rr,
-                    "date": str(df.index[i])[:10]
-                })
-            except: continue
-
-        if not signals:
-            return None
-
-        total_s  = len(signals)
-        wins     = sum(1 for s in signals if s["result"] == "win")
-        losses   = sum(1 for s in signals if s["result"] == "loss")
-        breakevn = sum(1 for s in signals if s["result"] == "breakeven")
-        win_rate = round(wins / total_s * 100) if total_s > 0 else 0
-        avg_rr   = round(sum(s["rr"] for s in signals if s["result"]=="win") / wins, 1) if wins > 0 else 0
-        best_rr  = max((s["rr"] for s in signals if s["result"]=="win"), default=0)
-
-        # BUY stats
-        buy_sigs   = [s for s in signals if s["direction"] == "BUY"]
-        buy_wins   = sum(1 for s in buy_sigs if s["result"] == "win")
-        buy_losses = sum(1 for s in buy_sigs if s["result"] == "loss")
-        buy_rate   = round(buy_wins / len(buy_sigs) * 100) if buy_sigs else 0
-
-        # SELL stats
-        sell_sigs   = [s for s in signals if s["direction"] == "SELL"]
-        sell_wins   = sum(1 for s in sell_sigs if s["result"] == "win")
-        sell_losses = sum(1 for s in sell_sigs if s["result"] == "loss")
-        sell_rate   = round(sell_wins / len(sell_sigs) * 100) if sell_sigs else 0
-
-        return {
-            "total": total_s, "wins": wins, "losses": losses,
-            "breakeven": breakevn, "win_rate": win_rate,
-            "avg_rr": avg_rr, "best_rr": best_rr, "days": days,
-            "buy_total": len(buy_sigs), "buy_wins": buy_wins,
-            "buy_losses": buy_losses, "buy_rate": buy_rate,
-            "sell_total": len(sell_sigs), "sell_wins": sell_wins,
-            "sell_losses": sell_losses, "sell_rate": sell_rate,
-        }
-    except Exception as e:
-        logger.error("Backtest: "+str(e))
-        return None
 
 
 # ==================== مراقبة الصفقات المعلقة ====================
