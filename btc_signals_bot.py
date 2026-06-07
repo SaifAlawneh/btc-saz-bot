@@ -742,6 +742,105 @@ def find_liquidity_zones(df, lookback=50):
         return [], []
 
 
+# ══════════════════════════════════════════════════════
+#  SMART ENTRY — Fib + Support/Resistance confluence
+# ══════════════════════════════════════════════════════
+def find_smart_entry(price: float, direction: str,
+                     fib_levels: dict, atr: float,
+                     support: float, resistance: float,
+                     bull_obs: list, bear_obs: list) -> tuple:
+    """
+    Returns (entry_price, entry_reason) by finding the best
+    entry zone where Fib confluences with S/R or Order Blocks.
+
+    Logic:
+    BUY  → look for fib BELOW price that is close to a support or bull OB
+    SELL → look for fib ABOVE price that is close to a resistance or bear OB
+
+    Confluence threshold: within 0.5% of each other.
+    Falls back to nearest fib if no confluence found.
+    """
+    fib_vals = sorted(fib_levels.values())
+    tolerance = 0.005  # 0.5%
+
+    if direction == "BUY":
+        # Candidate fibs: below price, within 4%
+        candidates = [(v, k) for k, v in fib_levels.items()
+                      if v < price and abs(v - price) / price * 100 <= 4.0]
+        candidates.sort(key=lambda x: abs(x[0] - price))  # closest first
+
+        # Score each candidate
+        best_entry = None; best_reason = ""; best_score = -1
+        for fib_val, fib_key in candidates:
+            score = 0; reasons = [f"Fib {fib_key}%"]
+
+            # Near support (EMA-based)
+            if abs(fib_val - support) / price < tolerance:
+                score += 3; reasons.append("دعم EMA")
+
+            # Near bull order block
+            for ob in bull_obs:
+                if ob["low"] <= fib_val <= ob["high"] or abs(fib_val - ob["low"]) / price < tolerance:
+                    score += 2; reasons.append("Order Block شرائي"); break
+
+            # Bonus: key fib levels (38.2, 50, 61.8)
+            if fib_key in ("38.2", "50.0", "61.8"):
+                score += 1
+
+            if score > best_score:
+                best_score  = score
+                best_entry  = fib_val
+                best_reason = " + ".join(reasons)
+
+        if best_entry:
+            return round(best_entry, 2), best_reason
+
+        # Fallback: closest fib below price
+        below = [(v, k) for k, v in fib_levels.items() if v < price]
+        if below:
+            v, k = min(below, key=lambda x: abs(x[0] - price))
+            return round(v, 2), f"Fib {k}%"
+        return round(price, 2), "سعر السوق"
+
+    else:  # SELL
+        # Candidate fibs: above price, within 4%
+        candidates = [(v, k) for k, v in fib_levels.items()
+                      if v > price and abs(v - price) / price * 100 <= 4.0]
+        candidates.sort(key=lambda x: abs(x[0] - price))
+
+        best_entry = None; best_reason = ""; best_score = -1
+        for fib_val, fib_key in candidates:
+            score = 0; reasons = [f"Fib {fib_key}%"]
+
+            # Near resistance
+            if abs(fib_val - resistance) / price < tolerance:
+                score += 3; reasons.append("مقاومة EMA")
+
+            # Near bear order block
+            for ob in bear_obs:
+                if ob["low"] <= fib_val <= ob["high"] or abs(fib_val - ob["high"]) / price < tolerance:
+                    score += 2; reasons.append("Order Block بيعي"); break
+
+            # Bonus: key fib levels
+            if fib_key in ("38.2", "50.0", "61.8"):
+                score += 1
+
+            if score > best_score:
+                best_score  = score
+                best_entry  = fib_val
+                best_reason = " + ".join(reasons)
+
+        if best_entry:
+            return round(best_entry, 2), best_reason
+
+        # Fallback: closest fib above price
+        above = [(v, k) for k, v in fib_levels.items() if v > price]
+        if above:
+            v, k = min(above, key=lambda x: abs(x[0] - price))
+            return round(v, 2), f"Fib {k}%"
+        return round(price, 2), "سعر السوق"
+
+
 # ==================== Session ====================
 def get_current_session():
     hour = datetime.now(timezone.utc).hour
@@ -912,13 +1011,13 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
     fib_levels, fib_ext, swing_h, swing_l = calculate_fibonacci(df_1h)
     nearest_fib, fib_key, dist_pct = find_nearest_fib(price, fib_levels, final) if fib_levels else (price,"50.0",0)
 
-    fib_vals_sorted = sorted(fib_levels.values())
-    if final == "BUY":
-        candidates = [v for v in fib_vals_sorted if v <= price * 1.002 and abs(v - price) / price * 100 <= 0.5]
-        entry_price = round(candidates[-1], 2) if candidates else round(price, 2)
-    else:
-        candidates = [v for v in fib_vals_sorted if v >= price * 0.998 and abs(v - price) / price * 100 <= 0.5]
-        entry_price = round(candidates[0], 2) if candidates else round(price, 2)
+    # Smart entry: Fib + Support/Resistance + Order Blocks confluence
+    support    = main.get("support",    price * 0.99)
+    resistance = main.get("resistance", price * 1.01)
+    entry_price, entry_reason = find_smart_entry(
+        price, final, fib_levels, atr,
+        support, resistance, bull_obs, bear_obs
+    )
 
     sl, tp1, tp2, tp3, rr = get_fib_targets(entry_price, fib_levels, fib_ext, final, atr)
 
@@ -1034,7 +1133,7 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
         "bull_obs": bull_obs, "bear_obs": bear_obs,
         "buy_liq": buy_liq, "sell_liq": sell_liq,
         "confluence_txt": conf_txt, "base_conf": base_conf,
-        "price": price, "entry_price": entry_price, "tp1": tp1, "tp2": tp2, "tp3": tp3,
+        "price": price, "entry_price": entry_price, "entry_reason": entry_reason, "tp1": tp1, "tp2": tp2, "tp3": tp3,
         "sl": sl, "rr": rr, "atr": atr,
         "risk_pct": risk, "risk_label": rl, "risk_msg": rm,
         "frame_lines": frame_lines, "rsi": main["rsi"],
@@ -1064,7 +1163,8 @@ def build_trade_msg(res, uid=0, auto=False):
     num_str   = "  #"+str(trade_num) if trade_num else ""
 
     # ✅ FIX 4: entry_price فقط — لا fallback لـ nearest_fib
-    entry_display = res.get("entry_price", res["price"])
+    entry_display  = res.get("entry_price", res["price"])
+    entry_reason_d = res.get("entry_reason", "")
 
     lines = [
         "╔══════════════════════════╗",
@@ -1073,7 +1173,7 @@ def build_trade_msg(res, uid=0, auto=False):
         "╚══════════════════════════╝",
         "",
         "💵 "+t(uid,"current_price")+"   $"+"{:,.2f}".format(res["price"]),
-        "📍 "+t(uid,"entry")+"   $"+"{:,.2f}".format(entry_display),
+        "📍 "+t(uid,"entry")+"   $"+"{:,.2f}".format(entry_display) + ("  ["+entry_reason_d+"]" if entry_reason_d and entry_reason_d != "سعر السوق" else ""),
         "📐 "+t(uid,"fib_entry")+"   Fib "+res["fib_key"]+"% ($"+"{:,.2f}".format(entry_display)+")",
         "",
         "━━━━  🎯 "+t(uid,"targets_section")+"  ━━━━",
