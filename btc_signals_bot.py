@@ -1260,13 +1260,36 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 await query.message.reply_text("⚪ البيانات غير متوفرة الآن\nحاول بعد دقيقتين 🕐"); return
             if res["final"] == "NEUTRAL":
                 fls = res.get("frame_lines", [])
-                parts = ["⚪ لا توجد إشارة واضحة الآن", ""]
+                # Determine majority direction for override button
+                buy_f  = sum(1 for f in fls if "BUY"  in f)
+                sell_f = sum(1 for f in fls if "SELL" in f)
+                majority = "BUY" if buy_f > sell_f else "SELL" if sell_f > buy_f else None
+
+                parts = ["⚪ الفريمات غير متوافقة الآن", ""]
                 if fls:
                     parts.append("📊 حالة الفريمات:")
                     for fl in fls:
-                        parts.append("  " + fl)
-                parts += ["", "💡 الفريمات غير متوافقة — انتظر إشارة أقوى"]
-                await query.message.reply_text("\n".join(parts)); return
+                        parts.append(f"  {fl}")
+                parts += [""]
+
+                if majority:
+                    dir_ar = "شراء BUY ⬆️" if majority == "BUY" else "بيع SELL ⬇️"
+                    dir_e  = "🟢" if majority == "BUY" else "🔴"
+                    parts.append("تبي تدخل رغم الخلاف؟")
+                    kb_override = InlineKeyboardMarkup([[
+                        InlineKeyboardButton(
+                            f"{dir_e} أدخل {dir_ar} — الأغلبية",
+                            callback_data=f"override_trade_{asset}_{majority}"
+                        ),
+                        InlineKeyboardButton("❌ إلغاء", callback_data="override_cancel"),
+                    ]])
+                    # Store res for override use
+                    pending_trade_replace[uid] = {"override_res": res, "override_dir": majority}
+                    await query.message.reply_text("\n".join(parts), reply_markup=kb_override)
+                else:
+                    parts.append("💡 انتظر إشارة أقوى 🕐")
+                    await query.message.reply_text("\n".join(parts))
+                return
             entry_p = res.get("entry_price", res["price"])
             market_p = res["price"]
 
@@ -1580,6 +1603,92 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 save_trades()
             await query.message.reply_text("✅ #"+str(trade_id)+" تم إغلاق الصفقة من القائمة")
 
+    elif data == "override_cancel":
+        pending_trade_replace.pop(uid, None)
+        await query.message.reply_text("👍 تم الإلغاء — انتظر إشارة أقوى")
+        return
+
+    elif data.startswith("override_trade_"):
+        # Format: override_trade_{asset}_{direction}
+        parts_d = data.split("_")
+        asset_ov = parts_d[2]
+        forced_dir = parts_d[3]  # BUY or SELL
+        stored = pending_trade_replace.pop(uid, {})
+        res_ov = stored.get("override_res")
+
+        if not res_ov:
+            await query.message.reply_text("⚠️ انتهت صلاحية الطلب، اطلب صفقة جديدة")
+            return
+
+        # Build forced trade from the majority direction
+        # Re-run analysis but force the direction result
+        await query.message.reply_text("⏳ جاري تحضير الصفقة...")
+        try:
+            clear_asset_cache(asset_ov)
+            res_fresh = full_analysis(asset_ov, uid)
+            # Use fresh data if available, fall back to stored
+            res_use = res_fresh if res_fresh else res_ov
+            entry_p  = res_use.get("entry_price", res_use["price"])
+            avg_atr  = res_use["atr"]
+
+            # Check no duplicate
+            similar = next((tr for tr in active_trades
+                            if tr["asset"] == asset_ov and tr["direction"] == forced_dir
+                            and abs(tr["entry"] - entry_p) < 0.5 * avg_atr), None)
+            if similar:
+                await query.message.reply_text(
+                    f"⚠️ صفقة مشابهة موجودة بالفعل\nدخول: ${similar['entry']:,.2f}")
+                return
+
+            global trade_counter
+            trade_counter += 1
+            res_use["id"] = trade_counter
+            res_use["forced"] = True  # mark as override trade
+
+            # Build trade message with forced warning
+            trade_msg = build_trade_msg(res_use, uid)
+            fl_now = res_use.get("frame_lines", [])
+            conflict_frames = [f for f in fl_now if
+                               ("BUY" in f and forced_dir == "SELL") or
+                               ("SELL" in f and forced_dir == "BUY")]
+            warning_lines = [
+                "",
+                "━━━━  ⚠️ تنبيه — صفقة بتجاوز الفلاتر  ━━━━",
+                f"  فريم الساعة يعاكس الاتجاه",
+                "  استخدم حجم أصغر من المعتاد",
+                "  المخاطرة أعلى من الصفقة العادية",
+            ]
+            trade_msg = trade_msg + "\n" + "\n".join(warning_lines)
+            await query.message.reply_text(trade_msg)
+
+            is_p = abs(entry_p - res_use["price"]) / res_use["price"] * 100 > 0.1
+            snap = {
+                "buy":  sum(1 for f in fl_now if "BUY"  in f),
+                "sell": sum(1 for f in fl_now if "SELL" in f),
+            }
+            nt = {
+                "id": trade_counter, "asset": asset_ov,
+                "direction": forced_dir, "entry": entry_p,
+                "sl": res_use["sl"], "tp1": res_use["tp1"],
+                "tp2": res_use["tp2"], "tp3": res_use["tp3"],
+                "atr": res_use["atr"], "tp1_hit": False, "tp2_hit": False,
+                "orig_sl": res_use["sl"],
+                "status": "pending" if is_p else "active",
+                "chat_id": query.message.chat_id, "open_time": gmt_now(),
+                "frame_snapshot": snap, "entry_update_sent": False,
+                "entry_alert_sent": False, "last_news_event": "",
+                "last_frame_alert": "", "last_active_alert": "",
+                "forced": True,  # flag for health reports
+            }
+            async with _trades_lock:
+                active_trades.append(nt)
+                if asset_ov == "BTC": active_btc_trade["data"] = nt
+                save_trades()
+        except Exception as e:
+            logger.error(f"Override trade: {e}")
+            await query.message.reply_text(t(uid, "error") + str(e))
+        return
+
     elif data == "about":
         await query.message.reply_text(t(uid,"about_text"))
 
@@ -1672,6 +1781,7 @@ def _build_health_report(trade: dict, res: dict, current: float):
     else:
         verdict = "🟡 توصية: مراقبة — وضع مختلط"
 
+    forced_note = "  ⚠️ صُفقة بتجاوز الفلاتر — فريم الساعة كان عكس الاتجاه عند الفتح\n" if trade.get("forced") else ""
     st = "⏳ معلقة" if trade.get("status") == "pending" else "🟢 نشطة"
     lines = [
         "╔══════════════════════════╗",
@@ -1679,6 +1789,7 @@ def _build_health_report(trade: dict, res: dict, current: float):
         "╚══════════════════════════╝",
         "",
         f"  {'🟢 BUY ⬆️' if dire == 'BUY' else '🔴 SELL ⬇️'}",
+        forced_note if forced_note else "",
         f"  الدخول:       ${entry:,.2f}",
         f"  السعر الحالي: ${current:,.2f}",
         f"  المسافة:      {dist:.2f}% {dist_dir} الدخول",
