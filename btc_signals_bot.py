@@ -12,13 +12,17 @@ import random
 import json
 
 # ==================== إعدادات ====================
-BOT_TOKEN      = os.environ.get("BOT_TOKEN",  "YOUR_BOT_TOKEN_HERE")
+BOT_TOKEN      = os.environ.get("BOT_TOKEN", "")
 CHANNEL_ID     = os.environ.get("CHANNEL_ID", "@btc_signals_saz")
 TWELVEDATA_KEY = os.environ.get("TWELVEDATA_KEY", "")
-NEWS_API_KEY   = os.environ.get("NEWS_API_KEY", "cdf2a61f2cbe4540a41456bc4bd3a40e")
+NEWS_API_KEY   = os.environ.get("NEWS_API_KEY", "")
 FINNHUB_KEY    = os.environ.get("FINNHUB_KEY", "")
 
 MIN_CONFIDENCE    = 68
+FRAME_MIN_CONFIDENCE = 60  # Minimum confidence required for a timeframe to be counted in confluence
+ENTRY_ZONE_ATR_FACTOR = 0.25  # Entry zone width on each side of smart entry, based on ATR
+PRICE_EXPIRY_PCT  = 1.0   # Pending signal expires if BTC moves this % away from signal price
+SIGNAL_EXPIRY     = 60 * 60  # Pending signal expires after 1 hour
 SPAM_COOLDOWN     = 1800
 CACHE_TTL         = 900
 PENDING_MAX_AGE   = 48      # hours: stale pending auto-cancels after this
@@ -44,6 +48,25 @@ _news_notified        = {}
 _trades_lock = asyncio.Lock()
 
 ALLOWED_USERS = {8490817794, 1548286220}
+
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN is missing. Please set it as an environment variable.")
+
+def count_qualified_frame_lines(frame_lines):
+    """Count only timeframe lines that passed FRAME_MIN_CONFIDENCE.
+    This avoids treating low-confidence frames as fully aligned just because the direction text matches.
+    """
+    buy = sum(1 for f in frame_lines if "BUY" in f and "✅" in f)
+    sell = sum(1 for f in frame_lines if "SELL" in f and "✅" in f)
+    return buy, sell
+
+def entry_zone_from_trade(entry, atr):
+    width = max(float(atr or 0) * ENTRY_ZONE_ATR_FACTOR, float(entry) * 0.0005)
+    return round(float(entry) - width, 2), round(float(entry) + width, 2)
+
+def format_entry_zone(entry, atr):
+    low, high = entry_zone_from_trade(entry, atr)
+    return f"${low:,.2f} — ${high:,.2f}"
 
 def load_languages():
     try:
@@ -110,53 +133,66 @@ def set_cache(key, data):
 
 GREETINGS = ["مرحبا","هاي","هلا","اهلا","أهلا","السلام","صباح","مساء","كيف","شلونك",
              "hello","hi","hey","good","howdy","sup","morning","evening"]
-REPLIES_AR = ["هلا وغلا! 🐎 أنا بوت أبو مهرة\nاستخدم الأزرار 👇",
-              "أهلاً! 🤖 تبي صفقة أو تحليل؟ اختر 👇",
-              "هلا! 😊 اضغط أي زر للبدء 👇"]
-REPLIES_EN = ["Hello! 🐎 I'm Abu Mahra Bot!\nUse the buttons below 👇",
-              "Hi! 🤖 Want a trade or analysis? Choose 👇"]
+REPLIES_AR = ["هلا وغلا! 🟡 أنا SazBot — جاهز لتحليل BTC\nاستخدم الأزرار 👇",
+              "أهلاً! 📊 تبي تحليل صفقة أو قراءة السوق؟ اختر 👇",
+              "هلا! 😊 اختر من القائمة للبدء 👇"]
+REPLIES_EN = ["Hello! 🟡 I'm SazBot — ready to analyse BTC.\nUse the buttons below 👇",
+              "Hi! 📊 Want a setup or market read? Choose 👇"]
 CONFUSED_AR = ["ما فهمت 😅 استخدم الأزرار 👇", "🤔 اختر من القائمة 👇"]
 CONFUSED_EN = ["Didn't get that 😅 Use the buttons 👇", "🤔 Choose from the menu 👇"]
 
 TEXTS = {
     "ar": {
-        "choose_lang": "🐎 بوت أبو مهرة\n\nاختر لغتك:",
-        "welcome": "🐎 أهلاً وسهلاً في بوت أبو مهرة!\n\n━━━━━━━━━━━━━━━━━━━━\nمتخصص في:\n₿ البيتكوين  BTC/USD\n\n✨ مميزاتي:\n▫️ صفقات مبنية على فريم الساعة\n▫️ Fibonacci + ATR للأهداف\n▫️ مستويات دعم ومقاومة دقيقة\n▫️ إشارات تلقائية فورية\n▫️ مراقبة BTC وتحديث SL/TP\n━━━━━━━━━━━━━━━━━━━━\n⚠️ للأغراض التعليمية فقط",
-        "btn_btc": "₿ صفقة BTC",
-        "btn_analysis_btc": "📈 تحليل BTC",
-        "btn_prices": "💰 الأسعار", "btn_about": "ℹ️ عن البوت",
-        "btn_lang": "🌐 اللغة", "btn_trades": "📋 الصفقات المفتوحة",
+        "choose_lang": "🟡 SazBot | BTC Signals\n\nاختر لغتك:",
+        "welcome": "🟡 SazBot | BTC Signals\n\nمرحباً بك في تجربة تحليل أكثر وضوحاً واحترافية.\n\n━━━━━━━━━━━━━━━━━━━━\nمتخصص في:\n₿ Bitcoin  BTC/USD\n\n✨ ما يقدمه البوت:\n▫️ تحليل متعدد الفريمات\n▫️ Smart Entry Zone مبنية على ATR والتوافق الفني\n▫️ أهداف ووقف خسارة محسوبة\n▫️ تنبيهات تلقائية للفرص القوية\n▫️ متابعة مباشرة للصفقات المفتوحة\n━━━━━━━━━━━━━━━━━━━━\n⚠️ تحليل تعليمي فقط — ليست توصية مالية",
+        "btn_btc": "📊 تحليل صفقة BTC",
+        "btn_analysis_btc": "📈 قراءة السوق",
+        "btn_prices": "💰 الأسعار", "btn_about": "ℹ️ عن SazBot",
+        "btn_lang": "🌐 اللغة", "btn_trades": "📋 الصفقات النشطة",
         "btn_stats": "📊 الإحصائيات",
         "no_open_trades": "📭 لا توجد صفقات مفتوحة حالياً",
-        "loading_trade": "⏳ جاري تحليل السوق...",
+        "loading_trade": "⏳ جاري فحص السوق وبناء أفضل سيناريو...",
         "loading_analysis": "⏳ جاري التحليل...",
         "loading_prices": "⏳ جاري جلب الأسعار...",
         "failed": "❌ فشل جلب البيانات، حاول بعد دقيقة",
         "error": "❌ خطأ: ",
-        "no_signal": "⚪ لا توجد فرصة واضحة الآن\nانتظر إشارة أقوى 🕐",
-        "trade_header": "صفقة ساعة (1H Scalp) - أبو مهرة",
-        "auto_header": "إشارة تلقائية - أبو مهرة",
-        "update_header": "تحديث صفقة BTC - أبو مهرة",
-        "analysis_header": "تحليل السوق - أبو مهرة",
-        "entry": "الدخول", "fib_entry": "مستوى Fib",
-        "direction": "نوع الصفقة",
+        "no_signal": "⏳ لا توجد فرصة عالية الجودة حالياً\nعدم الدخول أحياناً أفضل من الدخول في فرصة ضعيفة.",
+        "trade_header": "SazBot | BTC Signal",
+        "auto_header": "SazBot | Auto BTC Signal",
+        "update_header": "SazBot | BTC Trade Update",
+        "analysis_header": "SazBot | Market Analysis",
+        "entry": "الدخول المرجعي", "entry_zone": "Smart Entry Zone",
+        "direction": "Market Bias",
         "buy": "شراء  BUY ⬆️", "sell": "بيع  SELL ⬇️",
-        "targets_section": "الأهداف",
+        "targets_section": "الأهداف المحتملة",
         "tp1": "TP1", "tp2": "TP2", "tp3": "TP3", "sl": "SL",
         "rr": "العائد / المخاطرة",
         "fib_section": "مستويات Fibonacci",
         "support": "دعم", "resistance": "مقاومة",
-        "confluence": "توافق الفريمات",
+        "confluence": "Timeframe Alignment",
         "frame_1h": "ساعة", "frame_4h": "4 ساعات", "frame_1d": "يومي",
-        "full_confluence": "🔥 توافق كامل على 3 فريمات!",
-        "partial_confluence": "✅ توافق على فريمين",
-        "no_confluence": "⚪ لا توافق",
+        "full_confluence": "✅ توافق قوي — 3/3 فريمات مؤهلة",
+        "partial_confluence": "⚠️ توافق جزئي — 2/3 فريمات مؤهلة",
+        "no_confluence": "⏳ لا توجد فرصة عالية الجودة حالياً",
+        "qualified_note": "الفريم يُحسب مؤهلاً فقط إذا كان بنفس الاتجاه وثقته 60% أو أكثر.",
+        "low_conf_note": "أقل من حد الثقة",
+        "partial_title": "⚠️ توافق جزئي",
+        "no_quality_title": "⏳ لا توجد فرصة عالية الجودة حالياً",
+        "partial_body": "الاتجاه العام واضح، لكن ليست جميع الفريمات مؤهلة حسب حد الثقة المعتمد.",
+        "higher_risk_prompt": "يمكن عرض صفقة بديلة، لكنها مخاطرتها أعلى لأنها ليست مبنية على توافق كامل.",
+        "no_trade_better": "عدم الدخول أحياناً أفضل من الدخول في فرصة ضعيفة.",
+        "btn_higher_risk": "⚠️ صفقة مخاطرة أعلى",
+        "btn_cancel": "❌ إلغاء",
+        "duplicate_setup": "⚠️ نفس الفرصة موجودة بالفعل",
+        "existing_entry_zone": "منطقة الدخول القائمة",
+        "previous_entry_zone": "منطقة الدخول السابقة",
+        "no_new_trade_needed": "السعر الحالي قريب — لا داعي لصفقة جديدة",
         "indicators_section": "المؤشرات",
         "risk_low": "🟢 منخفضة", "risk_med": "🟡 متوسطة", "risk_high": "🔴 عالية",
-        "risk_low_msg": "فرصة جيدة — مخاطرة منخفضة",
-        "risk_med_msg": "تداول بحذر — مخاطرة متوسطة",
-        "risk_high_msg": "حجم صغير فقط — مخاطرة عالية",
-        "footer": "⚠️ للأغراض التعليمية فقط",
+        "risk_low_msg": "إعداد جيد — مخاطرة منخفضة",
+        "risk_med_msg": "الإعداد مقبول لكن يحتاج إدارة مخاطرة",
+        "risk_high_msg": "مخاطرة أعلى — يفضل تقليل الحجم أو الانتظار",
+        "footer": "⚠️ تحليل تعليمي فقط — ليست توصية مالية. إدارة المخاطر مسؤوليتك.",
         "updated_gmt": "آخر تحديث (GMT)",
         "update_tp1_hit": "✅ الهدف الأول تم! تم نقل SL للدخول",
         "update_tp2_hit": "✅✅ الهدف الثاني تم! تم نقل SL للـ TP2",
@@ -177,7 +213,7 @@ TEXTS = {
         "summary_bear": "✅ الخلاصة: السوق يميل للهبوط",
         "summary_neutral": "✅ الخلاصة: السوق في منطقة تردد",
         "prices_title": "💰 الأسعار الحالية", "change_24h": "التغيير 24h",
-        "about_text": "ℹ️ عن بوت أبو مهرة 🐎\n\n⏱️ فريم الساعة (1H)\n📐 Fibonacci + ATR للأهداف\n📡 إشارات تلقائية فورية\n🔄 مراقبة BTC كل دقيقة\n🔬 RSI, MACD, EMA, BB, Stoch, ATR, Ichimoku\n⚙️ توافق 3 فريمات\n📊 مصادر: Twelve Data + Binance\n⚠️ للأغراض التعليمية فقط",
+        "about_text": "ℹ️ عن SazBot 🟡\n\nبوت متخصص في تحليل BTC/USD بأسلوب واضح ومختصر.\n\n📊 تحليل متعدد الفريمات\n🎯 Smart Entry Zone مبنية على ATR والتوافق الفني\n🛑 وقف خسارة وأهداف محسوبة\n📡 إشارات تلقائية عند ظهور فرص قوية\n🔄 متابعة مباشرة للصفقات المفتوحة\n🔬 RSI, MACD, EMA, BB, Stoch, ATR, Ichimoku\n📊 مصادر البيانات: Twelve Data + Binance\n\n⚠️ التحليل تعليمي فقط وليس توصية مالية.",
         "ind_rsi_oversold": "RSI تشبع بيعي", "ind_rsi_buy": "RSI منطقة شراء",
         "ind_rsi_overbought": "RSI تشبع شرائي", "ind_rsi_sell": "RSI منطقة بيع",
         "ind_macd_pos": "MACD إيجابي ↗️", "ind_macd_neg": "MACD سلبي ↘️",
@@ -186,43 +222,56 @@ TEXTS = {
         "ind_stoch_low": "Stochastic تشبع بيعي", "ind_stoch_high": "Stochastic تشبع شرائي",
     },
     "en": {
-        "choose_lang": "🐎 Abu Mahra Bot\n\nChoose your language:",
-        "welcome": "🐎 Welcome to Abu Mahra Bot!\n\n━━━━━━━━━━━━━━━━━━━━\nSpecializing in:\n₿ Bitcoin  BTC/USD\n\n✨ Features:\n▫️ 1H timeframe based signals\n▫️ Fibonacci + ATR targets\n▫️ Precise support & resistance\n▫️ Instant auto signals\n▫️ BTC live SL/TP monitoring\n━━━━━━━━━━━━━━━━━━━━\n⚠️ For educational purposes only",
-        "btn_btc": "₿ BTC Trade",
-        "btn_analysis_btc": "📈 BTC Analysis",
-        "btn_prices": "💰 Prices", "btn_about": "ℹ️ About",
-        "btn_lang": "🌐 Language", "btn_trades": "📋 Open Trades",
+        "choose_lang": "🟡 SazBot | BTC Signals\n\nChoose your language:",
+        "welcome": "🟡 SazBot | BTC Signals\n\nWelcome to a cleaner and more professional BTC analysis experience.\n\n━━━━━━━━━━━━━━━━━━━━\nSpecialising in:\n₿ Bitcoin  BTC/USD\n\n✨ What SazBot provides:\n▫️ Multi-timeframe analysis\n▫️ Smart Entry Zone based on ATR and technical confluence\n▫️ Calculated targets and stop loss\n▫️ Auto alerts for stronger setups\n▫️ Live monitoring for open trades\n━━━━━━━━━━━━━━━━━━━━\n⚠️ Educational only — not financial advice",
+        "btn_btc": "📊 Analyse BTC Setup",
+        "btn_analysis_btc": "📈 Market Read",
+        "btn_prices": "💰 Prices", "btn_about": "ℹ️ About SazBot",
+        "btn_lang": "🌐 Language", "btn_trades": "📋 Active Trades",
         "btn_stats": "📊 Statistics",
         "no_open_trades": "📭 No open trades at the moment",
-        "loading_trade": "⏳ Analyzing market...",
+        "loading_trade": "⏳ Scanning the market and building the best scenario...",
         "loading_analysis": "⏳ Analyzing...",
         "loading_prices": "⏳ Fetching prices...",
         "failed": "❌ Failed to fetch data, try again in a minute",
         "error": "❌ Error: ",
-        "no_signal": "⚪ No clear opportunity right now\nWaiting for stronger signal 🕐",
-        "trade_header": "1H Scalp Trade - Abu Mahra",
-        "auto_header": "Auto Signal - Abu Mahra",
-        "update_header": "BTC Trade Update - Abu Mahra",
-        "analysis_header": "Market Analysis - Abu Mahra",
-        "entry": "Entry", "fib_entry": "Fib Level",
-        "direction": "Trade Type",
+        "no_signal": "⏳ No high-quality setup yet\nNo trade is better than a weak trade.",
+        "trade_header": "SazBot | BTC Signal",
+        "auto_header": "SazBot | Auto BTC Signal",
+        "update_header": "SazBot | BTC Trade Update",
+        "analysis_header": "SazBot | Market Analysis",
+        "entry": "Reference Entry", "entry_zone": "Smart Entry Zone",
+        "direction": "Market Bias",
         "buy": "BUY ⬆️", "sell": "SELL ⬇️",
-        "targets_section": "Targets",
+        "targets_section": "Potential Targets",
         "tp1": "TP1", "tp2": "TP2", "tp3": "TP3", "sl": "SL",
         "rr": "Reward / Risk",
         "fib_section": "Fibonacci Levels",
         "support": "Support", "resistance": "Resistance",
-        "confluence": "Timeframe Confluence",
+        "confluence": "Timeframe Alignment",
         "frame_1h": "1H", "frame_4h": "4H", "frame_1d": "Daily",
-        "full_confluence": "🔥 Full confluence on 3 timeframes!",
-        "partial_confluence": "✅ Confluence on 2 timeframes",
-        "no_confluence": "⚪ No confluence",
+        "full_confluence": "✅ Strong setup — 3/3 qualified timeframes",
+        "partial_confluence": "⚠️ Partial alignment — 2/3 qualified timeframes",
+        "no_confluence": "⏳ No high-quality setup yet",
+        "qualified_note": "A timeframe is counted as qualified only when it matches the direction and confidence is 60% or above.",
+        "low_conf_note": "Below confidence threshold",
+        "partial_title": "⚠️ Partial Alignment Detected",
+        "no_quality_title": "⏳ No High-Quality Setup Yet",
+        "partial_body": "The overall direction is clear, but not all timeframes meet the confidence threshold yet.",
+        "higher_risk_prompt": "A fallback setup can be shown, but it carries higher risk because alignment is not complete.",
+        "no_trade_better": "No trade is better than a weak trade.",
+        "btn_higher_risk": "⚠️ Higher-Risk Setup",
+        "btn_cancel": "❌ Cancel",
+        "duplicate_setup": "⚠️ A similar setup is already active",
+        "existing_entry_zone": "Existing Entry Zone",
+        "previous_entry_zone": "Previous Entry Zone",
+        "no_new_trade_needed": "Current price is close — no need for a new trade",
         "indicators_section": "Indicators",
         "risk_low": "🟢 Low", "risk_med": "🟡 Medium", "risk_high": "🔴 High",
-        "risk_low_msg": "Good opportunity — Low risk",
-        "risk_med_msg": "Trade carefully — Medium risk",
-        "risk_high_msg": "Small size only — High risk",
-        "footer": "⚠️ For educational purposes only",
+        "risk_low_msg": "Clean setup — Lower risk",
+        "risk_med_msg": "Acceptable setup, but manage risk carefully",
+        "risk_high_msg": "Higher risk — consider smaller size or waiting",
+        "footer": "⚠️ Educational analysis only — not financial advice. Risk management is your responsibility.",
         "updated_gmt": "Last update (GMT)",
         "update_tp1_hit": "✅ TP1 reached! SL moved to entry",
         "update_tp2_hit": "✅✅ TP2 reached! SL moved to TP2",
@@ -243,7 +292,7 @@ TEXTS = {
         "summary_bear": "✅ Summary: Market leaning bearish",
         "summary_neutral": "✅ Summary: Market in consolidation",
         "prices_title": "💰 Current Prices", "change_24h": "24h Change",
-        "about_text": "ℹ️ About Abu Mahra Bot 🐎\n\n⏱️ 1H timeframe as base\n📐 Fibonacci + ATR targets\n📡 Instant auto signals\n🔄 BTC live monitoring every minute\n🔬 RSI, MACD, EMA, BB, Stoch, ATR, Ichimoku\n⚙️ 3 timeframe confluence\n📊 Sources: Twelve Data + Binance\n⚠️ For educational purposes only",
+        "about_text": "ℹ️ About SazBot 🟡\n\nA focused BTC/USD analysis bot with a clean and professional signal format.\n\n📊 Multi-timeframe analysis\n🎯 Smart Entry Zone based on ATR and technical confluence\n🛑 Calculated stop loss and targets\n📡 Auto alerts for stronger setups\n🔄 Live monitoring for active trades\n🔬 RSI, MACD, EMA, BB, Stoch, ATR, Ichimoku\n📊 Data sources: Twelve Data + Binance\n\n⚠️ Educational analysis only — not financial advice.",
         "ind_rsi_oversold": "RSI Oversold", "ind_rsi_buy": "RSI Buy Zone",
         "ind_rsi_overbought": "RSI Overbought", "ind_rsi_sell": "RSI Sell Zone",
         "ind_macd_pos": "MACD Positive ↗️", "ind_macd_neg": "MACD Negative ↘️",
@@ -750,18 +799,17 @@ def find_liquidity_zones(df, lookback=50):
 
 
 # ══════════════════════════════════════════════════════
-#  SMART ENTRY — Fib + Support/Resistance confluence
+#  SMART ENTRY — Confluence-based Entry Zone
 # ══════════════════════════════════════════════════════
 def find_smart_entry(price: float, direction: str,
                      fib_levels: dict, fib_ext: dict, atr: float,
                      support: float, resistance: float,
                      bull_obs: list, bear_obs: list) -> tuple:
     """
-    Simple and reliable entry logic:
-    - BUY:  find the closest Fib BELOW price with at least 0.3% distance
-    - SELL: find the closest Fib ABOVE price with at least 0.3% distance
-    - Never returns market price.
-    - Uses Fib extensions if no retracement level found.
+    Confluence-based entry logic:
+    - Prioritises the closest technical level away from current market price.
+    - Uses Fibonacci levels/extensions as technical levels, then ATR fallback.
+    - Never returns market price unless no safe calculation is available elsewhere.
     """
     MIN_DIST = 0.003  # 0.3% minimum distance from current price
     all_fibs = {**fib_levels, **fib_ext}
@@ -775,7 +823,7 @@ def find_smart_entry(price: float, direction: str,
         if candidates:
             # Pick closest below price
             v, k = max(candidates, key=lambda x: x[0])
-            return round(v, 2), f"Fib {k}%"
+            return round(v, 2), f"Technical level {k}%"
         # Fallback: 1.5 ATR below price
         return round(price - 1.5 * atr, 2), "دعم ATR"
 
@@ -788,7 +836,7 @@ def find_smart_entry(price: float, direction: str,
         if candidates:
             # Pick closest above price
             v, k = min(candidates, key=lambda x: x[0])
-            return round(v, 2), f"Fib {k}%"
+            return round(v, 2), f"Technical level {k}%"
         # Fallback: 1.5 ATR above price
         return round(price + 1.5 * atr, 2), "مقاومة ATR"
 
@@ -890,8 +938,8 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
     if len(results) < 2:
         return None
 
-    buy_c = sum(1 for r in results.values() if r["direction"] == "BUY"  and r["conf"] >= 60)
-    sel_c = sum(1 for r in results.values() if r["direction"] == "SELL" and r["conf"] >= 60)
+    buy_c = sum(1 for r in results.values() if r["direction"] == "BUY"  and r["conf"] >= FRAME_MIN_CONFIDENCE)
+    sel_c = sum(1 for r in results.values() if r["direction"] == "SELL" and r["conf"] >= FRAME_MIN_CONFIDENCE)
 
     if session == "ASIAN" and buy_c < 2 and sel_c < 2:
         return None
@@ -918,7 +966,9 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
         fl2 = []
         icons2 = {"1h":t(uid,"frame_1h"),"4h":t(uid,"frame_4h"),"1d":t(uid,"frame_1d")}
         for k,r in results.items():
-            fl2.append(("🟢" if r["direction"]=="BUY" else "🔴")+" "+icons2.get(k,"")+": "+r["direction"]+" ("+str(r["conf"])+"%)")
+            qualified = r["conf"] >= FRAME_MIN_CONFIDENCE
+            status_note = " ✅" if qualified else " ⚪ " + t(uid,"low_conf_note")
+            fl2.append(("🟢" if r["direction"]=="BUY" else "🔴")+" "+icons2.get(k,"")+": "+r["direction"]+" ("+str(r["conf"])+"%)"+status_note)
         return {"final":"NEUTRAL","majority":majority,"asset":asset,
                 "confluence_txt":conf_txt,"base_conf":frames_conf,
                 "price":main2["price"],"tp1":0,"tp2":0,"tp3":0,"sl":0,"rr":0,"atr":main2["atr"],
@@ -941,7 +991,9 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
         fl2 = []
         icons2 = {"1h":t(uid,"frame_1h"),"4h":t(uid,"frame_4h"),"1d":t(uid,"frame_1d")}
         for k,r in results.items():
-            fl2.append(("🟢" if r["direction"]=="BUY" else "🔴")+" "+icons2.get(k,"")+": "+r["direction"]+" ("+str(r["conf"])+"%)")
+            qualified = r["conf"] >= FRAME_MIN_CONFIDENCE
+            status_note = " ✅" if qualified else " ⚪ " + t(uid,"low_conf_note")
+            fl2.append(("🟢" if r["direction"]=="BUY" else "🔴")+" "+icons2.get(k,"")+": "+r["direction"]+" ("+str(r["conf"])+"%)"+status_note)
         return {"final":"NEUTRAL","asset":asset,"confluence_txt":t(uid,"no_confluence"),"base_conf":0,"majority":majority,
                 "price":main2["price"],"tp1":0,"tp2":0,"tp3":0,"sl":0,"rr":0,"atr":main2["atr"],
                 "risk_pct":50,"risk_label":t(uid,"risk_med"),"risk_msg":t(uid,"risk_med_msg"),
@@ -981,7 +1033,7 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
         if final == "BUY":
             below = [(v, k) for k, v in all_fibs_flat.items() if v < price * 0.999]
             if below:
-                entry_price, entry_reason = min(below, key=lambda x: abs(x[0]-price))[0], "Fib أقرب دعم"
+                entry_price, entry_reason = min(below, key=lambda x: abs(x[0]-price))[0], "أقرب مستوى دعم فني"
                 entry_price = round(entry_price, 2)
             else:
                 entry_price = round(price - 1.5 * atr, 2)
@@ -989,11 +1041,15 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
         else:  # SELL
             above = [(v, k) for k, v in all_fibs_flat.items() if v > price * 1.001]
             if above:
-                entry_price, entry_reason = min(above, key=lambda x: abs(x[0]-price))[0], "Fib أقرب مقاومة"
+                entry_price, entry_reason = min(above, key=lambda x: abs(x[0]-price))[0], "أقرب مستوى مقاومة فني"
                 entry_price = round(entry_price, 2)
             else:
                 entry_price = round(price + 1.5 * atr, 2)
                 entry_reason = "مقاومة ATR"
+
+    entry_zone_buffer = max(atr * ENTRY_ZONE_ATR_FACTOR, price * 0.0005)
+    entry_low = round(entry_price - entry_zone_buffer, 2)
+    entry_high = round(entry_price + entry_zone_buffer, 2)
 
     sl, tp1, tp2, tp3, rr = get_fib_targets(entry_price, fib_levels, fib_ext, final, atr)
 
@@ -1008,7 +1064,9 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
     frame_lines = []
     icons = {"1h":t(uid,"frame_1h"),"4h":t(uid,"frame_4h"),"1d":t(uid,"frame_1d")}
     for k, r in results.items():
-        frame_lines.append(("🟢" if r["direction"]=="BUY" else "🔴")+" "+icons.get(k,"")+": "+r["direction"]+" ("+str(r["conf"])+"%)")
+        qualified = r["conf"] >= FRAME_MIN_CONFIDENCE
+        status_note = " ✅" if qualified else " ⚪ " + t(uid,"low_conf_note")
+        frame_lines.append(("🟢" if r["direction"]=="BUY" else "🔴")+" "+icons.get(k,"")+": "+r["direction"]+" ("+str(r["conf"])+"%)"+status_note)
 
     key_fibs = ["Fib "+pct+"%  $"+"{:,.2f}".format(val) for pct,val in sorted(fib_levels.items(), key=lambda x:float(x[0]))]
 
@@ -1106,7 +1164,7 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
         "bull_obs": bull_obs, "bear_obs": bear_obs,
         "buy_liq": buy_liq, "sell_liq": sell_liq,
         "confluence_txt": conf_txt, "base_conf": base_conf,
-        "price": price, "entry_price": entry_price, "entry_reason": entry_reason, "tp1": tp1, "tp2": tp2, "tp3": tp3,
+        "price": price, "entry_price": entry_price, "entry_low": entry_low, "entry_high": entry_high, "entry_reason": entry_reason, "tp1": tp1, "tp2": tp2, "tp3": tp3,
         "sl": sl, "rr": rr, "atr": atr,
         "risk_pct": risk, "risk_label": rl, "risk_msg": rm,
         "frame_lines": frame_lines, "rsi": main["rsi"],
@@ -1135,9 +1193,13 @@ def build_trade_msg(res, uid=0, auto=False):
     trade_num = res.get("id","")
     num_str   = "  #"+str(trade_num) if trade_num else ""
 
-    # ✅ FIX 4: entry_price فقط — لا fallback لـ nearest_fib
+    # ✅ Entry Zone: keep entry_price for SL/TP logic, but show a professional zone to users.
     entry_display  = res.get("entry_price", res["price"])
+    entry_low      = res.get("entry_low", entry_display)
+    entry_high     = res.get("entry_high", entry_display)
     entry_reason_d = res.get("entry_reason", "")
+    entry_label    = t(uid,"entry_zone")
+    entry_zone_txt = "$"+"{:,.2f}".format(entry_low)+" — $"+"{:,.2f}".format(entry_high)
 
     lines = [
         "╔══════════════════════════╗",
@@ -1146,8 +1208,8 @@ def build_trade_msg(res, uid=0, auto=False):
         "╚══════════════════════════╝",
         "",
         "💵 "+t(uid,"current_price")+"   $"+"{:,.2f}".format(res["price"]),
-        "📍 "+t(uid,"entry")+"   $"+"{:,.2f}".format(entry_display) + ("  ["+entry_reason_d+"]" if entry_reason_d and entry_reason_d != "سعر السوق" else ""),
-        "📐 "+t(uid,"fib_entry")+"   Fib "+res["fib_key"]+"% ($"+"{:,.2f}".format(entry_display)+")",
+        "🎯 "+entry_label+"   "+entry_zone_txt + ("  ["+entry_reason_d+"]" if entry_reason_d and entry_reason_d != "سعر السوق" else ""),
+        "📍 "+t(uid,"entry")+"   $"+"{:,.2f}".format(entry_display),
         "",
         "━━━━  🎯 "+t(uid,"targets_section")+"  ━━━━",
         "  TP1  ›  $"+"{:,.2f}".format(res["tp1"]),
@@ -1219,7 +1281,8 @@ def build_update_msg(trade, current_price, update_type, uid=0):
         "╚══════════════════════════╝",
         "",
         "  "+t(uid,"direction")+":      "+dir_txt,
-        "  "+t(uid,"entry")+":          $"+"{:,.2f}".format(trade["entry"]),
+        "  🎯 منطقة الدخول:  "+format_entry_zone(trade["entry"], trade.get("atr", 0)),
+        "  "+t(uid,"entry")+":  $"+"{:,.2f}".format(trade["entry"]),
         "  "+t(uid,"current_price")+":  $"+"{:,.2f}".format(current_price),
         "",
         "  "+update_type,
@@ -1257,7 +1320,7 @@ def build_analysis_msg(res, uid=0):
         "╚══════════════════════════╝",
         "",
         "  "+trend,
-        "  💵 "+t(uid,"entry")+":         $"+"{:,.2f}".format(res["price"]),
+        "  💵 "+t(uid,"current_price") + ":  $"+"{:,.2f}".format(res["price"]),
         "  🟢 "+t(uid,"support")+":      $"+"{:,.2f}".format(res["support"]),
         "  🔴 "+t(uid,"resistance")+":   $"+"{:,.2f}".format(res["resistance"]),
         "",
@@ -1315,7 +1378,7 @@ async def start(update, context: ContextTypes.DEFAULT_TYPE):
     if uid not in ALLOWED_USERS:
         await update.message.reply_text("⛔ هذا البوت خاص"); return
     if uid not in user_languages:
-        await update.message.reply_text("🐎 Abu Mahra Bot\n\nاختر لغتك / Choose your language:", reply_markup=lang_keyboard())
+        await update.message.reply_text("🟡 SazBot | BTC Signals\n\nاختر لغتك / Choose your language:", reply_markup=lang_keyboard())
     else:
         await update.message.reply_text(t(uid,"welcome"), reply_markup=main_keyboard(uid))
 
@@ -1365,9 +1428,9 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 ), None)
                 if early_similar:
                     await query.message.reply_text(
-                        "⚠️ نفس الفرصة موجودة بالفعل\n"
-                        "دخول قائم: $"+"{:,.2f}".format(early_similar["entry"])+"\n"
-                        "السعر الحالي قريب — لا داعي لصفقة جديدة")
+                        t(uid,"duplicate_setup")+"\n"
+                        +t(uid,"existing_entry_zone")+": "+format_entry_zone(early_similar["entry"], early_similar.get("atr", 0))+"\n"
+                        +t(uid,"no_new_trade_needed"))
                     return
 
             keys_to_clear = [k for k in _cache if k.startswith(asset)]
@@ -1382,24 +1445,31 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 # Fall back to counting frame_lines for 0/1 frame case
                 majority = res.get("majority")
                 if not majority:
-                    buy_f  = sum(1 for f in fls if "BUY"  in f)
-                    sell_f = sum(1 for f in fls if "SELL" in f)
+                    buy_f, sell_f = count_qualified_frame_lines(fls)
                     majority = "BUY" if buy_f > sell_f else "SELL" if sell_f > buy_f else None
 
-                parts = ["⚪ الفريمات غير متوافقة الآن", ""]
+                parts = [t(uid,"partial_title") if majority else t(uid,"no_quality_title"), "", t(uid,"partial_body") if majority else t(uid,"no_trade_better"), ""]
                 if fls:
-                    parts.append("📊 حالة الفريمات:")
+                    parts.append("📊 " + ("حالة الفريمات:" if user_languages.get(uid,"ar") == "ar" else "Timeframe Status:"))
                     for fl in fls:
                         parts.append(f"  {fl}")
                 parts += [""]
 
-                is_two_frame = res.get("base_conf", 0) >= 65
-                warn = "⚠️ فريمان من ثلاثة — توافق جزئي" if is_two_frame else "⚠️ توافق ضعيف — لا يوجد اتجاه واضح"
+                buy_f, sell_f = count_qualified_frame_lines(fls)
+                q_count = max(buy_f, sell_f)
+                is_two_frame = q_count == 2
+                if is_two_frame:
+                    warn = "⚠️ 2/3 " + ("فريمات مؤهلة فقط" if user_languages.get(uid,"ar") == "ar" else "qualified timeframes only")
+                elif q_count == 1:
+                    warn = "⚠️ 1/3 " + ("فريم مؤهل فقط — لا توجد فرصة موثوقة" if user_languages.get(uid,"ar") == "ar" else "qualified timeframe only — no reliable setup")
+                else:
+                    warn = "⚠️ " + ("لا توجد فريمات مؤهلة كفاية — لا يوجد اتجاه واضح" if user_languages.get(uid,"ar") == "ar" else "Not enough qualified timeframes — no clear direction")
                 parts.append(warn)
-                parts.append("تبي أفضل صفقة متاحة رغم الخلاف؟")
+                parts.append("ℹ️ " + t(uid,"qualified_note"))
+                parts.append("⚠️ " + t(uid,"higher_risk_prompt"))
                 kb_override = InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🔄 أعطني أفضل صفقة متاحة", callback_data=f"override_trade_{asset}"),
-                    InlineKeyboardButton("❌ إلغاء", callback_data="override_cancel"),
+                    InlineKeyboardButton(t(uid,"btn_higher_risk"), callback_data=f"override_trade_{asset}"),
+                    InlineKeyboardButton(t(uid,"btn_cancel"), callback_data="override_cancel"),
                 ]])
                 # Store res for override use
                 pending_trade_replace[uid] = {"override_res": res}
@@ -1418,9 +1488,9 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
 
             if similar_recent:
                 await query.message.reply_text(
-                    "⚠️ نفس الفرصة موجودة بالفعل\n"
-                    "دخول سابق: $"+"{:,.2f}".format(similar_recent["entry"])+"\n"
-                    "لا داعي لصفقة جديدة")
+                    t(uid,"duplicate_setup")+"\n"
+                    +t(uid,"previous_entry_zone")+": "+format_entry_zone(similar_recent["entry"], similar_recent.get("atr", 0))+"\n"
+                    +t(uid,"no_new_trade_needed"))
                 return
 
             trade_counter += 1
@@ -1430,15 +1500,15 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             dist_to_entry = abs(entry_p - market_p) / market_p * 100
             is_pending = dist_to_entry > 0.1
             frame_snapshot = {
-                "buy": sum(1 for f in res.get("frame_lines", []) if "BUY" in f),
-                "sell": sum(1 for f in res.get("frame_lines", []) if "SELL" in f),
+                "buy": count_qualified_frame_lines(res.get("frame_lines", []))[0],
+                "sell": count_qualified_frame_lines(res.get("frame_lines", []))[1],
             }
             new_trade = {
                 "id": trade_counter, "asset": res["asset"],
                 "direction": res["final"], "entry": entry_p,
                 "sl": res["sl"], "tp1": res["tp1"], "tp2": res["tp2"], "tp3": res["tp3"],
                 "atr": res["atr"], "tp1_hit": False, "tp2_hit": False,
-                "orig_sl": res["sl"], "entry_fib": entry_p,
+                "orig_sl": res["sl"], "entry_ref": entry_p,
                 "status": "pending" if is_pending else "active",
                 "chat_id": query.message.chat_id, "open_time": gmt_now(),
                 "frame_snapshot": frame_snapshot,
@@ -1565,7 +1635,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                     f"  📋 صفقة #{tid}  {st}",
                     "╚"+"═"*26+"╝", "",
                     f"  {de}",
-                    "  💵 دخول:  $"+"{:,.2f}".format(tr["entry"]),
+                    "  🎯 منطقة الدخول:  "+format_entry_zone(tr["entry"], tr.get("atr", 0)),
                 ]
                 if current_price and tr["asset"] == "BTC":
                     rows.append("  📍 الحالي: $"+"{:,.2f}".format(current_price))
@@ -1591,7 +1661,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
         avg_rr   = round(total_rr / wins, 2) if wins > 0 else 0
         bar_w    = "█" * (win_rate // 10) + "░" * (10 - win_rate // 10)
         lines = [
-            "╔"+"═"*26+"╗", "  📊 إحصائيات أبو مهرة", "╚"+"═"*26+"╝", "",
+            "╔"+"═"*26+"╗", "  📊 إحصائيات SazBot", "╚"+"═"*26+"╝", "",
             "━━━━  📈 الصفقات المغلقة  ━━━━",
             "  إجمالي:      "+str(total_closed),
             "  🏆 رابحة:    "+str(wins),
@@ -1607,7 +1677,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 ai2  = "₿" if tr["asset"]=="BTC" else "🥇"
                 dire = "🔴 SELL" if tr["direction"]=="SELL" else "🟢 BUY"
                 if tr.get("status") == "pending":
-                    status = "⏳ انتظار الدخول عند $"+"{:,.2f}".format(tr["entry"])
+                    status = "⏳ بانتظار منطقة الدخول " + format_entry_zone(tr["entry"], tr.get("atr", 0))
                 elif tr.get("tp2_hit"):
                     status = "✅✅ TP2 تم"
                 elif tr.get("tp1_hit"):
@@ -1616,7 +1686,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                     status = "🟢 نشطة — لم يصل أي هدف بعد"
                 lines += [
                     ai2+" #"+str(tr.get("id","?"))+"  "+dire,
-                    "  💵 دخول:  $"+"{:,.2f}".format(tr["entry"]),
+                    "  🎯 منطقة الدخول:  "+format_entry_zone(tr["entry"], tr.get("atr", 0)),
                     "  "+status,
                     "  TP1: $"+"{:,.2f}".format(tr["tp1"])+"  TP2: $"+"{:,.2f}".format(tr["tp2"]),
                     "  TP3: $"+"{:,.2f}".format(tr["tp3"])+"  SL: $"+"{:,.2f}".format(tr["sl"]),
@@ -1653,8 +1723,8 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             dist_to_entry = abs(entry_p - res_sig["price"]) / res_sig["price"] * 100
             is_pending = dist_to_entry > 0.1
             sig_frame_snapshot = {
-                "buy": sum(1 for f in res_sig.get("frame_lines", []) if "BUY" in f),
-                "sell": sum(1 for f in res_sig.get("frame_lines", []) if "SELL" in f),
+                "buy": count_qualified_frame_lines(res_sig.get("frame_lines", []))[0],
+                "sell": count_qualified_frame_lines(res_sig.get("frame_lines", []))[1],
             }
             new_trade = {
                 "id": sig_id, "asset": "BTC",
@@ -1662,7 +1732,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 "sl": res_sig["sl"], "tp1": res_sig["tp1"],
                 "tp2": res_sig["tp2"], "tp3": res_sig["tp3"],
                 "atr": res_sig["atr"], "tp1_hit": False, "tp2_hit": False,
-                "orig_sl": res_sig["sl"], "entry_fib": entry_p,
+                "orig_sl": res_sig["sl"], "entry_ref": entry_p,
                 "status": "pending" if is_pending else "active",
                 "chat_id": chat_id_s, "open_time": gmt_now(),
                 "frame_snapshot": sig_frame_snapshot,
@@ -1673,7 +1743,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 if res_sig["asset"] == "BTC":
                     active_btc_trade["data"] = new_trade
                 save_trades()
-            status_txt = "⏳ انتظار الدخول عند $"+"{:,.2f}".format(entry_p) if is_pending else "🟢 نشطة"
+            status_txt = "⏳ بانتظار منطقة الدخول " + format_entry_zone(entry_p, res_sig.get("atr", 0)) if is_pending else "🟢 نشطة"
             confirm_msg = "✅ #"+str(sig_id)+" تم تفعيل الصفقة\n"+status_txt
             for cid in chat_ids_s:
                 try:
@@ -1703,7 +1773,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 trade["entry_update_sent"] = False
                 save_trades()
             await query.message.reply_text(
-                "✅ #"+str(trade_id)+" تم تحديث مستوى الدخول\n"
+                "✅ #"+str(trade_id)+" تم تحديث منطقة الدخول\n"
                 "القديم: $"+"{:,.2f}".format(old_entry)+" → الجديد: $"+"{:,.2f}".format(upd["entry"]))
         else:
             await query.message.reply_text("⚠️ انتهت صلاحية التحديث")
@@ -1742,7 +1812,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("⚠️ انتهت صلاحية الطلب، اطلب صفقة جديدة")
             return
 
-        await query.message.reply_text("⏳ جاري تحضير أفضل صفقة متاحة...")
+        await query.message.reply_text("⏳ جاري تحضير صفقة بديلة بمخاطرة أعلى...")
         try:
             keys_to_clear = [k for k in _cache if k.startswith(asset_ov)]
             for k in keys_to_clear: _cache.pop(k, None)
@@ -1755,8 +1825,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             if not res_use:
                 res_use = res_ov
                 fls     = res_use.get("frame_lines", [])
-                buy_f   = sum(1 for f in fls if "BUY"  in f)
-                sell_f  = sum(1 for f in fls if "SELL" in f)
+                buy_f, sell_f = count_qualified_frame_lines(fls)
                 res_use["final"] = "BUY" if buy_f >= sell_f else "SELL"
 
             best_dir = res_use["final"]
@@ -1777,8 +1846,10 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 res_use["entry_price"] = entry_p
                 res_use["entry_reason"] = entry_rsn
+                res_use["entry_low"], res_use["entry_high"] = entry_zone_from_trade(entry_p, avg_atr)
             else:
                 entry_p = live_price
+                res_use["entry_low"], res_use["entry_high"] = entry_zone_from_trade(entry_p, avg_atr)
             res_use["price"] = live_price
 
             # Safety: if SL/TP still zero, calculate from ATR
@@ -1802,7 +1873,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                             and abs(tr["entry"] - entry_p) < 0.5 * avg_atr), None)
             if similar:
                 await query.message.reply_text(
-                    f"⚠️ صفقة مشابهة موجودة بالفعل\nدخول: ${similar['entry']:,.2f}")
+                    t(uid,"duplicate_setup") + "\n" + t(uid,"existing_entry_zone") + ": " + format_entry_zone(similar["entry"], similar.get("atr", 0)))
                 return
 
             trade_counter += 1
@@ -1811,13 +1882,14 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
 
             trade_msg = build_trade_msg(res_use, uid)
             fl_now    = res_use.get("frame_lines", [])
-            warning   = "\n\n━━━━  ⚠️ تنبيه — صفقة بتوافق جزئي  ━━━━\n"                         "  الفريمات لم تتوافق كاملاً\n"                         "  استخدم حجم أصغر من المعتاد\n"                         "  المخاطرة أعلى من الصفقة العادية"
+            warning   = "\n\n━━━━  ⚠️ " + ("صفقة مخاطرة أعلى" if user_languages.get(uid,"ar") == "ar" else "Higher-Risk Setup") + "  ━━━━\n" + \
+                        ("  هذه ليست إشارة عادية بتوافق كامل.\n  يفضّل استخدام حجم أصغر وإدارة المخاطر بصرامة.\n  عدم الدخول أحياناً أفضل من الدخول في فرصة ضعيفة." if user_languages.get(uid,"ar") == "ar" else "  This is not a standard full-alignment signal.\n  Consider smaller size and strict risk management.\n  No trade is better than a weak trade.")
             await query.message.reply_text(trade_msg + warning)
 
             is_p = abs(entry_p - res_use["price"]) / res_use["price"] * 100 > 0.1
             snap = {
-                "buy":  sum(1 for f in fl_now if "BUY"  in f),
-                "sell": sum(1 for f in fl_now if "SELL" in f),
+                "buy":  count_qualified_frame_lines(fl_now)[0],
+                "sell": count_qualified_frame_lines(fl_now)[1],
             }
             nt = {
                 "id": trade_counter, "asset": asset_ov,
@@ -1862,8 +1934,7 @@ def _build_health_report(trade: dict, res: dict, current: float):
     dist_dir = "فوق" if current > entry else "تحت"
 
     frame_lines = res.get("frame_lines", [])
-    buy_f  = sum(1 for f in frame_lines if "BUY"  in f)
-    sell_f = sum(1 for f in frame_lines if "SELL" in f)
+    buy_f, sell_f = count_qualified_frame_lines(frame_lines)
     match  = buy_f if dire == "BUY" else sell_f
     total  = buy_f + sell_f
     align  = round(match / total * 100) if total else 0
@@ -1943,9 +2014,9 @@ def _build_health_report(trade: dict, res: dict, current: float):
         "",
         f"  {'🟢 BUY ⬆️' if dire == 'BUY' else '🔴 SELL ⬇️'}",
         forced_note if forced_note else "",
-        f"  الدخول:       ${entry:,.2f}",
+        f"  منطقة الدخول: {format_entry_zone(entry, trade.get('atr', 0))}",
         f"  السعر الحالي: ${current:,.2f}",
-        f"  المسافة:      {dist:.2f}% {dist_dir} الدخول",
+        f"  المسافة:      {dist:.2f}% {dist_dir} منطقة الدخول",
         "",
         "━━━━  🔗 توافق الفريمات  ━━━━",
     ]
@@ -1965,7 +2036,7 @@ def _build_health_report(trade: dict, res: dict, current: float):
         "",
         "━━━━━━━━━━━━━━━━━━━━━━━━",
         f"🕐 {gmt_now()}",
-        "⚠️ للأغراض التعليمية فقط",
+        "⚠️ تحليل تعليمي فقط — ليست توصية مالية",
     ]
     return "\n".join(lines), nc
 
@@ -1995,8 +2066,7 @@ async def check_pending_trades(context):
         return
 
     frame_lines = res.get("frame_lines", [])
-    buy_f  = sum(1 for f in frame_lines if "BUY"  in f)
-    sell_f = sum(1 for f in frame_lines if "SELL" in f)
+    buy_f, sell_f = count_qualified_frame_lines(frame_lines)
     total_f = buy_f + sell_f
     n = now_ts()
 
@@ -2095,7 +2165,7 @@ async def check_pending_trades(context):
 
 # ==================== مراقبة BTC ====================
 async def _check_auto_signal(context):
-    """Auto-signal: fires when RSI extreme + at Fib level + 3-frame confluence."""
+    """Auto-signal: fires only when RSI is extended, price is near Fib, confidence passes MIN_CONFIDENCE, and 3 qualified timeframes agree."""
     n = now_ts()
     if (n - last_signal_time.get("BTC", 0)) < SPAM_COOLDOWN:
         return
@@ -2120,8 +2190,7 @@ async def _check_auto_signal(context):
             return
 
         fl     = res.get("frame_lines", [])
-        buy_f  = sum(1 for f in fl if "BUY"  in f)
-        sell_f = sum(1 for f in fl if "SELL" in f)
+        buy_f, sell_f = count_qualified_frame_lines(fl)
         three  = buy_f == 3 or sell_f == 3
         dir_ok = (res["final"]=="BUY" and no_buy) or (res["final"]=="SELL" and no_sell)
         ep     = res["entry_price"]
@@ -2150,7 +2219,7 @@ async def _check_auto_signal(context):
             f"🔔 إشارة تلقائية — ₿ BTC/USD\n"
             f"{dir_e} {dir_t}\n\n"
             f"💵 السعر: ${res['price']:,.2f}\n"
-            f"📍 الدخول: ${ep:,.2f}\n"
+            f"🎯 منطقة الدخول: {format_entry_zone(ep, res.get('atr', 0))}\n"
             f"🛑 SL: ${res['sl']:,.2f}\n"
             f"TP1: ${res['tp1']:,.2f}  TP2: ${res['tp2']:,.2f}  TP3: ${res['tp3']:,.2f}\n"
             f"⚖️ RR: 1:{res['rr']}\n\n"
@@ -2260,12 +2329,12 @@ async def _monitor_active_trades(context):
                         if fresh is None:
                             trade["status"] = "active"
                             await context.bot.send_message(chat_id=chat_id,
-                                text=f"🟢 #{trade_id} السعر وصل للدخول — الصفقة نشطة ✅")
+                                text=f"🟢 #{trade_id} السعر وصل لمنطقة الدخول — الصفقة نشطة ✅")
                         elif fresh["final"] != direction:
                             to_remove.append(trade)
                             nd = "BUY ⬆️" if fresh["final"]=="BUY" else "SELL ⬇️"
                             await context.bot.send_message(chat_id=chat_id,
-                                text=f"⚠️ #{trade_id} الصفقة ألغيت عند الدخول\nالاتجاه تغير إلى {nd}")
+                                text=f"⚠️ #{trade_id} الصفقة ألغيت عند منطقة الدخول\nالاتجاه تغير إلى {nd}")
                         else:
                             trade.update({"status":"active","sl":fresh["sl"],
                                           "tp1":fresh["tp1"],"tp2":fresh["tp2"],
@@ -2295,7 +2364,7 @@ async def _monitor_active_trades(context):
                         if dist_pct <= 0.5 and not trade.get("entry_alert_sent"):
                             trade["entry_alert_sent"] = True
                             await context.bot.send_message(chat_id=chat_id,
-                                text=f"🎯 #{trade_id} السعر اقترب من الدخول\n"
+                                text=f"🎯 #{trade_id} السعر اقترب من منطقة الدخول\n"
                                      f"${entry:,.2f}  •  السعر: ${cur:,.2f}  •  {dist_pct:.2f}%")
                         # News alert
                         try:
@@ -2327,7 +2396,7 @@ async def _monitor_active_trades(context):
                                             InlineKeyboardButton("❌ تجاهل",        callback_data=f"ignore_entry_{trade_id}"),
                                         ]])
                                         await context.bot.send_message(chat_id=chat_id,
-                                            text=f"📊 #{trade_id} تحديث مستوى الدخول\n"
+                                            text=f"📊 #{trade_id} تحديث منطقة الدخول\n"
                                                  f"القديم: ${entry:,.2f}  →  الجديد: ${ne:,.2f}\n"
                                                  f"SL: ${fe['sl']:,.2f}  TP1: ${fe['tp1']:,.2f}  TP2: ${fe['tp2']:,.2f}",
                                             reply_markup=kb_upd)
@@ -2344,7 +2413,7 @@ async def _monitor_active_trades(context):
                                     moved = abs(cur-entry)/entry*100
                                     await context.bot.send_message(chat_id=chat_id,
                                         text=f"⚠️ #{trade_id} الصفقة ألغيت — عكس الاتجاه\n"
-                                             f"السعر تحرك {moved:.1f}% ضد الدخول\nالفريمات: {nd}")
+                                             f"السعر تحرك {moved:.1f}% ضد منطقة الدخول\nالفريمات: {nd}")
                             except Exception as e:
                                 logger.warning(f"Counter-move: {e}")
                 continue  # done with pending
@@ -2356,7 +2425,7 @@ async def _monitor_active_trades(context):
                     record_trade_result(trade_id, "win", trade.get("rr",0), direction, _session); closed=True
                 elif not trade["tp1_hit"] and cur >= tp1:
                     trade["tp1_hit"]=True; trade["sl"]=entry
-                    update_msg = f"✅ #{trade_id} TP1 تحقق — SL انتقل للدخول ${entry:,.2f}"
+                    update_msg = f"✅ #{trade_id} TP1 تحقق — SL انتقل لنقطة التعادل ${entry:,.2f}"
                 elif trade["tp1_hit"] and not trade["tp2_hit"] and cur >= tp2:
                     trade["tp2_hit"]=True
                     nsl = round(tp2-0.25*abs(tp1-tp2), 2); trade["sl"]=nsl
@@ -2367,7 +2436,7 @@ async def _monitor_active_trades(context):
                         update_msg = f"✅ #{trade_id} SL عند TP2 — ربح جزئي 🎉"
                         record_trade_result(trade_id, "win", rp, direction, _session)
                     elif trade.get("tp1_hit"):
-                        update_msg = f"🟡 #{trade_id} SL عند الدخول — تعادل"
+                        update_msg = f"🟡 #{trade_id} SL عند نقطة التعادل — تعادل"
                         record_trade_result(trade_id, "breakeven", 0, direction, _session)
                     else:
                         update_msg = f"🛑 #{trade_id} وقف الخسارة — مغلقة"
@@ -2384,7 +2453,7 @@ async def _monitor_active_trades(context):
                     record_trade_result(trade_id, "win", trade.get("rr",0), direction, _session); closed=True
                 elif not trade["tp1_hit"] and cur <= tp1:
                     trade["tp1_hit"]=True; trade["sl"]=entry
-                    update_msg = f"✅ #{trade_id} TP1 تحقق — SL انتقل للدخول ${entry:,.2f}"
+                    update_msg = f"✅ #{trade_id} TP1 تحقق — SL انتقل لنقطة التعادل ${entry:,.2f}"
                 elif trade["tp1_hit"] and not trade["tp2_hit"] and cur <= tp2:
                     trade["tp2_hit"]=True
                     nsl = round(tp2+0.25*abs(tp1-tp2), 2); trade["sl"]=nsl
@@ -2395,7 +2464,7 @@ async def _monitor_active_trades(context):
                         update_msg = f"✅ #{trade_id} SL عند TP2 — ربح جزئي 🎉"
                         record_trade_result(trade_id, "win", rp, direction, _session)
                     elif trade.get("tp1_hit"):
-                        update_msg = f"🟡 #{trade_id} SL عند الدخول — تعادل"
+                        update_msg = f"🟡 #{trade_id} SL عند نقطة التعادل — تعادل"
                         record_trade_result(trade_id, "breakeven", 0, direction, _session)
                     else:
                         update_msg = f"🛑 #{trade_id} وقف الخسارة — مغلقة"
@@ -2486,7 +2555,7 @@ async def send_smart_alerts(context):
             msg = ["╔══════════════════════════╗","  ⚡ تنبيه ذكي — ₿ BTC/USD","╚══════════════════════════╝",
                    "","  💵 السعر: $"+"{:,.2f}".format(price),""]
             for a in alerts: msg.append("  "+a)
-            msg += ["","━━━━━━━━━━━━━━━━━━━━━━━━","🕐 "+gmt_now(),"⚠️ للأغراض التعليمية فقط"]
+            msg += ["","━━━━━━━━━━━━━━━━━━━━━━━━","🕐 "+gmt_now(),"⚠️ تحليل تعليمي فقط — ليست توصية مالية"]
             full_msg = "\n".join(msg)
             await context.bot.send_message(chat_id=CHANNEL_ID, text=full_msg)
             for user_id in ALLOWED_USERS:
@@ -2508,12 +2577,12 @@ async def send_news(context):
         if data.get("status") != "ok": return
         articles = data.get("articles", [])
         if not articles: return
-        lines = ["╔══════════════════════════╗","  📰 أخبار السوق - أبو مهرة","╚══════════════════════════╝",""]
+        lines = ["╔══════════════════════════╗","  📰 أخبار السوق - SazBot","╚══════════════════════════╝",""]
         for i, a in enumerate(articles[:5], 1):
             lines.append(str(i)+". "+a.get("title","")[:80])
             lines.append("   📌 "+a.get("source",{}).get("name","")+"  |  "+a.get("publishedAt","")[:10])
             lines.append("")
-        lines += ["━"*24,"🕐 "+gmt_now(),"⚠️ للأغراض التعليمية فقط"]
+        lines += ["━"*24,"🕐 "+gmt_now(),"⚠️ تحليل تعليمي فقط — ليست توصية مالية"]
         await context.bot.send_message(chat_id=CHANNEL_ID, text="\n".join(lines))
     except Exception as e:
         logger.error("News: " + str(e))
@@ -2621,7 +2690,7 @@ async def send_daily_summary(context):
                       else "—")
         lines = [
             "╔══════════════════════════╗",
-            "  📊 الملخص اليومي — أبو مهرة",
+            "  📊 الملخص اليومي — SazBot",
             "╚══════════════════════════╝", "",
             "━━━━  📈 الأداء الإجمالي  ━━━━",
             f"  إجمالي:      {tc}",
@@ -2663,7 +2732,7 @@ async def send_daily_summary(context):
                     pnl_txt = f"  ({'+' if pnl>=0 else ''}{pnl:.1f}%)"
                 lines.append(f"  ₿ #{tr.get('id','?')}  {dire}  {st3}  ${tr['entry']:,.0f}{pnl_txt}")
             lines.append("")
-        lines += ["━━━━━━━━━━━━━━━━━━━━━━━━", f"🕐 {gmt_now()}", "⚠️ للأغراض التعليمية فقط"]
+        lines += ["━━━━━━━━━━━━━━━━━━━━━━━━", f"🕐 {gmt_now()}", "⚠️ تحليل تعليمي فقط — ليست توصية مالية"]
         full_msg = "\n".join(lines)
         try: await context.bot.send_message(chat_id=CHANNEL_ID, text=full_msg)
         except Exception: pass
@@ -2685,7 +2754,7 @@ def main():
     app.job_queue.run_repeating(send_smart_alerts,    interval=45*60,  first=120)
     app.job_queue.run_repeating(send_news,            interval=4*60*60, first=300)
     app.job_queue.run_daily(send_daily_summary, time=__import__("datetime").time(6, 0, 0))
-    logger.info("🐎 Abu Mahra Bot - Ready!")
+    logger.info("🟡 SazBot - Ready!")
     app.run_polling()
 
 if __name__ == "__main__":
