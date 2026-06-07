@@ -1609,6 +1609,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     elif data.startswith("override_trade_"):
+        global trade_counter
         # Format: override_trade_{asset}_{direction}
         parts_d = data.split("_")
         asset_ov = parts_d[2]
@@ -1620,18 +1621,14 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("⚠️ انتهت صلاحية الطلب، اطلب صفقة جديدة")
             return
 
-        # Build forced trade from the majority direction
-        # Re-run analysis but force the direction result
         await query.message.reply_text("⏳ جاري تحضير الصفقة...")
         try:
             clear_asset_cache(asset_ov)
             res_fresh = full_analysis(asset_ov, uid)
-            # Use fresh data if available, fall back to stored
             res_use = res_fresh if res_fresh else res_ov
             entry_p  = res_use.get("entry_price", res_use["price"])
             avg_atr  = res_use["atr"]
 
-            # Check no duplicate
             similar = next((tr for tr in active_trades
                             if tr["asset"] == asset_ov and tr["direction"] == forced_dir
                             and abs(tr["entry"] - entry_p) < 0.5 * avg_atr), None)
@@ -1640,7 +1637,6 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                     f"⚠️ صفقة مشابهة موجودة بالفعل\nدخول: ${similar['entry']:,.2f}")
                 return
 
-            global trade_counter
             trade_counter += 1
             res_use["id"] = trade_counter
             res_use["forced"] = True  # mark as override trade
