@@ -835,8 +835,11 @@ def full_analysis(asset="BTC", uid=0):
         return None
 
     majority = None
-    if   buy_c == 3: final="BUY";     conf_txt=t(uid,"full_confluence"); frames_conf=85
-    elif sel_c == 3: final="SELL";    conf_txt=t(uid,"full_confluence"); frames_conf=85
+    final = "NEUTRAL"
+    conf_txt = t(uid, "no_confluence")
+    frames_conf = 0
+    if   buy_c == 3: final="BUY";     conf_txt=t(uid,"full_confluence");    frames_conf=85
+    elif sel_c == 3: final="SELL";    conf_txt=t(uid,"full_confluence");    frames_conf=85
     elif buy_c == 2: final="NEUTRAL"; conf_txt=t(uid,"partial_confluence"); frames_conf=65; majority="BUY"
     elif sel_c == 2: final="NEUTRAL"; conf_txt=t(uid,"partial_confluence"); frames_conf=65; majority="SELL"
 
