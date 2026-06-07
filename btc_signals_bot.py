@@ -834,10 +834,36 @@ def full_analysis(asset="BTC", uid=0):
     if session == "ASIAN" and buy_c < 2 and sel_c < 2:
         return None
 
-    if   buy_c == 3: final="BUY";  conf_txt=t(uid,"full_confluence");    frames_conf=85
-    elif sel_c == 3: final="SELL"; conf_txt=t(uid,"full_confluence");    frames_conf=85
-    elif buy_c == 2: final="BUY";  conf_txt=t(uid,"partial_confluence"); frames_conf=65
-    elif sel_c == 2: final="SELL"; conf_txt=t(uid,"partial_confluence"); frames_conf=65
+    majority = None
+    if   buy_c == 3: final="BUY";     conf_txt=t(uid,"full_confluence"); frames_conf=85
+    elif sel_c == 3: final="SELL";    conf_txt=t(uid,"full_confluence"); frames_conf=85
+    elif buy_c == 2: final="NEUTRAL"; conf_txt=t(uid,"partial_confluence"); frames_conf=65; majority="BUY"
+    elif sel_c == 2: final="NEUTRAL"; conf_txt=t(uid,"partial_confluence"); frames_conf=65; majority="SELL"
+
+    # Two-frame: return NEUTRAL with majority so button_handler shows override button
+    if final == "NEUTRAL" and majority:
+        main2 = results.get("1h") or list(results.values())[0]
+        fib_l2, fib_e2, sh2, sl2 = calculate_fibonacci(df_1h)
+        nf2, fk2, _ = find_nearest_fib(main2["price"], fib_l2, "NEUTRAL") if fib_l2 else (main2["price"],"50.0",0)
+        kf2 = ["Fib "+k+"%  $"+"{:,.2f}".format(v) for k,v in sorted(fib_l2.items(), key=lambda x:float(x[0]))][:5]
+        fl2 = []
+        icons2 = {"1h":t(uid,"frame_1h"),"4h":t(uid,"frame_4h"),"1d":t(uid,"frame_1d")}
+        for k,r in results.items():
+            fl2.append(("🟢" if r["direction"]=="BUY" else "🔴")+" "+icons2.get(k,"")+": "+r["direction"]+" ("+str(r["conf"])+"%)")
+        return {"final":"NEUTRAL","majority":majority,"asset":asset,
+                "confluence_txt":conf_txt,"base_conf":frames_conf,
+                "price":main2["price"],"tp1":0,"tp2":0,"tp3":0,"sl":0,"rr":0,"atr":main2["atr"],
+                "risk_pct":50,"risk_label":"","risk_msg":"",
+                "frame_lines":fl2,"rsi":main2["rsi"],"support":main2["support"],"resistance":main2["resistance"],
+                "macd_bull":main2["macd_bull"],"ema_bull":main2["ema_bull"],
+                "ema_bear":main2["ema_bear"],"bb_zone":main2["bb_zone"],
+                "fib_levels":fib_l2,"fib_ext":fib_e2,"key_fibs":kf2,
+                "nearest_fib":nf2,"fib_key":fk2,"swing_h":sh2,"swing_l":sl2,
+                "weekly_trend":"NEUTRAL","regime":"UNKNOWN","regime_strength":0,"monthly_bias":"NEUTRAL",
+                "divergence":"NONE","session":session,"bull_obs":[],"bear_obs":[],"buy_liq":[],"sell_liq":[],
+                "entry_low":main2["price"],"entry_high":main2["price"],
+                "entry_price":main2["price"],"nearest_fib_val":nf2}
+
     else:
         main2 = results.get("1h") or list(results.values())[0]
         fib_l2, fib_e2, sh2, sl2 = calculate_fibonacci(df_1h)
@@ -847,7 +873,7 @@ def full_analysis(asset="BTC", uid=0):
         icons2 = {"1h":t(uid,"frame_1h"),"4h":t(uid,"frame_4h"),"1d":t(uid,"frame_1d")}
         for k,r in results.items():
             fl2.append(("🟢" if r["direction"]=="BUY" else "🔴")+" "+icons2.get(k,"")+": "+r["direction"]+" ("+str(r["conf"])+"%)")
-        return {"final":"NEUTRAL","asset":asset,"confluence_txt":t(uid,"no_confluence"),"base_conf":0,
+        return {"final":"NEUTRAL","asset":asset,"confluence_txt":t(uid,"no_confluence"),"base_conf":0,"majority":majority,
                 "price":main2["price"],"tp1":0,"tp2":0,"tp3":0,"sl":0,"rr":0,"atr":main2["atr"],
                 "risk_pct":50,"risk_label":t(uid,"risk_med"),"risk_msg":t(uid,"risk_med_msg"),
                 "frame_lines":fl2,"rsi":main2["rsi"],"support":main2["support"],"resistance":main2["resistance"],
@@ -1217,6 +1243,7 @@ async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
+    global trade_counter
     query = update.callback_query
     uid   = query.from_user.id
     data  = query.data
@@ -1260,10 +1287,13 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 await query.message.reply_text("⚪ البيانات غير متوفرة الآن\nحاول بعد دقيقتين 🕐"); return
             if res["final"] == "NEUTRAL":
                 fls = res.get("frame_lines", [])
-                # Determine majority direction for override button
-                buy_f  = sum(1 for f in fls if "BUY"  in f)
-                sell_f = sum(1 for f in fls if "SELL" in f)
-                majority = "BUY" if buy_f > sell_f else "SELL" if sell_f > buy_f else None
+                # Get majority from full_analysis (set for 2-frame case)
+                # Fall back to counting frame_lines for 0/1 frame case
+                majority = res.get("majority")
+                if not majority:
+                    buy_f  = sum(1 for f in fls if "BUY"  in f)
+                    sell_f = sum(1 for f in fls if "SELL" in f)
+                    majority = "BUY" if buy_f > sell_f else "SELL" if sell_f > buy_f else None
 
                 parts = ["⚪ الفريمات غير متوافقة الآن", ""]
                 if fls:
@@ -1275,6 +1305,9 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 if majority:
                     dir_ar = "شراء BUY ⬆️" if majority == "BUY" else "بيع SELL ⬇️"
                     dir_e  = "🟢" if majority == "BUY" else "🔴"
+                    is_two_frame = res.get("base_conf", 0) >= 65  # two-frame case
+                    warn = "⚠️ فريمان من ثلاثة يدعمان الاتجاه — فريم واحد عكسهم" if is_two_frame else "⚠️ الأغلبية مع الاتجاه لكن لا توافق كامل"
+                    parts.append(warn)
                     parts.append("تبي تدخل رغم الخلاف؟")
                     kb_override = InlineKeyboardMarkup([[
                         InlineKeyboardButton(
@@ -1308,7 +1341,6 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                     "لا داعي لصفقة جديدة")
                 return
 
-            global trade_counter
             trade_counter += 1
             res["id"] = trade_counter
             await query.message.reply_text(build_trade_msg(res, uid))
@@ -1609,7 +1641,6 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     elif data.startswith("override_trade_"):
-        global trade_counter
         # Format: override_trade_{asset}_{direction}
         parts_d = data.split("_")
         asset_ov = parts_d[2]
