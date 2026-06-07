@@ -750,95 +750,92 @@ def find_smart_entry(price: float, direction: str,
                      support: float, resistance: float,
                      bull_obs: list, bear_obs: list) -> tuple:
     """
-    Returns (entry_price, entry_reason) by finding the best
-    entry zone where Fib confluences with S/R or Order Blocks.
+    Returns (entry_price, entry_reason).
 
     Logic:
-    BUY  → look for fib BELOW price that is close to a support or bull OB
-    SELL → look for fib ABOVE price that is close to a resistance or bear OB
+    BUY  → Primary: nearest support (EMA/OB) below price
+            Secondary: Fib below price that confirms the support
+    SELL → Primary: nearest resistance (EMA/OB) above price
+            Secondary: Fib above price that confirms the resistance
 
-    Confluence threshold: within 0.5% of each other.
-    Falls back to nearest fib if no confluence found.
+    This avoids entering at market price and ensures entries
+    are at meaningful S/R levels.
     """
-    fib_vals = sorted(fib_levels.values())
-    tolerance = 0.005  # 0.5%
+
+    def _collect_levels_buy():
+        """Collect all support levels below price."""
+        levels = []
+        # EMA support
+        if support < price:
+            levels.append((support, "دعم EMA"))
+        # Bull order blocks
+        for ob in bull_obs:
+            mid = (ob["high"] + ob["low"]) / 2
+            if mid < price:
+                levels.append((round(mid, 2), "Order Block شرائي"))
+        # Key Fib levels below price
+        for k, v in fib_levels.items():
+            if v < price and k in ("38.2", "50.0", "61.8", "78.6"):
+                levels.append((v, f"Fib {k}%"))
+        return sorted(levels, key=lambda x: abs(x[0] - price))
+
+    def _collect_levels_sell():
+        """Collect all resistance levels above price."""
+        levels = []
+        # EMA resistance
+        if resistance > price:
+            levels.append((resistance, "مقاومة EMA"))
+        # Bear order blocks
+        for ob in bear_obs:
+            mid = (ob["high"] + ob["low"]) / 2
+            if mid > price:
+                levels.append((round(mid, 2), "Order Block بيعي"))
+        # Key Fib levels above price (including swing high)
+        for k, v in fib_levels.items():
+            if v > price and k in ("0.0", "23.6", "38.2"):
+                levels.append((v, f"Fib {k}%"))
+        return sorted(levels, key=lambda x: abs(x[0] - price))
 
     if direction == "BUY":
-        # Candidate fibs: below price, within 4%
-        candidates = [(v, k) for k, v in fib_levels.items()
-                      if v < price and abs(v - price) / price * 100 <= 4.0]
-        candidates.sort(key=lambda x: abs(x[0] - price))  # closest first
+        candidates = _collect_levels_buy()
 
-        # Score each candidate
-        best_entry = None; best_reason = ""; best_score = -1
-        for fib_val, fib_key in candidates:
-            score = 0; reasons = [f"Fib {fib_key}%"]
+        if not candidates:
+            # No support found — enter at nearest Fib below price
+            below = [(v, k) for k, v in fib_levels.items() if v < price]
+            if below:
+                v, k = min(below, key=lambda x: abs(x[0] - price))
+                return round(v, 2), f"Fib {k}%"
+            return round(price - 0.5 * atr, 2), "قريب من السعر"
 
-            # Near support (EMA-based)
-            if abs(fib_val - support) / price < tolerance:
-                score += 3; reasons.append("دعم EMA")
+        # Check if top candidate has Fib confluence
+        best_level, best_reason = candidates[0]
+        for fib_val, fib_key in [(v, k) for k, v in fib_levels.items()]:
+            if abs(fib_val - best_level) / price < 0.008:  # within 0.8%
+                best_reason = best_reason + f" + Fib {fib_key}%"
+                break
 
-            # Near bull order block
-            for ob in bull_obs:
-                if ob["low"] <= fib_val <= ob["high"] or abs(fib_val - ob["low"]) / price < tolerance:
-                    score += 2; reasons.append("Order Block شرائي"); break
-
-            # Bonus: key fib levels (38.2, 50, 61.8)
-            if fib_key in ("38.2", "50.0", "61.8"):
-                score += 1
-
-            if score > best_score:
-                best_score  = score
-                best_entry  = fib_val
-                best_reason = " + ".join(reasons)
-
-        if best_entry:
-            return round(best_entry, 2), best_reason
-
-        # Fallback: closest fib below price
-        below = [(v, k) for k, v in fib_levels.items() if v < price]
-        if below:
-            v, k = min(below, key=lambda x: abs(x[0] - price))
-            return round(v, 2), f"Fib {k}%"
-        return round(price, 2), "سعر السوق"
+        return round(best_level, 2), best_reason
 
     else:  # SELL
-        # Candidate fibs: above price, within 4%
-        candidates = [(v, k) for k, v in fib_levels.items()
-                      if v > price and abs(v - price) / price * 100 <= 4.0]
-        candidates.sort(key=lambda x: abs(x[0] - price))
+        candidates = _collect_levels_sell()
 
-        best_entry = None; best_reason = ""; best_score = -1
-        for fib_val, fib_key in candidates:
-            score = 0; reasons = [f"Fib {fib_key}%"]
+        if not candidates:
+            # No resistance found — enter at nearest Fib above price or market
+            above = [(v, k) for k, v in fib_levels.items() if v > price]
+            if above:
+                v, k = min(above, key=lambda x: abs(x[0] - price))
+                return round(v, 2), f"Fib {k}%"
+            # Last resort: enter slightly above current price
+            return round(price + 0.3 * atr, 2), "قريب من المقاومة"
 
-            # Near resistance
-            if abs(fib_val - resistance) / price < tolerance:
-                score += 3; reasons.append("مقاومة EMA")
+        # Check if top candidate has Fib confluence
+        best_level, best_reason = candidates[0]
+        for fib_val, fib_key in [(v, k) for k, v in fib_levels.items()]:
+            if abs(fib_val - best_level) / price < 0.008:
+                best_reason = best_reason + f" + Fib {fib_key}%"
+                break
 
-            # Near bear order block
-            for ob in bear_obs:
-                if ob["low"] <= fib_val <= ob["high"] or abs(fib_val - ob["high"]) / price < tolerance:
-                    score += 2; reasons.append("Order Block بيعي"); break
-
-            # Bonus: key fib levels
-            if fib_key in ("38.2", "50.0", "61.8"):
-                score += 1
-
-            if score > best_score:
-                best_score  = score
-                best_entry  = fib_val
-                best_reason = " + ".join(reasons)
-
-        if best_entry:
-            return round(best_entry, 2), best_reason
-
-        # Fallback: closest fib above price
-        above = [(v, k) for k, v in fib_levels.items() if v > price]
-        if above:
-            v, k = min(above, key=lambda x: abs(x[0] - price))
-            return round(v, 2), f"Fib {k}%"
-        return round(price, 2), "سعر السوق"
+        return round(best_level, 2), best_reason
 
 
 # ==================== Session ====================
