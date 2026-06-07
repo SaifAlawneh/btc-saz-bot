@@ -144,7 +144,7 @@ CONFUSED_EN = ["Didn't get that 😅 Use the buttons 👇", "🤔 Choose from th
 TEXTS = {
     "ar": {
         "choose_lang": "🟡 SazBot | BTC Signals\n\nاختر لغتك:",
-        "welcome": "🟡 SazBot | BTC Signals\n\nمرحباً بك في تجربة تحليل أكثر وضوحاً واحترافية.\n\n\nمتخصص في:\n₿ Bitcoin  BTC/USD\n\n✨ ما يقدمه البوت:\n▫️ تحليل متعدد الفريمات\n▫️ Smart Entry Zone مبنية على ATR والتوافق الفني\n▫️ أهداف ووقف خسارة محسوبة\n▫️ تنبيهات تلقائية للفرص القوية\n▫️ متابعة مباشرة للصفقات المفتوحة\n\n⚠️ تحليل تعليمي فقط — ليست توصية مالية",
+        "welcome": "🟡 SazBot | BTC Signals\n\nمرحباً بك في تجربة تحليل أكثر وضوحاً واحترافية.\n\n\nمتخصص في:\n₿ Bitcoin  BTC/USD\n\n✨ ما يقدمه البوت:\n▫️ تحليل متعدد الفريمات\n▫️ منطقة دخول ذكية مبنية على ATR والتوافق الفني\n▫️ أهداف ووقف خسارة محسوبة\n▫️ تنبيهات تلقائية للفرص القوية\n▫️ متابعة مباشرة للصفقات المفتوحة\n\n⚠️ تحليل تعليمي فقط — ليست توصية مالية",
         "btn_btc": "📊 تحليل صفقة BTC",
         "btn_analysis_btc": "📈 قراءة السوق",
         "btn_prices": "💰 الأسعار", "btn_about": "ℹ️ عن SazBot",
@@ -162,15 +162,40 @@ TEXTS = {
         "auto_header": "SazBot | Auto BTC Signal",
         "update_header": "SazBot | BTC Trade Update",
         "analysis_header": "SazBot | Market Analysis",
-        "entry": "الدخول المرجعي", "entry_zone": "Smart Entry Zone",
-        "direction": "Market Bias",
+        "entry": "الدخول المرجعي", "entry_zone": "منطقة الدخول الذكية",
+        "direction": "اتجاه السوق",
+        "confidence": "مستوى الثقة",
+        "entry_basis": "سبب الدخول",
+        "weekly": "الأسبوعي", "monthly": "الشهري",
+        "bullish": "صاعد", "bearish": "هابط", "neutral": "محايد",
+        "counter_trend": "⚠️ فرصة عكس الاتجاه — أهداف أقصر ومخاطرة أضيق.",
+        "trend_up": "📈 سوق صاعد", "trend_down": "📉 سوق هابط", "ranging_market": "↔️ سوق عرضي", "high_volatility": "⚡ تذبذب مرتفع",
+        "bearish_div": "📉 دايفرجنس RSI هابط ⚠️", "bullish_div": "📈 دايفرجنس RSI صاعد ✅",
+        "strong_sell_zone": "🔴 منطقة بيع قوية", "strong_buy_zone": "🟢 منطقة شراء قوية", "liquidity_zone": "🎯 منطقة سيولة",
+        "risk_check": "تقييم المخاطر", "risk_level": "مستوى المخاطرة", "key_levels": "المستويات المهمة",
+        "active_trade": "الصفقة النشطة", "pending": "قيد الانتظار", "active": "نشطة", "opened": "وقت الفتح",
+        "targets": "الأهداف", "market_filters_blocked": "⚪ الفلاتر منعت التحليل أو البيانات غير متوفرة\n\nحاول بعد دقيقتين 🕐",
+        "trade_health": "فحص حالة الصفقة", "distance": "المسافة", "above": "فوق", "below": "تحت", "entry_zone_word": "منطقة الدخول",
+        "risk_review": "مراجعة المخاطر", "recommend_cancel": "🔴 التوصية: إلغاء — الظروف تدهورت بوضوح", "recommend_review": "🟡 التوصية: مراجعة — يوجد عامل خطر أساسي بدون دعم كافٍ", "recommend_keep": "🟢 التوصية: إبقاء — الظروف لا تزال داعمة", "recommend_monitor": "🟡 التوصية: مراقبة — الإشارات مختلطة",
+        "full_reversal": "❌ انعكاس كامل في الفريمات", "frames_still_support": "فريمات مؤهلة لا تزال تدعم السيناريو", "frames_oppose": "فريمات مؤهلة أصبحت تعاكس السيناريو",
+        "monthly_supports": "📆 الميل الشهري يدعم السيناريو", "monthly_against": "📆 الميل الشهري يعاكس السيناريو", "weekly_supports": "🗓️ الاتجاه الأسبوعي يدعم السيناريو", "weekly_against": "🗓️ الاتجاه الأسبوعي يعاكس السيناريو",
+        "volatility_risk": "⚡ تذبذب مرتفع — المخاطر زادت", "ranging_risk": "↔️ السوق عرضي — الوصول للأهداف قد يكون أصعب", "regime_supports": "📊 حالة السوق تدعم الاتجاه", "regime_against": "📊 حالة السوق تعاكس الاتجاه", "rsi_against": "⚠️ دايفرجنس RSI يعاكس السيناريو", "rsi_supports": "📈 دايفرجنس RSI يدعم السيناريو",
+        "forced_note": "⚠️ سيناريو بمخاطرة أعلى تم فتحه يدوياً.",
+        "btn_keep_trade": "✅ إبقاء الصفقة", "btn_keep_setup": "✅ إبقاء السيناريو", "btn_cancel_setup": "❌ إلغاء السيناريو", "btn_activate_setup": "✅ تفعيل السيناريو", "btn_ignore": "❌ تجاهل", "btn_update_setup": "✅ تحديث السيناريو",
+        "auto_cancel_timeframes": "❌ تم الإلغاء تلقائياً: جميع الفريمات المؤهلة انعكست إلى", "auto_cancel_conditions": "❌ تم الإلغاء تلقائياً: الظروف تدهورت",
+        "setup_activated": "تم تفعيل السيناريو", "price_reached_entry": "وصل السعر إلى منطقة الدخول الذكية. السيناريو أصبح نشطاً.",
+        "setup_cancelled_full": "تم إلغاء السيناريو", "price_bias_changed": "وصل السعر إلى منطقة الدخول، لكن اتجاه السوق تغيّر إلى",
+        "invalid_before_entry": "السعر ألغى صلاحية السيناريو قبل الدخول.", "entry_alert": "تنبيه منطقة الدخول", "approaching_entry": "السعر يقترب من منطقة الدخول الذكية.",
+        "reference_entry": "الدخول المرجعي", "high_impact_event": "حدث مؤثر عالي الأهمية", "impact_high": "التأثير: 🔴 مرتفع. يرجى إدارة المخاطر بحذر.",
+        "entry_update": "تحديث منطقة الدخول", "conditions_changed_before_activation": "تغيرت ظروف السوق قبل التفعيل.", "old_reference": "الدخول السابق", "new_reference": "الدخول الجديد",
+        "price_moved_against": "تحرك السعر ضد منطقة الدخول الذكية وتغيرت الفريمات إلى",
         "buy": "شراء  BUY ⬆️", "sell": "بيع  SELL ⬇️",
         "targets_section": "الأهداف المحتملة",
         "tp1": "TP1", "tp2": "TP2", "tp3": "TP3", "sl": "SL",
         "rr": "العائد / المخاطرة",
         "fib_section": "مستويات Fibonacci",
         "support": "دعم", "resistance": "مقاومة",
-        "confluence": "Timeframe Alignment",
+        "confluence": "توافق الفريمات",
         "frame_1h": "ساعة", "frame_4h": "4 ساعات", "frame_1d": "يومي",
         "full_confluence": "✅ توافق قوي — 3/3 فريمات مؤهلة",
         "partial_confluence": "⚠️ توافق جزئي — 2/3 فريمات مؤهلة",
@@ -182,8 +207,16 @@ TEXTS = {
         "partial_body": "الاتجاه العام واضح، لكن ليست جميع الفريمات مؤهلة حسب حد الثقة المعتمد.",
         "higher_risk_prompt": "يمكن عرض صفقة بديلة، لكنها مخاطرتها أعلى لأنها ليست مبنية على توافق كامل.",
         "no_trade_better": "عدم الدخول أحياناً أفضل من الدخول في فرصة ضعيفة.",
-        "btn_higher_risk": "⚠️ صفقة مخاطرة أعلى",
+        "btn_higher_risk": "🎯 عرض الفرصة المتاحة",
         "btn_cancel": "❌ إلغاء",
+        "btn_retry": "🔄 إعادة التحليل",
+        "request_expired": "⚠️ انتهت صلاحية الطلب\n\nيرجى طلب تحليل جديد.",
+        "existing_trade_kept": "✅ تم الاحتفاظ بالصفقة القائمة",
+        "setup_kept": "✅ تم الاحتفاظ بالسيناريو",
+        "setup_cancelled": "❌ تم إلغاء السيناريو",
+        "cancelled_waiting": "✅ تم الإلغاء. بانتظار فرصة أقوى.",
+        "preparing_available": "⏳ جاري تجهيز الفرصة المتاحة...",
+        "higher_risk_warning": "⚠️ هذه فرصة بمخاطرة أعلى لأنها ليست مبنية على توافق كامل. استخدم حجم أصغر وإدارة مخاطرة صارمة. عدم الدخول أحياناً أفضل من الدخول في فرصة ضعيفة.",
         "duplicate_setup": "⚠️ نفس الفرصة موجودة بالفعل",
         "existing_entry_zone": "منطقة الدخول القائمة",
         "previous_entry_zone": "منطقة الدخول السابقة",
@@ -198,6 +231,13 @@ TEXTS = {
         "update_tp1_hit": "✅ الهدف الأول تم! تم نقل SL للدخول",
         "update_tp2_hit": "✅✅ الهدف الثاني تم! تم نقل SL للـ TP2",
         "update_sl_moved": "📊 تم تحريك وقف الخسارة للأمان",
+        "tp3_hit": "🏆 الهدف الثالث تم — تم إغلاق الصفقة بنجاح.",
+        "tp1_hit": "✅ الهدف الأول تم — تم نقل وقف الخسارة إلى الدخول.",
+        "tp2_hit": "✅✅ الهدف الثاني تم — تم رفع وقف الخسارة لحماية الربح.",
+        "protected_profit": "✅ تم حماية الربح — وصل السعر إلى وقف الخسارة بعد TP2.",
+        "breakeven": "🟡 خروج على نقطة الدخول — تم إغلاق الصفقة بدون خسارة.",
+        "sl_hit": "🛑 وقف الخسارة تم — أغلقت الصفقة.",
+        "trailing_sl": "📊 تم تحديث وقف الخسارة المتحرك",
         "current_price": "السعر الحالي",
         "trend_bull": "📈 الاتجاه: صاعد", "trend_bear": "📉 الاتجاه: هابط",
         "trend_neutral": "➡️ الاتجاه: محايد",
@@ -214,7 +254,7 @@ TEXTS = {
         "summary_bear": "✅ الخلاصة: السوق يميل للهبوط",
         "summary_neutral": "✅ الخلاصة: السوق في منطقة تردد",
         "prices_title": "💰 الأسعار الحالية", "change_24h": "التغيير 24h",
-        "about_text": "ℹ️ عن SazBot 🟡\n\nبوت متخصص في تحليل BTC/USD بأسلوب واضح ومختصر.\n\n📊 تحليل متعدد الفريمات\n🎯 Smart Entry Zone مبنية على ATR والتوافق الفني\n🛑 وقف خسارة وأهداف محسوبة\n📡 إشارات تلقائية عند ظهور فرص قوية\n🔄 متابعة مباشرة للصفقات المفتوحة\n🔬 RSI, MACD, EMA, BB, Stoch, ATR, Ichimoku\n📊 مصادر البيانات: Twelve Data + Binance\n\n⚠️ التحليل تعليمي فقط وليس توصية مالية.",
+        "about_text": "ℹ️ عن SazBot 🟡\n\nبوت متخصص في تحليل BTC/USD بأسلوب واضح ومختصر.\n\n📊 تحليل متعدد الفريمات\n🎯 منطقة دخول ذكية مبنية على ATR والتوافق الفني\n🛑 وقف خسارة وأهداف محسوبة\n📡 إشارات تلقائية عند ظهور فرص قوية\n🔄 متابعة مباشرة للصفقات المفتوحة\n🔬 RSI, MACD, EMA, BB, Stoch, ATR, Ichimoku\n📊 مصادر البيانات: Twelve Data + Binance\n\n⚠️ التحليل تعليمي فقط وليس توصية مالية.",
         "ind_rsi_oversold": "RSI تشبع بيعي", "ind_rsi_buy": "RSI منطقة شراء",
         "ind_rsi_overbought": "RSI تشبع شرائي", "ind_rsi_sell": "RSI منطقة بيع",
         "ind_macd_pos": "MACD إيجابي ↗️", "ind_macd_neg": "MACD سلبي ↘️",
@@ -244,6 +284,31 @@ TEXTS = {
         "analysis_header": "SazBot | Market Analysis",
         "entry": "Reference Entry", "entry_zone": "Smart Entry Zone",
         "direction": "Market Bias",
+        "confidence": "Confidence",
+        "entry_basis": "Entry Basis",
+        "weekly": "Weekly", "monthly": "Monthly",
+        "bullish": "Bullish", "bearish": "Bearish", "neutral": "Neutral",
+        "counter_trend": "⚠️ Counter-trend setup — shorter targets and tighter risk.",
+        "trend_up": "📈 Trending up", "trend_down": "📉 Trending down", "ranging_market": "↔️ Ranging market", "high_volatility": "⚡ High volatility",
+        "bearish_div": "📉 Bearish RSI divergence ⚠️", "bullish_div": "📈 Bullish RSI divergence ✅",
+        "strong_sell_zone": "🔴 Strong sell zone", "strong_buy_zone": "🟢 Strong buy zone", "liquidity_zone": "🎯 Liquidity zone",
+        "risk_check": "Risk Check", "risk_level": "Risk level", "key_levels": "Key Levels",
+        "active_trade": "Active Trade", "pending": "Pending", "active": "Active", "opened": "Opened",
+        "targets": "Targets", "market_filters_blocked": "⚪ Filters blocked the analysis or data is unavailable\n\nTry again in two minutes 🕐",
+        "trade_health": "Trade Health Check", "distance": "Distance", "above": "above", "below": "below", "entry_zone_word": "entry zone",
+        "risk_review": "Risk Review", "recommend_cancel": "🔴 Recommendation: Cancel — conditions deteriorated clearly", "recommend_review": "🟡 Recommendation: Review — one key risk without enough support", "recommend_keep": "🟢 Recommendation: Keep — conditions remain supportive", "recommend_monitor": "🟡 Recommendation: Monitor — mixed conditions",
+        "full_reversal": "❌ Full timeframe reversal detected", "frames_still_support": "qualified timeframes still support the setup", "frames_oppose": "qualified timeframes now oppose the setup",
+        "monthly_supports": "📆 Monthly bias supports the setup", "monthly_against": "📆 Monthly bias is against the setup", "weekly_supports": "🗓️ Weekly trend supports the setup", "weekly_against": "🗓️ Weekly trend is against the setup",
+        "volatility_risk": "⚡ High volatility — risk increased", "ranging_risk": "↔️ Ranging market — targets may be harder to reach", "regime_supports": "📊 Market regime supports the direction", "regime_against": "📊 Market regime is against the direction", "rsi_against": "⚠️ RSI divergence is against the setup", "rsi_supports": "📈 RSI divergence supports the setup",
+        "forced_note": "⚠️ Higher-risk setup opened by override.",
+        "btn_keep_trade": "✅ Keep Trade", "btn_keep_setup": "✅ Keep Setup", "btn_cancel_setup": "❌ Cancel Setup", "btn_activate_setup": "✅ Activate Setup", "btn_ignore": "❌ Ignore", "btn_update_setup": "✅ Update Setup",
+        "auto_cancel_timeframes": "❌ Auto-cancelled: all qualified timeframes shifted to", "auto_cancel_conditions": "❌ Auto-cancelled: conditions deteriorated",
+        "setup_activated": "Trade Activated", "price_reached_entry": "Price reached the Smart Entry Zone. The setup is now active.",
+        "setup_cancelled_full": "Setup Cancelled", "price_bias_changed": "Price reached the entry area, but the market bias changed to",
+        "invalid_before_entry": "The price invalidated the setup before entry.", "entry_alert": "Entry Zone Alert", "approaching_entry": "Price is approaching the Smart Entry Zone.",
+        "reference_entry": "Reference Entry", "high_impact_event": "High-Impact Event", "impact_high": "Impact: 🔴 High. Manage risk carefully.",
+        "entry_update": "Entry Zone Update", "conditions_changed_before_activation": "Market conditions changed before activation.", "old_reference": "Old Reference", "new_reference": "New Reference",
+        "price_moved_against": "The price moved against the Smart Entry Zone and timeframes shifted to",
         "buy": "BUY ⬆️", "sell": "SELL ⬇️",
         "targets_section": "Potential Targets",
         "tp1": "TP1", "tp2": "TP2", "tp3": "TP3", "sl": "SL",
@@ -262,8 +327,16 @@ TEXTS = {
         "partial_body": "The overall direction is clear, but not all timeframes meet the confidence threshold yet.",
         "higher_risk_prompt": "A fallback setup can be shown, but it carries higher risk because alignment is not complete.",
         "no_trade_better": "No trade is better than a weak trade.",
-        "btn_higher_risk": "⚠️ Higher-Risk Setup",
+        "btn_higher_risk": "🎯 View Available Setup",
         "btn_cancel": "❌ Cancel",
+        "btn_retry": "🔄 Re-analyse",
+        "request_expired": "⚠️ Request Expired\n\nPlease request a fresh setup.",
+        "existing_trade_kept": "✅ Existing Trade Kept",
+        "setup_kept": "✅ Setup Kept",
+        "setup_cancelled": "❌ Setup Cancelled",
+        "cancelled_waiting": "✅ Cancelled. Waiting for a stronger setup.",
+        "preparing_available": "⏳ Preparing the available setup...",
+        "higher_risk_warning": "⚠️ This setup carries higher risk because alignment is not complete. Consider smaller size and strict risk management. No trade is better than a weak trade.",
         "duplicate_setup": "⚠️ A similar setup is already active",
         "existing_entry_zone": "Existing Entry Zone",
         "previous_entry_zone": "Previous Entry Zone",
@@ -278,6 +351,13 @@ TEXTS = {
         "update_tp1_hit": "✅ TP1 reached! SL moved to entry",
         "update_tp2_hit": "✅✅ TP2 reached! SL moved to TP2",
         "update_sl_moved": "📊 Stop Loss moved to safety",
+        "tp3_hit": "🏆 TP3 reached — trade closed successfully.",
+        "tp1_hit": "✅ TP1 reached — SL moved to entry.",
+        "tp2_hit": "✅✅ TP2 reached — SL moved to protect profit.",
+        "protected_profit": "✅ Protected profit — SL reached after TP2.",
+        "breakeven": "🟡 Breakeven — trade closed without loss.",
+        "sl_hit": "🛑 Stop Loss hit — trade closed.",
+        "trailing_sl": "📊 Trailing SL updated",
         "current_price": "Current Price",
         "trend_bull": "📈 Trend: Bullish", "trend_bear": "📉 Trend: Bearish",
         "trend_neutral": "➡️ Trend: Neutral",
@@ -1208,7 +1288,7 @@ def build_trade_msg(res, uid=0, auto=False):
         f"📊 {t(uid,'direction')}: {dir_emoji} {dir_txt}",
     ]
     if confidence is not None:
-        lines.append(f"🔥 Confidence: {confidence}%")
+        lines.append(f"🔥 {t(uid,'confidence')}: {confidence}%")
     lines += [
         f"💵 {t(uid,'current_price')}: ${res['price']:,.2f}",
         "",
@@ -1216,7 +1296,7 @@ def build_trade_msg(res, uid=0, auto=False):
         entry_zone_txt,
     ]
     if entry_reason_d and entry_reason_d not in ("سعر السوق", "Market price"):
-        lines.append(f"📍 Basis: {entry_reason_d}")
+        lines.append(f"📍 {t(uid,'entry_basis')}: {entry_reason_d}")
     lines += [
         f"📌 {t(uid,'entry')}: ${entry_display:,.2f}",
         "",
@@ -1234,29 +1314,29 @@ def build_trade_msg(res, uid=0, auto=False):
     wt = res.get("weekly_trend","NEUTRAL")
     is_counter = (res["final"]=="BUY" and wt=="BEAR") or (res["final"]=="SELL" and wt=="BULL")
     if is_counter:
-        lines.append("⚠️ Counter-trend setup — shorter targets and tighter risk.")
-    lines.append(("📈" if wt=="BULL" else "📉" if wt=="BEAR" else "➡️")+" Weekly: "+("Bullish" if wt=="BULL" else "Bearish" if wt=="BEAR" else "Neutral"))
+        lines.append(t(uid,"counter_trend"))
+    lines.append(("📈" if wt=="BULL" else "📉" if wt=="BEAR" else "➡️") + " " + t(uid,"weekly") + ": " + (t(uid,"bullish") if wt=="BULL" else t(uid,"bearish") if wt=="BEAR" else t(uid,"neutral")))
 
     rg = res.get("regime","UNKNOWN")
-    rg_map = {"TRENDING_UP":"📈 Trending up","TRENDING_DOWN":"📉 Trending down","RANGING":"↔️ Ranging market","VOLATILE":"⚡ High volatility","UNKNOWN":""}
+    rg_map = {"TRENDING_UP":t(uid,"trend_up"),"TRENDING_DOWN":t(uid,"trend_down"),"RANGING":t(uid,"ranging_market"),"VOLATILE":t(uid,"high_volatility"),"UNKNOWN":""}
     if rg_map.get(rg, rg):
         lines.append(rg_map.get(rg, rg))
 
     mb = res.get("monthly_bias","NEUTRAL")
-    lines.append("📈 Monthly: Bullish" if mb=="BULL" else "📉 Monthly: Bearish" if mb=="BEAR" else "➡️ Monthly: Neutral")
+    lines.append(("📈" if mb=="BULL" else "📉" if mb=="BEAR" else "➡️") + " " + t(uid,"monthly") + ": " + (t(uid,"bullish") if mb=="BULL" else t(uid,"bearish") if mb=="BEAR" else t(uid,"neutral")))
 
     div = res.get("divergence","NONE")
-    if div == "BEARISH": lines.append("📉 Bearish RSI divergence ⚠️")
-    elif div == "BULLISH": lines.append("📈 Bullish RSI divergence ✅")
+    if div == "BEARISH": lines.append(t(uid,"bearish_div"))
+    elif div == "BULLISH": lines.append(t(uid,"bullish_div"))
 
     obs = res.get("bear_obs" if is_sell else "bull_obs", [])
     if obs:
         ob = obs[-1]
-        lines.append(("🔴 Strong sell zone" if is_sell else "🟢 Strong buy zone") + f": ${ob['low']:,.0f} — ${ob['high']:,.0f}")
+        lines.append((t(uid,"strong_sell_zone") if is_sell else t(uid,"strong_buy_zone")) + f": ${ob['low']:,.0f} — ${ob['high']:,.0f}")
 
     liq = res.get("sell_liq" if is_sell else "buy_liq", [])
     if liq:
-        lines.append(f"🎯 Liquidity zone: ${liq[0]:,.0f}")
+        lines.append(f"{t(uid,'liquidity_zone')}: ${liq[0]:,.0f}")
 
     for fl in res.get("frame_lines", []):
         lines.append(fl)
@@ -1265,13 +1345,13 @@ def build_trade_msg(res, uid=0, auto=False):
 
     overall_risk = res.get("overall_risk", "🟡 Medium")
     risk_warnings = res.get("risk_warnings", [])
-    lines += ["", "⚠️ Risk Check", f"Risk level: {overall_risk}"]
+    lines += ["", "⚠️ " + t(uid,"risk_check"), f"{t(uid,'risk_level')}: {overall_risk}"]
     for w in risk_warnings:
         lines.append(w)
 
     lines += [
         "",
-        "📡 Key Levels",
+        "📡 " + t(uid,"key_levels"),
         f"🟢 {t(uid,'support')}: ${res['support']:,.2f}",
         f"🔴 {t(uid,'resistance')}: ${res['resistance']:,.2f}",
         "",
@@ -1568,7 +1648,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 save_trades()
             await query.message.reply_text(build_trade_msg(res_old, uid))
         else:
-            await query.message.reply_text("⚠️ SazBot | Request Expired\n\nPlease request a fresh setup.")
+            await query.message.reply_text(t(uid,"request_expired"))
 
     elif data == "confirm_add_new":
         pending = pending_trade_replace.pop(uid, None)
@@ -1582,11 +1662,11 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 save_trades()
             await query.message.reply_text(build_trade_msg(res_stored, uid))
         else:
-            await query.message.reply_text("⚠️ SazBot | Request Expired\n\nPlease request a fresh setup.")
+            await query.message.reply_text(t(uid,"request_expired"))
 
     elif data == "confirm_replace_no":
         pending_trade_replace.pop(uid, None)
-        await query.message.reply_text("✅ SazBot | Existing Trade Kept")
+        await query.message.reply_text(t(uid,"existing_trade_kept"))
 
     elif data.startswith("analysis_"):
         asset = data.split("_")[1]
@@ -1642,11 +1722,11 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                     f"🟡 SazBot | Active Trade #{tid}",
                     st,
                     "",
-                    f"📊 Market Bias: {de}",
-                    "🎯 Smart Entry Zone: "+format_entry_zone(tr["entry"], tr.get("atr", 0)),
+                    f"📊 {t(uid,'direction')}: {de}",
+                    f"🎯 {t(uid,'entry_zone')}: "+format_entry_zone(tr["entry"], tr.get("atr", 0)),
                 ]
                 if current_price and tr["asset"] == "BTC":
-                    rows.append("💵 Current Price: $"+"{:,.2f}".format(current_price))
+                    rows.append("💵 "+t(uid,"current_price")+": $"+"{:,.2f}".format(current_price))
                 rows += [
                     "",
                     "🎯 Targets",
@@ -1711,7 +1791,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("keep_pending_"):
         trade_id = int(data.split("_")[2])
         pending_trade_replace.pop(trade_id, None)
-        await query.message.reply_text("✅ SazBot | Setup Kept #"+str(trade_id))
+        await query.message.reply_text(t(uid,"setup_kept") + " #"+str(trade_id))
 
     elif data.startswith("cancel_pending_"):
         trade_id = int(data.split("_")[2])
@@ -1721,7 +1801,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             async with _trades_lock:
                 active_trades.remove(trade)
                 save_trades()
-        await query.message.reply_text("❌ SazBot | Setup Cancelled #"+str(trade_id))
+        await query.message.reply_text(t(uid,"setup_cancelled") + " #"+str(trade_id))
 
     elif data.startswith("activate_signal_"):
         sig_id = int(data.split("_")[2])
@@ -1824,7 +1904,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "override_cancel":
         pending_trade_replace.pop(uid, None)
-        await query.message.reply_text("✅ Cancelled. Waiting for a stronger setup.")
+        await query.message.reply_text(t(uid,"cancelled_waiting"))
         return
 
     elif data.startswith("override_trade_"):
@@ -1834,10 +1914,10 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
         res_ov   = stored.get("override_res")
 
         if not res_ov:
-            await query.message.reply_text("⚠️ SazBot | Request Expired\n\nPlease request a fresh setup.")
+            await query.message.reply_text(t(uid,"request_expired"))
             return
 
-        await query.message.reply_text("⏳ Preparing a higher-risk alternative setup...")
+        await query.message.reply_text(t(uid,"preparing_available"))
         try:
             keys_to_clear = [k for k in _cache if k.startswith(asset_ov)]
             for k in keys_to_clear: _cache.pop(k, None)
@@ -1907,8 +1987,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
 
             trade_msg = build_trade_msg(res_use, uid)
             fl_now    = res_use.get("frame_lines", [])
-            warning   = "\n\n  ⚠️ " + ("صفقة مخاطرة أعلى" if user_languages.get(uid,"ar") == "ar" else "Higher-Risk Setup") + "  \n" + \
-                        ("  هذه ليست إشارة عادية بتوافق كامل.\n  يفضّل استخدام حجم أصغر وإدارة المخاطر بصرامة.\n  عدم الدخول أحياناً أفضل من الدخول في فرصة ضعيفة." if user_languages.get(uid,"ar") == "ar" else "  This is not a standard full-alignment signal.\n  Consider smaller size and strict risk management.\n  No trade is better than a weak trade.")
+            warning = "\n\n" + t(uid,"higher_risk_warning")
             await query.message.reply_text(trade_msg + warning)
 
             is_p = abs(entry_p - res_use["price"]) / res_use["price"] * 100 > 0.1
@@ -1951,15 +2030,16 @@ def _build_health_report(trade: dict, res: dict, current: float):
     Returns (msg_text, n_cancel_reasons).
     Used to review pending and active trades when market conditions change.
     """
+    uid = trade.get("chat_id", 0)
     tid   = trade.get("id", "?")
     dire  = trade.get("direction", "")
     entry = trade.get("entry", 0)
     status = trade.get("status", "active")
     dist = abs(current - entry) / entry * 100 if entry else 0
     if dire == "BUY":
-        dist_dir = "above" if current > entry else "below"
+        dist_dir = t(uid,"above") if current > entry else t(uid,"below")
     else:
-        dist_dir = "below" if current < entry else "above"
+        dist_dir = t(uid,"below") if current < entry else t(uid,"above")
 
     frame_lines = res.get("frame_lines", [])
     buy_f, sell_f = count_qualified_frame_lines(frame_lines)
@@ -1970,11 +2050,11 @@ def _build_health_report(trade: dict, res: dict, current: float):
     cancel_r = []
 
     if match >= 2:
-        hold_r.append(f"✅ {match}/3 qualified timeframes still support the setup")
+        hold_r.append(f"✅ {match}/3 {t(uid,'frames_still_support')}")
     if opposite >= 2:
-        cancel_r.append(f"⚠️ {opposite}/3 qualified timeframes now oppose the setup")
+        cancel_r.append(f"⚠️ {opposite}/3 {t(uid,'frames_oppose')}")
     if opposite == 3:
-        cancel_r.append("❌ Full timeframe reversal detected")
+        cancel_r.append(t(uid,"full_reversal"))
 
     mb = res.get("monthly_bias", "NEUTRAL")
     wt = res.get("weekly_trend", "NEUTRAL")
@@ -1982,62 +2062,61 @@ def _build_health_report(trade: dict, res: dict, current: float):
     div = res.get("divergence", "NONE")
 
     if (dire == "BUY" and mb == "BULL") or (dire == "SELL" and mb == "BEAR"):
-        hold_r.append("📆 Monthly bias supports the setup")
+        hold_r.append(t(uid,"monthly_supports"))
     elif (dire == "BUY" and mb == "BEAR") or (dire == "SELL" and mb == "BULL"):
-        cancel_r.append("📆 Monthly bias is against the setup")
+        cancel_r.append(t(uid,"monthly_against"))
 
     if (dire == "BUY" and wt == "BULL") or (dire == "SELL" and wt == "BEAR"):
-        hold_r.append("🗓️ Weekly trend supports the setup")
+        hold_r.append(t(uid,"weekly_supports"))
     elif (dire == "BUY" and wt == "BEAR") or (dire == "SELL" and wt == "BULL"):
-        cancel_r.append("🗓️ Weekly trend is against the setup")
+        cancel_r.append(t(uid,"weekly_against"))
 
     if rg == "VOLATILE":
-        cancel_r.append("⚡ High volatility — risk increased")
+        cancel_r.append(t(uid,"volatility_risk"))
     elif rg == "RANGING":
-        cancel_r.append("↔️ Ranging market — targets may be harder to reach")
+        cancel_r.append(t(uid,"ranging_risk"))
     elif (dire == "BUY" and rg == "TRENDING_UP") or (dire == "SELL" and rg == "TRENDING_DOWN"):
-        hold_r.append("📊 Market regime supports the direction")
+        hold_r.append(t(uid,"regime_supports"))
     elif rg in ("TRENDING_UP", "TRENDING_DOWN"):
-        cancel_r.append("📊 Market regime is against the direction")
+        cancel_r.append(t(uid,"regime_against"))
 
     if (div == "BEARISH" and dire == "BUY") or (div == "BULLISH" and dire == "SELL"):
-        cancel_r.append("⚠️ RSI divergence is against the setup")
+        cancel_r.append(t(uid,"rsi_against"))
     elif (div == "BULLISH" and dire == "BUY") or (div == "BEARISH" and dire == "SELL"):
-        hold_r.append("📈 RSI divergence supports the setup")
+        hold_r.append(t(uid,"rsi_supports"))
 
     nc = len(cancel_r)
     nh = len(hold_r)
     if nc >= 2:
-        verdict = "🔴 Recommendation: Cancel — conditions deteriorated clearly"
+        verdict = t(uid,"recommend_cancel")
     elif nc == 1 and nh == 0:
-        verdict = "🟡 Recommendation: Review — one key risk without enough support"
+        verdict = t(uid,"recommend_review")
     elif nh >= 2 and nc == 0:
-        verdict = "🟢 Recommendation: Keep — conditions remain supportive"
+        verdict = t(uid,"recommend_keep")
     else:
-        verdict = "🟡 Recommendation: Monitor — mixed conditions"
+        verdict = t(uid,"recommend_monitor")
 
-    st = "⏳ Pending" if status == "pending" else "🟢 Active"
-    dir_line = "🟢 BUY ⬆️" if dire == "BUY" else "🔴 SELL ⬇️"
-    forced_note = "⚠️ Higher-risk setup opened by override."
+    st = ("⏳ " + t(uid,"pending")) if status == "pending" else ("🟢 " + t(uid,"active"))
+    dir_line = t(uid,"buy") if dire == "BUY" else t(uid,"sell")
 
     lines = [
-        f"🟡 SazBot | Trade Health Check #{tid}",
+        f"🟡 SazBot | {t(uid,'trade_health')} #{tid}",
         st,
         "",
         dir_line,
     ]
     if trade.get("forced"):
-        lines.append(forced_note)
+        lines.append(t(uid,"forced_note"))
     lines += [
-        f"🎯 Smart Entry Zone: {format_entry_zone(entry, trade.get('atr', 0))}",
-        f"💵 Current price: ${current:,.2f}",
-        f"📏 Distance: {dist:.2f}% {dist_dir} the entry zone",
+        f"🎯 {t(uid,'entry_zone')}: {format_entry_zone(entry, trade.get('atr', 0))}",
+        f"💵 {t(uid,'current_price')}: ${current:,.2f}",
+        f"📏 {t(uid,'distance')}: {dist:.2f}% {dist_dir} {t(uid,'entry_zone_word')}",
         "",
-        "🧭 Timeframe Alignment",
+        f"🧭 {t(uid,'confluence')}",
     ]
     for fl in frame_lines:
         lines.append(fl)
-    lines += ["", "📊 Risk Review"]
+    lines += ["", "📊 " + t(uid,"risk_review")]
     for h in hold_r:
         lines.append(h)
     for c in cancel_r:
@@ -2050,7 +2129,7 @@ def _build_health_report(trade: dict, res: dict, current: float):
         f"🎯 TP1: ${trade['tp1']:,.2f} | TP2: ${trade['tp2']:,.2f} | TP3: ${trade['tp3']:,.2f}",
         "",
         f"🕐 {gmt_now()}",
-        "⚠️ Educational only — not financial advice.",
+        t(uid,"footer"),
     ]
     return "\n".join(lines), nc
 
@@ -2122,10 +2201,10 @@ async def check_pending_trades(context):
                                 active_trades.remove(trade)
                             save_trades()
                         await context.bot.send_message(chat_id=chat_id,
-                            text=msg + f"\n\n❌ Auto-cancelled: all qualified timeframes shifted to {opp_dir}")
+                            text=msg + f"\n\n{t(chat_id,'auto_cancel_timeframes')} {opp_dir}")
                     else:
                         kb = InlineKeyboardMarkup([[
-                            InlineKeyboardButton("✅ Keep Trade",     callback_data=f"keep_active_{tid}"),
+                            InlineKeyboardButton(t(chat_id,"btn_keep_trade"), callback_data=f"keep_active_{tid}"),
                             InlineKeyboardButton(t(chat_id,"btn_close_trade"), callback_data=f"close_active_{tid}"),
                         ]])
                         await context.bot.send_message(chat_id=chat_id,
@@ -2152,17 +2231,17 @@ async def check_pending_trades(context):
                                     active_trades.remove(trade)
                                 save_trades()
                             await context.bot.send_message(chat_id=chat_id,
-                                text=msg + "\n\n❌ Auto-cancelled: conditions deteriorated")
+                                text=msg + "\n\n" + t(chat_id,"auto_cancel_conditions"))
                         else:
                             kb = InlineKeyboardMarkup([[
-                                InlineKeyboardButton("✅ Keep Setup", callback_data=f"keep_pending_{tid}"),
-                                InlineKeyboardButton("❌ Cancel Setup", callback_data=f"cancel_pending_{tid}"),
+                                InlineKeyboardButton(t(chat_id,"btn_keep_setup"), callback_data=f"keep_pending_{tid}"),
+                                InlineKeyboardButton(t(chat_id,"btn_cancel_setup"), callback_data=f"cancel_pending_{tid}"),
                             ]])
                             await context.bot.send_message(chat_id=chat_id,
                                 text=msg, reply_markup=kb)
                     else:
                         kb = InlineKeyboardMarkup([[
-                            InlineKeyboardButton("✅ Keep Trade",     callback_data=f"keep_active_{tid}"),
+                            InlineKeyboardButton(t(chat_id,"btn_keep_trade"), callback_data=f"keep_active_{tid}"),
                             InlineKeyboardButton(t(chat_id,"btn_close_trade"), callback_data=f"close_active_{tid}"),
                         ]])
                         await context.bot.send_message(chat_id=chat_id,
@@ -2237,7 +2316,7 @@ async def _check_auto_signal(context):
         )
         kb = InlineKeyboardMarkup([[
             InlineKeyboardButton("✅ Activate Setup", callback_data=f"activate_signal_{trade_counter}"),
-            InlineKeyboardButton("❌ Ignore",       callback_data=f"ignore_signal_{trade_counter}"),
+            InlineKeyboardButton(t(uid,"btn_ignore"), callback_data=f"ignore_signal_{trade_counter}"),
         ]])
         pending_signals[trade_counter] = {
             "res": res, "entry_p": ep, "timestamp": n,
@@ -2338,20 +2417,20 @@ async def _monitor_active_trades(context):
                         if fresh is None:
                             trade["status"] = "active"
                             await context.bot.send_message(chat_id=chat_id,
-                                text=f"🟢 SazBot | Trade Activated #{trade_id}\n\nPrice reached the Smart Entry Zone. The setup is now active.")
+                                text=f"🟢 SazBot | {t(chat_id,'setup_activated')} #{trade_id}\n\n{t(chat_id,'price_reached_entry')}")
                         elif fresh["final"] != direction:
                             to_remove.append(trade)
                             nd = "BUY ⬆️" if fresh["final"]=="BUY" else "SELL ⬇️"
                             await context.bot.send_message(chat_id=chat_id,
-                                text=f"⚠️ SazBot | Setup Cancelled #{trade_id}\n\nPrice reached the entry area, but the market bias changed to {nd}.")
+                                text=f"⚠️ SazBot | {t(chat_id,'setup_cancelled_full')} #{trade_id}\n\n{t(chat_id,'price_bias_changed')} {nd}.")
                         else:
                             trade.update({"status":"active","sl":fresh["sl"],
                                           "tp1":fresh["tp1"],"tp2":fresh["tp2"],
                                           "tp3":fresh["tp3"],"atr":fresh["atr"],
                                           "orig_sl":fresh["sl"]})
                             await context.bot.send_message(chat_id=chat_id,
-                                text=f"🟢 SazBot | Trade Activated #{trade_id}\n\n"
-                                     f"The setup is now active with refreshed levels.\n\n"
+                                text=f"🟢 SazBot | {t(chat_id,'setup_activated')} #{trade_id}\n\n"
+                                     f"{t(chat_id,'price_reached_entry')}\n\n"
                                      f"🛑 SL: ${fresh['sl']:,.2f}\n"
                                      f"🎯 TP1: ${fresh['tp1']:,.2f} | TP2: ${fresh['tp2']:,.2f} | TP3: ${fresh['tp3']:,.2f}")
                             async with _trades_lock:
@@ -2360,24 +2439,24 @@ async def _monitor_active_trades(context):
                         logger.error(f"Pending arrival: {e}")
                         trade["status"] = "active"
                         await context.bot.send_message(chat_id=chat_id,
-                            text=f"🟢 SazBot | Trade Activated #{trade_id}\n\nPrice reached the Smart Entry Zone.")
+                            text=f"🟢 SazBot | {t(chat_id,'setup_activated')} #{trade_id}\n\n{t(chat_id,'price_reached_entry')}")
                 else:
                     # SL hit before entry
                     sl_pre = (direction=="BUY" and cur <= sl) or (direction=="SELL" and cur >= sl)
                     if sl_pre:
                         to_remove.append(trade)
                         await context.bot.send_message(chat_id=chat_id,
-                            text=f"⚠️ SazBot | Setup Cancelled #{trade_id}\n\n"
-                                 f"The price invalidated the setup before entry.\n\n"
-                                 f"🛑 SL: ${sl:,.2f}\n💵 Current Price: ${cur:,.2f}")
+                            text=f"⚠️ SazBot | {t(chat_id,'setup_cancelled_full')} #{trade_id}\n\n"
+                                 f"{t(chat_id,'invalid_before_entry')}\n\n"
+                                 f"🛑 SL: ${sl:,.2f}\n💵 {t(chat_id,'current_price')}: ${cur:,.2f}")
                     else:
                         dist_pct = abs(cur - entry) / entry * 100
                         if dist_pct <= 0.5 and not trade.get("entry_alert_sent"):
                             trade["entry_alert_sent"] = True
                             await context.bot.send_message(chat_id=chat_id,
-                                text=f"🎯 SazBot | Entry Zone Alert #{trade_id}\n\n"
-                                     f"Price is approaching the Smart Entry Zone.\n\n"
-                                     f"📌 Reference Entry: ${entry:,.2f}\n💵 Current Price: ${cur:,.2f}\n📏 Distance: {dist_pct:.2f}%")
+                                text=f"🎯 SazBot | {t(chat_id,'entry_alert')} #{trade_id}\n\n"
+                                     f"{t(chat_id,'approaching_entry')}\n\n"
+                                     f"📌 {t(chat_id,'reference_entry')}: ${entry:,.2f}\n💵 {t(chat_id,'current_price')}: ${cur:,.2f}\n📏 {t(chat_id,'distance')}: {dist_pct:.2f}%")
                         # News alert
                         try:
                             ev = get_upcoming_event(2)
@@ -2386,9 +2465,9 @@ async def _monitor_active_trades(context):
                                 if ek != trade.get("last_news_event",""):
                                     trade["last_news_event"] = ek
                                     await context.bot.send_message(chat_id=chat_id,
-                                        text=f"⚠️ SazBot | High-Impact Event #{trade_id}\n\n"
+                                        text=f"⚠️ SazBot | {t(chat_id,'high_impact_event')} #{trade_id}\n\n"
                                              f"{ek} in {_mins_txt(ev['mins_left'])}.\n"
-                                             f"Impact: 🔴 High. Manage risk carefully.")
+                                             f"{t(chat_id,'impact_high')}")
                         except Exception: pass
                         # Entry-passed update
                         ep_passed = (direction=="SELL" and cur < entry*0.99) or                                     (direction=="BUY"  and cur > entry*1.01)
@@ -2404,13 +2483,13 @@ async def _monitor_active_trades(context):
                                             "tp2":fe["tp2"],"tp3":fe["tp3"],
                                         }
                                         kb_upd = InlineKeyboardMarkup([[
-                                            InlineKeyboardButton("✅ Update Setup", callback_data=f"update_entry_{trade_id}"),
-                                            InlineKeyboardButton("❌ Ignore",        callback_data=f"ignore_entry_{trade_id}"),
+                                            InlineKeyboardButton(t(chat_id,"btn_update_setup"), callback_data=f"update_entry_{trade_id}"),
+                                            InlineKeyboardButton(t(chat_id,"btn_ignore"), callback_data=f"ignore_entry_{trade_id}"),
                                         ]])
                                         await context.bot.send_message(chat_id=chat_id,
-                                            text=f"📊 SazBot | Entry Zone Update #{trade_id}\n\n"
-                                                 f"Market conditions changed before activation.\n\n"
-                                                 f"Old Reference: ${entry:,.2f}\nNew Reference: ${ne:,.2f}\n\n"
+                                            text=f"📊 SazBot | {t(chat_id,'entry_update')} #{trade_id}\n\n"
+                                                 f"{t(chat_id,'conditions_changed_before_activation')}\n\n"
+                                                 f"{t(chat_id,'old_reference')}: ${entry:,.2f}\n{t(chat_id,'new_reference')}: ${ne:,.2f}\n\n"
                                                  f"🛑 SL: ${fe['sl']:,.2f}\n🎯 TP1: ${fe['tp1']:,.2f} | TP2: ${fe['tp2']:,.2f}",
                                             reply_markup=kb_upd)
                             except Exception as e:
@@ -2425,8 +2504,8 @@ async def _monitor_active_trades(context):
                                     nd = "BUY ⬆️" if fc["final"]=="BUY" else "SELL ⬇️"
                                     moved = abs(cur-entry)/entry*100
                                     await context.bot.send_message(chat_id=chat_id,
-                                        text=f"⚠️ SazBot | Setup Cancelled #{trade_id}\n\n"
-                                             f"The price moved {moved:.1f}% against the Smart Entry Zone and timeframes shifted to {nd}.")
+                                        text=f"⚠️ SazBot | {t(chat_id,'setup_cancelled_full')} #{trade_id}\n\n"
+                                             f"{t(chat_id,'price_moved_against')} {nd}.")
                             except Exception as e:
                                 logger.warning(f"Counter-move: {e}")
                 continue  # done with pending
@@ -2434,64 +2513,64 @@ async def _monitor_active_trades(context):
             # ── Active: TP / SL logic ──
             if direction == "BUY":
                 if cur >= tp3:
-                    update_msg = f"🏆 SazBot | TP3 Hit #{trade_id}\n\nFinal target reached. Trade closed successfully."
+                    update_msg = f"🏆 SazBot | {t(chat_id,'tp3_hit')} #{trade_id}"
                     record_trade_result(trade_id, "win", trade.get("rr",0), direction, _session); closed=True
                 elif not trade["tp1_hit"] and cur >= tp1:
                     trade["tp1_hit"]=True; trade["sl"]=entry
-                    update_msg = f"✅ SazBot | TP1 Hit #{trade_id}\n\nSL moved to breakeven: ${entry:,.2f}"
+                    update_msg = f"✅ SazBot | {t(chat_id,'tp1_hit')} #{trade_id}\n${entry:,.2f}"
                 elif trade["tp1_hit"] and not trade["tp2_hit"] and cur >= tp2:
                     trade["tp2_hit"]=True
                     nsl = round(tp2-0.25*abs(tp1-tp2), 2); trade["sl"]=nsl
-                    update_msg = f"✅✅ SazBot | TP2 Hit #{trade_id}\n\nSL moved to: ${nsl:,.2f}"
+                    update_msg = f"✅✅ SazBot | {t(chat_id,'tp2_hit')} #{trade_id}\n${nsl:,.2f}"
                 elif cur <= trade["sl"]:
                     if trade.get("tp2_hit"):
                         rp = round(abs(tp2-entry)/abs(entry-trade.get("orig_sl",sl)),2) if abs(entry-trade.get("orig_sl",sl))>0 else 1.0
-                        update_msg = f"✅ SazBot | Protected Profit #{trade_id}\n\nSL reached after TP2. Partial profit secured."
+                        update_msg = f"✅ SazBot | {t(chat_id,'protected_profit')} #{trade_id}"
                         record_trade_result(trade_id, "win", rp, direction, _session)
                     elif trade.get("tp1_hit"):
-                        update_msg = f"🟡 SazBot | Breakeven #{trade_id}\n\nSL reached at breakeven."
+                        update_msg = f"🟡 SazBot | {t(chat_id,'breakeven')} #{trade_id}"
                         record_trade_result(trade_id, "breakeven", 0, direction, _session)
                     else:
-                        update_msg = f"🛑 SazBot | Stop Loss Hit #{trade_id}\n\nTrade closed."
+                        update_msg = f"🛑 SazBot | {t(chat_id,'sl_hit')} #{trade_id}"
                         record_trade_result(trade_id, "loss", 0, direction, _session)
                     closed=True
                 elif trade["tp1_hit"] and cur > tp1+0.5*atr:
                     nsl = round(cur-0.8*atr, 2)
                     if nsl > trade["sl"] and nsl-trade["sl"] >= atr:
                         trade["sl"]=nsl
-                        update_msg = f"📊 #{trade_id} Trailing SL → ${nsl:,.2f}"
+                        update_msg = f"📊 #{trade_id} {t(chat_id,'trailing_sl')} → ${nsl:,.2f}"
             else:  # SELL
                 if cur <= tp3:
-                    update_msg = f"🏆 SazBot | TP3 Hit #{trade_id}\n\nFinal target reached. Trade closed successfully."
+                    update_msg = f"🏆 SazBot | {t(chat_id,'tp3_hit')} #{trade_id}"
                     record_trade_result(trade_id, "win", trade.get("rr",0), direction, _session); closed=True
                 elif not trade["tp1_hit"] and cur <= tp1:
                     trade["tp1_hit"]=True; trade["sl"]=entry
-                    update_msg = f"✅ SazBot | TP1 Hit #{trade_id}\n\nSL moved to breakeven: ${entry:,.2f}"
+                    update_msg = f"✅ SazBot | {t(chat_id,'tp1_hit')} #{trade_id}\n${entry:,.2f}"
                 elif trade["tp1_hit"] and not trade["tp2_hit"] and cur <= tp2:
                     trade["tp2_hit"]=True
                     nsl = round(tp2+0.25*abs(tp1-tp2), 2); trade["sl"]=nsl
-                    update_msg = f"✅✅ SazBot | TP2 Hit #{trade_id}\n\nSL moved to: ${nsl:,.2f}"
+                    update_msg = f"✅✅ SazBot | {t(chat_id,'tp2_hit')} #{trade_id}\n${nsl:,.2f}"
                 elif cur >= trade["sl"]:
                     if trade.get("tp2_hit"):
                         rp = round(abs(tp2-entry)/abs(entry-trade.get("orig_sl",sl)),2) if abs(entry-trade.get("orig_sl",sl))>0 else 1.0
-                        update_msg = f"✅ SazBot | Protected Profit #{trade_id}\n\nSL reached after TP2. Partial profit secured."
+                        update_msg = f"✅ SazBot | {t(chat_id,'protected_profit')} #{trade_id}"
                         record_trade_result(trade_id, "win", rp, direction, _session)
                     elif trade.get("tp1_hit"):
-                        update_msg = f"🟡 SazBot | Breakeven #{trade_id}\n\nSL reached at breakeven."
+                        update_msg = f"🟡 SazBot | {t(chat_id,'breakeven')} #{trade_id}"
                         record_trade_result(trade_id, "breakeven", 0, direction, _session)
                     else:
-                        update_msg = f"🛑 SazBot | Stop Loss Hit #{trade_id}\n\nTrade closed."
+                        update_msg = f"🛑 SazBot | {t(chat_id,'sl_hit')} #{trade_id}"
                         record_trade_result(trade_id, "loss", 0, direction, _session)
                     closed=True
                 elif trade["tp1_hit"] and cur < tp1-0.5*atr:
                     nsl = round(cur+0.8*atr, 2)
                     if nsl < trade["sl"] and trade["sl"]-nsl >= atr:
                         trade["sl"]=nsl
-                        update_msg = f"📊 #{trade_id} Trailing SL → ${nsl:,.2f}"
+                        update_msg = f"📊 #{trade_id} {t(chat_id,'trailing_sl')} → ${nsl:,.2f}"
 
             if update_msg:
                 await context.bot.send_message(chat_id=chat_id,
-                    text=build_update_msg(trade, cur, update_msg, 0))
+                    text=build_update_msg(trade, cur, update_msg, chat_id))
             if closed:
                 to_remove.append(trade)
 
