@@ -101,6 +101,7 @@ TEXTS = {
         "btn_prices": "💰 الأسعار", "btn_about": "ℹ️ عن البوت",
         "btn_lang": "🌐 اللغة", "btn_trades": "📋 الصفقات المفتوحة",
         "btn_stats": "📊 الإحصائيات",
+
         "no_open_trades": "📭 لا توجد صفقات مفتوحة حالياً",
         "loading_trade": "⏳ جاري تحليل السوق...",
         "loading_analysis": "⏳ جاري التحليل...",
@@ -167,6 +168,7 @@ TEXTS = {
         "btn_prices": "💰 Prices", "btn_about": "ℹ️ About",
         "btn_lang": "🌐 Language", "btn_trades": "📋 Open Trades",
         "btn_stats": "📊 Statistics",
+
         "no_open_trades": "📭 No open trades at the moment",
         "loading_trade": "⏳ Analyzing market...",
         "loading_analysis": "⏳ Analyzing...",
@@ -240,8 +242,15 @@ def get_binance_data(days=30, interval="hourly"):
     """Binance كـ fallback — بيانات OHLCV حقيقية مجانية"""
     try:
         import time
-        binance_interval = "1h" if interval == "hourly" else "1d"
-        limit = min(days * 24 if interval == "hourly" else days, 1000)
+        if interval == "hourly":
+            binance_interval = "1h"
+            limit = min(days * 24, 1000)
+        elif interval == "4h":
+            binance_interval = "4h"
+            limit = min(days * 6, 1000)
+        else:
+            binance_interval = "1d"
+            limit = min(days, 1000)
         r = requests.get(
             "https://api.binance.com/api/v3/klines",
             params={"symbol": "BTCUSDT", "interval": binance_interval, "limit": limit},
@@ -404,7 +413,7 @@ def get_prices():
 
 # ==================== Fibonacci ====================
 def calculate_fibonacci(df):
-    window = min(100, len(df))
+    window = min(250, len(df))
     recent = df.tail(window)
     swing_high = float(recent["High"].max())
     swing_low  = float(recent["Low"].min())
@@ -572,8 +581,16 @@ def analyze_frame(df, uid=0):
     total = sb + ss
     conf  = round(max(sb, ss) / total * 100) if total > 0 else 50
     atr   = safe(last["ATR"], price * 0.01)
-    s1    = safe(last["S1"],  price * 0.99)
-    r1    = safe(last["R1"],  price * 1.01)
+    # دعم ومقاومة من EMA — أدق من Pivot
+    e21_s = safe(last["EMA21"], price * 0.99)
+    e50_s = safe(last["EMA50"], price * 0.98)
+    e200_s= safe(last["EMA200"],price * 0.97)
+    # دعم = أقرب EMA تحت السعر، مقاومة = أقرب EMA فوق السعر
+    emas = sorted([e21_s, e50_s, e200_s])
+    support_levels    = [e for e in emas if e < price]
+    resistance_levels = [e for e in emas if e > price]
+    s1 = round(support_levels[-1], 2)    if support_levels    else round(price * 0.99, 2)
+    r1 = round(resistance_levels[0], 2)  if resistance_levels else round(price * 1.01, 2)
 
     return {
         "direction": direction, "conf": conf, "rsi": round(rsi, 1),
@@ -760,9 +777,9 @@ def get_upcoming_event(hours=2):
 # ==================== Full Analysis ====================
 def full_analysis(asset="BTC", uid=0):
     try:
-        df_1h = get_data(asset, days=14,  interval="hourly")
-        df_4h = get_data(asset, days=30,  interval="hourly")
-        df_1d = get_data(asset, days=90,  interval="daily")
+        df_1h = get_data(asset, days=30,  interval="hourly")
+        df_4h = get_binance_data(days=60, interval="4h")
+        df_1d = get_data(asset, days=365, interval="daily")
         df_1w = get_data(asset, days=365, interval="daily")
     except Exception as e:
         logger.error("Data fetch: " + str(e))
@@ -773,12 +790,6 @@ def full_analysis(asset="BTC", uid=0):
         return None
 
     session, session_score = get_current_session()
-
-    if df_4h is not None and len(df_4h) > 0:
-        try:
-            df_4h = df_4h.resample("4h").agg({"Open":"first","High":"max","Low":"min","Close":"last","Volume":"sum"}).dropna()
-        except:
-            df_4h = None
 
     frames  = {"1h": df_1h, "4h": df_4h, "1d": df_1d}
     results = {}
@@ -792,8 +803,9 @@ def full_analysis(asset="BTC", uid=0):
     if len(results) < 2:
         return None
 
-    buy_c = sum(1 for r in results.values() if r["direction"] == "BUY")
-    sel_c = sum(1 for r in results.values() if r["direction"] == "SELL")
+    # حد أدنى 60% ثقة — فريم أقل من 60% لا يُحسب اتجاهاً
+    buy_c = sum(1 for r in results.values() if r["direction"] == "BUY"  and r["conf"] >= 60)
+    sel_c = sum(1 for r in results.values() if r["direction"] == "SELL" and r["conf"] >= 60)
 
     # Session filter — نسمح بتوافق 3 فريمات حتى في الجلسة الآسيوية
     if session == "ASIAN" and buy_c < 2 and sel_c < 2:
@@ -834,16 +846,16 @@ def full_analysis(asset="BTC", uid=0):
     fib_levels, fib_ext, swing_h, swing_l = calculate_fibonacci(df_1h)
     nearest_fib, fib_key, dist_pct = find_nearest_fib(price, fib_levels, final) if fib_levels else (price,"50.0",0)
 
-    # ✅ سعر الدخول = أقرب مستوى Fib منطقي
+    # ✅ سعر الدخول = أقرب مستوى Fib منطقي — حد أقصى 0.5% من السعر
     fib_vals_sorted = sorted(fib_levels.values())
     if final == "BUY":
-        # BUY: أقرب Fib تحت السعر أو عنده (دعم)
-        candidates = [v for v in fib_vals_sorted if v <= price * 1.002]
-        entry_price = round(candidates[-1], 2) if candidates else price
+        # BUY: أقرب Fib تحت السعر أو عنده (دعم) — لا يبعد أكثر من 0.5%
+        candidates = [v for v in fib_vals_sorted if v <= price * 1.002 and abs(v - price) / price * 100 <= 0.5]
+        entry_price = round(candidates[-1], 2) if candidates else round(price, 2)
     else:
-        # SELL: أقرب Fib فوق السعر أو عنده (مقاومة)
-        candidates = [v for v in fib_vals_sorted if v >= price * 0.998]
-        entry_price = round(candidates[0], 2) if candidates else price
+        # SELL: أقرب Fib فوق السعر أو عنده (مقاومة) — لا يبعد أكثر من 0.5%
+        candidates = [v for v in fib_vals_sorted if v >= price * 0.998 and abs(v - price) / price * 100 <= 0.5]
+        entry_price = round(candidates[0], 2) if candidates else round(price, 2)
 
     sl, tp1, tp2, tp3, rr = get_fib_targets(entry_price, fib_levels, fib_ext, final, atr)
 
@@ -958,11 +970,12 @@ def full_analysis(asset="BTC", uid=0):
     is_counter_trend = (final=="BUY" and weekly_trend=="BEAR") or                        (final=="SELL" and weekly_trend=="BULL")
     if is_counter_trend:
         risk_warnings.append("⚠️ صفقة عكس الترند الأسبوعي — خذ TP1 وTP2 فقط")
-        # TP3 = TP2 + نصف المسافة (هدف أقرب)
         if final == "BUY":
             tp3 = round(tp2 + abs(tp2-tp1)*0.5, 2)
         else:
             tp3 = round(tp2 - abs(tp1-tp2)*0.5, 2)
+
+
 
     warn_count = len(risk_warnings)
     if warn_count == 0:   overall_risk = "🟢 منخفضة"
