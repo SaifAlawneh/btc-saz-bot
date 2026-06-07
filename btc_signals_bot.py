@@ -73,10 +73,17 @@ _loaded_languages = load_languages()
 user_languages.update(_loaded_languages)
 
 def _validate_loaded_trade(t: dict) -> bool:
-    """Ensure trade has valid levels and required fields before restoring after restart."""
+    """Ensure trade has valid levels, required fields, and is not too old."""
     if t.get("asset") != "BTC" or t.get("entry", 0) <= 10_000: return False
-    for k in ["entry", "sl", "tp1", "tp2", "tp3", "direction", "chat_id"]:
+    for k in ["entry", "sl", "tp1", "tp2", "tp3", "direction", "chat_id", "open_time"]:
         if k not in t: return False
+    # Reject trades older than 7 days
+    try:
+        open_dt = datetime.strptime(t["open_time"], "%d/%m/%Y  %H:%M").replace(tzinfo=timezone.utc)
+        age_days = (datetime.now(timezone.utc) - open_dt).days
+        if age_days > 7: return False
+    except Exception:
+        return False
     dire, e, sl = t["direction"], t["entry"], t["sl"]
     tp1, tp2, tp3 = t["tp1"], t["tp2"], t["tp3"]
     if dire == "BUY"  and not (sl < e < tp1 < tp2 < tp3): return False
@@ -833,6 +840,16 @@ def find_smart_entry(price: float, direction: str,
             if v > price:
                 candidates.append((v, f"Fib Extension {k}%"))
 
+        # Always add swing_high (Fib 0%) as a valid SELL entry candidate
+        swing_high = fib_levels.get("0.0")
+        if swing_high and swing_high > price:
+            candidates.append((swing_high, "Fib 0% (قمة التأرجح)"))
+
+        # Also add all Fib extension levels above price
+        for k, v in fib_ext.items():
+            if v > price:
+                candidates.append((v, f"Fib Extension {k}%"))
+
         if candidates:
             # Pick closest level above price
             best = min(candidates, key=lambda x: abs(x[0] - price))
@@ -840,14 +857,14 @@ def find_smart_entry(price: float, direction: str,
             reason = _add_fib_note(entry, reason, all_fibs)
             return round(entry, 2), reason
 
-        # Fallback: any Fib above price (retracement or extension)
+        # Fallback: any Fib above price
         above_fibs = [(v, k) for k, v in all_fibs.items() if v > price]
         if above_fibs:
             v, k = min(above_fibs, key=lambda x: abs(x[0] - price))
             return round(v, 2), f"Fib {k}%"
 
-        # Last resort: 1 ATR above price
-        return round(price + atr, 2), "أعلى نطاق ATR"
+        # Last resort: 1.5 ATR above price
+        return round(price + 1.5 * atr, 2), "مقاومة ATR"
 
 
 # ==================== Session ====================
@@ -1031,6 +1048,26 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
         price, final, fib_levels, fib_ext, atr,
         support, resistance, bull_obs, bear_obs
     )
+
+    # ── Safety: never allow entry = market price ──
+    if abs(entry_price - price) / price * 100 < 0.05:  # within 0.05% = essentially same price
+        all_fibs_flat = {**fib_levels, **fib_ext}
+        if final == "BUY":
+            below = [(v, k) for k, v in all_fibs_flat.items() if v < price * 0.999]
+            if below:
+                entry_price, entry_reason = min(below, key=lambda x: abs(x[0]-price))[0], "Fib أقرب دعم"
+                entry_price = round(entry_price, 2)
+            else:
+                entry_price = round(price - 1.5 * atr, 2)
+                entry_reason = "دعم ATR"
+        else:  # SELL
+            above = [(v, k) for k, v in all_fibs_flat.items() if v > price * 1.001]
+            if above:
+                entry_price, entry_reason = min(above, key=lambda x: abs(x[0]-price))[0], "Fib أقرب مقاومة"
+                entry_price = round(entry_price, 2)
+            else:
+                entry_price = round(price + 1.5 * atr, 2)
+                entry_reason = "مقاومة ATR"
 
     sl, tp1, tp2, tp3, rr = get_fib_targets(entry_price, fib_levels, fib_ext, final, atr)
 
