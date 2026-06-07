@@ -256,6 +256,17 @@ def gmt_now():
 def now_ts() -> float:
     return datetime.now(timezone.utc).timestamp()
 
+def _mins_txt(mins: int) -> str:
+    """Convert minutes to Arabic readable string."""
+    if mins < 60:
+        return f"{mins} دقيقة"
+    h = mins // 60; m = mins % 60
+    return f"{h} ساعة{' و'+str(m)+' دقيقة' if m else ''}"
+
+def _event_key(ev: dict) -> str:
+    """Unique key for an economic event to avoid duplicate alerts."""
+    return ev.get("event", "") + str(ev.get("time", ""))[:10]
+
 
 # ==================== البيانات ====================
 def get_binance_data(days=30, interval="hourly"):
@@ -1657,7 +1668,8 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
 
         await query.message.reply_text("⏳ جاري تحضير الصفقة...")
         try:
-            clear_asset_cache(asset_ov)
+            keys_to_clear = [k for k in _cache if k.startswith(asset_ov)]
+            for k in keys_to_clear: _cache.pop(k, None)
             res_fresh = full_analysis(asset_ov, uid)
             res_use = res_fresh if res_fresh else res_ov
             entry_p  = res_use.get("entry_price", res_use["price"])
