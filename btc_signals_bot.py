@@ -757,113 +757,39 @@ def find_smart_entry(price: float, direction: str,
                      support: float, resistance: float,
                      bull_obs: list, bear_obs: list) -> tuple:
     """
-    Returns (entry_price, entry_reason).
-
-    Philosophy: Entry is ALWAYS at a meaningful future level — never at market price.
-    The trade will be PENDING until price reaches the entry.
-
-    BUY  → Find best support BELOW price (EMA / OB / Fib)
-    SELL → Find best resistance ABOVE price (EMA / OB / Fib / Extension)
-
-    If no level exists in the direction, use the nearest Fib level.
-    Never return current market price.
+    Simple and reliable entry logic:
+    - BUY:  find the closest Fib BELOW price with at least 0.3% distance
+    - SELL: find the closest Fib ABOVE price with at least 0.3% distance
+    - Never returns market price.
+    - Uses Fib extensions if no retracement level found.
     """
-    # Merge retracement + extension levels for SELL
+    MIN_DIST = 0.003  # 0.3% minimum distance from current price
     all_fibs = {**fib_levels, **fib_ext}
-    confluence_pct = 0.008  # 0.8% = confluence zone
-
-    def _add_fib_note(level, reason, levels_dict):
-        """Add Fib confluence note if a fib is within 0.8% of the level."""
-        for fk, fv in levels_dict.items():
-            if abs(fv - level) / price < confluence_pct:
-                return reason + f" + Fib {fk}%"
-        return reason
 
     if direction == "BUY":
-        # ── Collect all support levels BELOW price ──
-        candidates = []
-
-        # EMA support
-        if support < price:
-            candidates.append((support, "دعم EMA"))
-
-        # Bull order blocks below price
-        for ob in bull_obs:
-            mid = (ob["high"] + ob["low"]) / 2
-            if mid < price:
-                candidates.append((round(mid, 2), "Order Block شرائي"))
-
-        # Key Fib retracement levels below price
-        key_buy_fibs = ("38.2", "50.0", "61.8", "78.6", "100.0")
-        for k, v in fib_levels.items():
-            if v < price and k in key_buy_fibs:
-                candidates.append((v, f"Fib {k}%"))
-
+        # All Fib levels meaningfully below price
+        candidates = [
+            (v, k) for k, v in all_fibs.items()
+            if v < price and (price - v) / price >= MIN_DIST
+        ]
         if candidates:
-            # Pick closest level below price
-            best = min(candidates, key=lambda x: abs(x[0] - price))
-            entry, reason = best
-            reason = _add_fib_note(entry, reason, fib_levels)
-            return round(entry, 2), reason
-
-        # Fallback: any Fib below price
-        below_fibs = [(v, k) for k, v in fib_levels.items() if v < price]
-        if below_fibs:
-            v, k = min(below_fibs, key=lambda x: abs(x[0] - price))
+            # Pick closest below price
+            v, k = max(candidates, key=lambda x: x[0])
             return round(v, 2), f"Fib {k}%"
-
-        # Last resort: 1 ATR below price
-        return round(price - atr, 2), "أسفل نطاق ATR"
+        # Fallback: 1.5 ATR below price
+        return round(price - 1.5 * atr, 2), "دعم ATR"
 
     else:  # SELL
-        # ── Collect all resistance levels ABOVE price ──
-        candidates = []
-
-        # EMA resistance above price
-        if resistance > price:
-            candidates.append((resistance, "مقاومة EMA"))
-
-        # Bear order blocks above price
-        for ob in bear_obs:
-            mid = (ob["high"] + ob["low"]) / 2
-            if mid > price:
-                candidates.append((round(mid, 2), "Order Block بيعي"))
-
-        # Fib retracement levels above price (swing_high region)
-        key_sell_fibs = ("0.0", "23.6", "38.2")
-        for k, v in fib_levels.items():
-            if v > price and k in key_sell_fibs:
-                candidates.append((v, f"Fib {k}%"))
-
-        # Fib extension levels above price (if price broke above swing_high)
-        for k, v in fib_ext.items():
-            if v > price:
-                candidates.append((v, f"Fib Extension {k}%"))
-
-        # Always add swing_high (Fib 0%) as a valid SELL entry candidate
-        swing_high = fib_levels.get("0.0")
-        if swing_high and swing_high > price:
-            candidates.append((swing_high, "Fib 0% (قمة التأرجح)"))
-
-        # Also add all Fib extension levels above price
-        for k, v in fib_ext.items():
-            if v > price:
-                candidates.append((v, f"Fib Extension {k}%"))
-
+        # All Fib levels meaningfully above price
+        candidates = [
+            (v, k) for k, v in all_fibs.items()
+            if v > price and (v - price) / price >= MIN_DIST
+        ]
         if candidates:
-            # Pick closest level above price
-            best = min(candidates, key=lambda x: abs(x[0] - price))
-            entry, reason = best
-            reason = _add_fib_note(entry, reason, all_fibs)
-            return round(entry, 2), reason
-
-        # Fallback: any Fib above price
-        above_fibs = [(v, k) for k, v in all_fibs.items() if v > price]
-        if above_fibs:
-            v, k = min(above_fibs, key=lambda x: abs(x[0] - price))
+            # Pick closest above price
+            v, k = min(candidates, key=lambda x: x[0])
             return round(v, 2), f"Fib {k}%"
-
-        # Last resort: 1.5 ATR above price
+        # Fallback: 1.5 ATR above price
         return round(price + 1.5 * atr, 2), "مقاومة ATR"
 
 
