@@ -811,7 +811,7 @@ def get_upcoming_event(hours=2):
 
 
 # ==================== Full Analysis ====================
-def full_analysis(asset="BTC", uid=0):
+def full_analysis(asset="BTC", uid=0, relaxed=False):
     try:
         df_1h = get_data(asset, days=30,  interval="hourly")
         df_4h = get_data(asset, days=60,  interval="4h")
@@ -851,8 +851,12 @@ def full_analysis(asset="BTC", uid=0):
     frames_conf = 0
     if   buy_c == 3: final="BUY";     conf_txt=t(uid,"full_confluence");    frames_conf=85
     elif sel_c == 3: final="SELL";    conf_txt=t(uid,"full_confluence");    frames_conf=85
-    elif buy_c == 2: final="NEUTRAL"; conf_txt=t(uid,"partial_confluence"); frames_conf=65; majority="BUY"
-    elif sel_c == 2: final="NEUTRAL"; conf_txt=t(uid,"partial_confluence"); frames_conf=65; majority="SELL"
+    elif buy_c == 2:
+        if relaxed: final="BUY";  conf_txt=t(uid,"partial_confluence"); frames_conf=65
+        else:       final="NEUTRAL"; conf_txt=t(uid,"partial_confluence"); frames_conf=65; majority="BUY"
+    elif sel_c == 2:
+        if relaxed: final="SELL"; conf_txt=t(uid,"partial_confluence"); frames_conf=65
+        else:       final="NEUTRAL"; conf_txt=t(uid,"partial_confluence"); frames_conf=65; majority="SELL"
 
     # Two-frame: return NEUTRAL with majority so button_handler shows override button
     if final == "NEUTRAL" and majority:
@@ -1316,26 +1320,17 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                         parts.append(f"  {fl}")
                 parts += [""]
 
-                if majority:
-                    dir_ar = "شراء BUY ⬆️" if majority == "BUY" else "بيع SELL ⬇️"
-                    dir_e  = "🟢" if majority == "BUY" else "🔴"
-                    is_two_frame = res.get("base_conf", 0) >= 65  # two-frame case
-                    warn = "⚠️ فريمان من ثلاثة يدعمان الاتجاه — فريم واحد عكسهم" if is_two_frame else "⚠️ الأغلبية مع الاتجاه لكن لا توافق كامل"
-                    parts.append(warn)
-                    parts.append("تبي تدخل رغم الخلاف؟")
-                    kb_override = InlineKeyboardMarkup([[
-                        InlineKeyboardButton(
-                            f"{dir_e} أدخل {dir_ar} — الأغلبية",
-                            callback_data=f"override_trade_{asset}_{majority}"
-                        ),
-                        InlineKeyboardButton("❌ إلغاء", callback_data="override_cancel"),
-                    ]])
-                    # Store res for override use
-                    pending_trade_replace[uid] = {"override_res": res, "override_dir": majority}
-                    await query.message.reply_text("\n".join(parts), reply_markup=kb_override)
-                else:
-                    parts.append("💡 انتظر إشارة أقوى 🕐")
-                    await query.message.reply_text("\n".join(parts))
+                is_two_frame = res.get("base_conf", 0) >= 65
+                warn = "⚠️ فريمان من ثلاثة — توافق جزئي" if is_two_frame else "⚠️ توافق ضعيف — لا يوجد اتجاه واضح"
+                parts.append(warn)
+                parts.append("تبي أفضل صفقة متاحة رغم الخلاف؟")
+                kb_override = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔄 أعطني أفضل صفقة متاحة", callback_data=f"override_trade_{asset}"),
+                    InlineKeyboardButton("❌ إلغاء", callback_data="override_cancel"),
+                ]])
+                # Store res for override use
+                pending_trade_replace[uid] = {"override_res": res}
+                await query.message.reply_text("\n".join(parts), reply_markup=kb_override)
                 return
             entry_p = res.get("entry_price", res["price"])
             market_p = res["price"]
@@ -1655,28 +1650,54 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     elif data.startswith("override_trade_"):
-        # Format: override_trade_{asset}_{direction}
-        parts_d = data.split("_")
-        asset_ov = parts_d[2]
-        forced_dir = parts_d[3]  # BUY or SELL
-        stored = pending_trade_replace.pop(uid, {})
-        res_ov = stored.get("override_res")
+        # Format: override_trade_{asset}
+        asset_ov = data.replace("override_trade_", "", 1)
+        stored   = pending_trade_replace.pop(uid, {})
+        res_ov   = stored.get("override_res")
 
         if not res_ov:
             await query.message.reply_text("⚠️ انتهت صلاحية الطلب، اطلب صفقة جديدة")
             return
 
-        await query.message.reply_text("⏳ جاري تحضير الصفقة...")
+        await query.message.reply_text("⏳ جاري تحضير أفضل صفقة متاحة...")
         try:
             keys_to_clear = [k for k in _cache if k.startswith(asset_ov)]
             for k in keys_to_clear: _cache.pop(k, None)
-            res_fresh = full_analysis(asset_ov, uid)
-            res_use = res_fresh if res_fresh else res_ov
-            entry_p  = res_use.get("entry_price", res_use["price"])
-            avg_atr  = res_use["atr"]
+
+            # Use relaxed=True so 2-frame gives real SL/TP instead of NEUTRAL
+            res_fresh = full_analysis(asset_ov, uid, relaxed=True)
+            res_use   = res_fresh if res_fresh and res_fresh.get("final") != "NEUTRAL" else None
+
+            # Fallback: if still NEUTRAL, use stored res and pick best direction
+            if not res_use:
+                res_use = res_ov
+                fls     = res_use.get("frame_lines", [])
+                buy_f   = sum(1 for f in fls if "BUY"  in f)
+                sell_f  = sum(1 for f in fls if "SELL" in f)
+                res_use["final"] = "BUY" if buy_f >= sell_f else "SELL"
+
+            best_dir = res_use["final"]
+            entry_p  = res_use.get("entry_price", res_use.get("price", 0))
+            avg_atr  = res_use.get("atr", entry_p * 0.015)
+
+            # Safety: if SL/TP still zero, calculate from ATR
+            if not res_use.get("sl") or res_use.get("sl", 0) == 0:
+                atr = avg_atr
+                if best_dir == "BUY":
+                    res_use["sl"]  = round(entry_p - 1.5 * atr, 2)
+                    res_use["tp1"] = round(entry_p + 1.5 * atr, 2)
+                    res_use["tp2"] = round(entry_p + 3.0 * atr, 2)
+                    res_use["tp3"] = round(entry_p + 4.5 * atr, 2)
+                else:
+                    res_use["sl"]  = round(entry_p + 1.5 * atr, 2)
+                    res_use["tp1"] = round(entry_p - 1.5 * atr, 2)
+                    res_use["tp2"] = round(entry_p - 3.0 * atr, 2)
+                    res_use["tp3"] = round(entry_p - 4.5 * atr, 2)
+                res_use["rr"]      = 1.0
+                res_use["orig_sl"] = res_use["sl"]
 
             similar = next((tr for tr in active_trades
-                            if tr["asset"] == asset_ov and tr["direction"] == forced_dir
+                            if tr["asset"] == asset_ov and tr["direction"] == best_dir
                             and abs(tr["entry"] - entry_p) < 0.5 * avg_atr), None)
             if similar:
                 await query.message.reply_text(
@@ -1684,24 +1705,13 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
             trade_counter += 1
-            res_use["id"] = trade_counter
-            res_use["forced"] = True  # mark as override trade
+            res_use["id"]     = trade_counter
+            res_use["forced"] = True
 
-            # Build trade message with forced warning
             trade_msg = build_trade_msg(res_use, uid)
-            fl_now = res_use.get("frame_lines", [])
-            conflict_frames = [f for f in fl_now if
-                               ("BUY" in f and forced_dir == "SELL") or
-                               ("SELL" in f and forced_dir == "BUY")]
-            warning_lines = [
-                "",
-                "━━━━  ⚠️ تنبيه — صفقة بتجاوز الفلاتر  ━━━━",
-                f"  فريم الساعة يعاكس الاتجاه",
-                "  استخدم حجم أصغر من المعتاد",
-                "  المخاطرة أعلى من الصفقة العادية",
-            ]
-            trade_msg = trade_msg + "\n" + "\n".join(warning_lines)
-            await query.message.reply_text(trade_msg)
+            fl_now    = res_use.get("frame_lines", [])
+            warning   = "\n\n━━━━  ⚠️ تنبيه — صفقة بتوافق جزئي  ━━━━\n"                         "  الفريمات لم تتوافق كاملاً\n"                         "  استخدم حجم أصغر من المعتاد\n"                         "  المخاطرة أعلى من الصفقة العادية"
+            await query.message.reply_text(trade_msg + warning)
 
             is_p = abs(entry_p - res_use["price"]) / res_use["price"] * 100 > 0.1
             snap = {
@@ -1710,7 +1720,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             }
             nt = {
                 "id": trade_counter, "asset": asset_ov,
-                "direction": forced_dir, "entry": entry_p,
+                "direction": best_dir, "entry": entry_p,
                 "sl": res_use["sl"], "tp1": res_use["tp1"],
                 "tp2": res_use["tp2"], "tp3": res_use["tp3"],
                 "atr": res_use["atr"], "tp1_hit": False, "tp2_hit": False,
@@ -1720,7 +1730,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 "frame_snapshot": snap, "entry_update_sent": False,
                 "entry_alert_sent": False, "last_news_event": "",
                 "last_frame_alert": "", "last_active_alert": "",
-                "forced": True,  # flag for health reports
+                "forced": True,
             }
             async with _trades_lock:
                 active_trades.append(nt)
