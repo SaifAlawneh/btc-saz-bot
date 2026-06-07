@@ -1552,24 +1552,34 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
         if not active_trades:
             await query.message.reply_text(t(uid,"no_open_trades"))
         else:
-            rows = ["╔"+"═"*26+"╗", "  📋 الصفقات المفتوحة", "╚"+"═"*26+"╝", ""]
             current_price = get_btc_price()
             for tr in active_trades:
+                tid     = tr.get("id","?")
                 de      = "🔴 بيع SELL" if tr["direction"]=="SELL" else "🟢 شراء BUY"
                 ai2     = "₿" if tr["asset"]=="BTC" else "🥇"
                 tp1_hit = "✅" if tr.get("tp1_hit") else "⏳"
                 tp2_hit = "✅" if tr.get("tp2_hit") else "⏳"
-                rows += [ai2+" #"+str(tr.get("id","?"))+"  "+de,
-                         "  💵 دخول:  $"+"{:,.2f}".format(tr["entry"])]
+                st      = "⏳ معلقة" if tr.get("status")=="pending" else "🟢 نشطة"
+                rows = [
+                    "╔"+"═"*26+"╗",
+                    f"  📋 صفقة #{tid}  {st}",
+                    "╚"+"═"*26+"╝", "",
+                    f"  {de}",
+                    "  💵 دخول:  $"+"{:,.2f}".format(tr["entry"]),
+                ]
                 if current_price and tr["asset"] == "BTC":
                     rows.append("  📍 الحالي: $"+"{:,.2f}".format(current_price))
-                rows += [tp1_hit+" TP1:  $"+"{:,.2f}".format(tr["tp1"]),
-                         tp2_hit+" TP2:  $"+"{:,.2f}".format(tr["tp2"]),
-                         "⏳ TP3:  $"+"{:,.2f}".format(tr["tp3"]),
-                         "🛑 SL:   $"+"{:,.2f}".format(tr["sl"]),
-                         "🕐 "+tr.get("open_time",""), ""]
-            rows += ["━"*24, "🕐 "+gmt_now()]
-            await query.message.reply_text("\n".join(rows))
+                rows += [
+                    tp1_hit+" TP1:  $"+"{:,.2f}".format(tr["tp1"]),
+                    tp2_hit+" TP2:  $"+"{:,.2f}".format(tr["tp2"]),
+                    "⏳ TP3:  $"+"{:,.2f}".format(tr["tp3"]),
+                    "🛑 SL:   $"+"{:,.2f}".format(tr["sl"]),
+                    "🕐 "+tr.get("open_time",""),
+                ]
+                kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("❌ إغلاق وإلغاء الصفقة", callback_data=f"close_active_{tid}")
+                ]])
+                await query.message.reply_text("\n".join(rows), reply_markup=kb)
 
     elif data == "stats":
         stats    = load_stats()
