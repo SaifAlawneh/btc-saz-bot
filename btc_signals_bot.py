@@ -1166,7 +1166,7 @@ def build_trade_msg(res, uid=0, auto=False):
     lines.append("  "+("📈" if wt=="BULL" else "📉" if wt=="BEAR" else "➡️")+" ويكلي: "+("صاعد" if wt=="BULL" else "هابط" if wt=="BEAR" else "محايد"))
 
     rg = res.get("regime","UNKNOWN")
-    rg_map = {"TRENDING_UP":"📈 ترند صاعد","TRENDING_DOWN":"📉 ترند هابط","RANGING":"↔️ سوق جانبي","VOLATILE":"⚡ تقلب عالي","UNKNOWN":"❓"}
+    rg_map = {"TRENDING_UP":"📈 ترند صاعد","TRENDING_DOWN":"📉 ترند هابط","RANGING":"↔️ سوق جانبي","VOLATILE":"⚡ تقلب عالي","UNKNOWN":""}
     lines.append("  "+rg_map.get(rg, rg))
 
     mb = res.get("monthly_bias","NEUTRAL")
@@ -1760,8 +1760,26 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 res_use["final"] = "BUY" if buy_f >= sell_f else "SELL"
 
             best_dir = res_use["final"]
-            entry_p  = res_use.get("entry_price", res_use.get("price", 0))
-            avg_atr  = res_use.get("atr", entry_p * 0.015)
+            # Always use CURRENT price — never the cached/old price
+            cur_price = get_btc_price()
+            live_price = cur_price if cur_price else res_use.get("price", 0)
+            avg_atr  = res_use.get("atr", live_price * 0.015)
+
+            # Recalculate entry using find_smart_entry with current price
+            fib_l = res_use.get("fib_levels", {})
+            fib_e = res_use.get("fib_ext", {})
+            if fib_l:
+                entry_p, entry_rsn = find_smart_entry(
+                    live_price, best_dir, fib_l, fib_e, avg_atr,
+                    res_use.get("support", live_price*0.99),
+                    res_use.get("resistance", live_price*1.01),
+                    res_use.get("bull_obs", []), res_use.get("bear_obs", [])
+                )
+                res_use["entry_price"] = entry_p
+                res_use["entry_reason"] = entry_rsn
+            else:
+                entry_p = live_price
+            res_use["price"] = live_price
 
             # Safety: if SL/TP still zero, calculate from ATR
             if not res_use.get("sl") or res_use.get("sl", 0) == 0:
