@@ -1011,6 +1011,10 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
     fib_levels, fib_ext, swing_h, swing_l = calculate_fibonacci(df_1h)
     nearest_fib, fib_key, dist_pct = find_nearest_fib(price, fib_levels, final) if fib_levels else (price,"50.0",0)
 
+    # Calculate order blocks BEFORE smart entry
+    bull_obs, bear_obs = find_order_blocks(df_1h)
+    buy_liq, sell_liq  = find_liquidity_zones(df_1h)
+
     # Smart entry: Fib + Support/Resistance + Order Blocks confluence
     support    = main.get("support",    price * 0.99)
     resistance = main.get("resistance", price * 1.01)
@@ -1047,9 +1051,6 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
         elif divergence == "BEARISH" and final == "BUY":  base_conf = max(base_conf - 10, 50)
         elif divergence == "BULLISH" and final == "SELL": base_conf = max(base_conf - 10, 50)
     except: pass
-
-    bull_obs, bear_obs = find_order_blocks(df_1h)
-    buy_liq, sell_liq  = find_liquidity_zones(df_1h)
 
     try:
         if final == "SELL" and buy_liq:
