@@ -23,6 +23,7 @@ FRAME_MIN_CONFIDENCE = 60  # Minimum confidence required for a timeframe to be c
 ENTRY_ZONE_ATR_FACTOR = 0.25  # Entry zone width on each side of smart entry, based on ATR
 PRICE_EXPIRY_PCT  = 1.0   # Pending signal expires if BTC moves this % away from signal price
 SIGNAL_EXPIRY     = 60 * 60  # Pending signal expires after 1 hour
+PENDING_SIGNAL_MIN_AGE_BEFORE_EXPIRY = 5 * 60  # Do not expire a fresh signal in the same monitoring cycle
 SPAM_COOLDOWN     = 1800
 CACHE_TTL         = 900
 PENDING_MAX_AGE   = 48      # hours: stale pending auto-cancels after this
@@ -80,6 +81,27 @@ def entry_zone_from_trade(entry, atr):
 def format_entry_zone(entry, atr):
     low, high = entry_zone_from_trade(entry, atr)
     return f"${low:,.2f} — ${high:,.2f}"
+
+
+def distance_from_entry_zone_pct(price, entry_low, entry_high):
+    """Return 0 if price is inside the entry zone, otherwise distance from nearest zone edge in percent."""
+    try:
+        price = float(price)
+        entry_low = float(entry_low)
+        entry_high = float(entry_high)
+        if price <= 0 or entry_low <= 0 or entry_high <= 0:
+            return 0.0
+        low = min(entry_low, entry_high)
+        high = max(entry_low, entry_high)
+        if low <= price <= high:
+            return 0.0
+        edge = high if price > high else low
+        return abs(price - edge) / edge * 100
+    except Exception:
+        return 0.0
+
+def is_price_too_far_from_entry_zone(price, entry_low, entry_high, max_pct=MAX_DISTANCE_FROM_ZONE_PCT):
+    return distance_from_entry_zone_pct(price, entry_low, entry_high) > max_pct
 
 
 def _setup_key(asset, direction, entry, atr):
@@ -1225,7 +1247,7 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
                 "entry_low":main2["price"],"entry_high":main2["price"],
                 "entry_price":main2["price"],"nearest_fib_val":nf2}
 
-    else:
+    if final == "NEUTRAL":
         main2 = results.get("1h") or list(results.values())[0]
         fib_l2, fib_e2, sh2, sl2 = calculate_fibonacci(df_1h)
         nf2, fk2, _ = find_nearest_fib(main2["price"], fib_l2, "NEUTRAL") if fib_l2 else (main2["price"],"50.0",0)
@@ -2503,20 +2525,36 @@ async def _check_auto_signal(context):
         no_sell = not any(tr["asset"]=="BTC" and tr["direction"]=="SELL" for tr in active_trades)
 
         res = full_analysis("BTC", 0)
-        if not res or res["final"] == "NEUTRAL" or res["base_conf"] < MIN_CONFIDENCE:
+        if not res or res.get("final") == "NEUTRAL" or res.get("base_conf", 0) < MIN_CONFIDENCE:
             return
 
-        fl     = res.get("frame_lines", [])
+        fl = res.get("frame_lines", [])
         buy_f, sell_f = count_qualified_frame_lines(fl)
-        three  = buy_f == 3 or sell_f == 3
-        dir_ok = (res["final"]=="BUY" and no_buy) or (res["final"]=="SELL" and no_sell)
-        ep     = res["entry_price"]
-        sig_atr= res.get("atr", ep * 0.015)
-        dup    = any(tr["asset"]=="BTC" and tr["direction"]==res["final"]
-                     and abs(tr["entry"] - ep) < 0.5 * sig_atr
-                     for tr in active_trades)
 
-        if not (three and dir_ok and not dup):
+        # Auto-signals must be high-quality only: 3/3 qualified frames in the same direction.
+        three = (res["final"] == "BUY" and buy_f == 3 and sell_f == 0) or (res["final"] == "SELL" and sell_f == 3 and buy_f == 0)
+        if not three:
+            return
+
+        dir_ok = (res["final"]=="BUY" and no_buy) or (res["final"]=="SELL" and no_sell)
+        ep = float(res["entry_price"])
+        sig_atr = float(res.get("atr", ep * 0.015) or ep * 0.015)
+        entry_low = float(res.get("entry_low", ep))
+        entry_high = float(res.get("entry_high", ep))
+
+        # Do not send a new signal if price is already too far away from the Smart Entry Zone.
+        if is_price_too_far_from_entry_zone(res.get("price", price_q), entry_low, entry_high, MAX_DISTANCE_FROM_ZONE_PCT):
+            return
+
+        # Do not re-offer a recently cancelled setup in the same zone/direction.
+        if is_recently_cancelled("BTC", res["final"], ep, sig_atr):
+            return
+
+        dup = any(tr["asset"]=="BTC" and tr["direction"]==res["final"]
+                  and abs(tr["entry"] - ep) < 0.5 * sig_atr
+                  for tr in active_trades)
+
+        if not (dir_ok and not dup):
             return
 
         global trade_counter
@@ -2527,6 +2565,8 @@ async def _check_auto_signal(context):
         ev = get_upcoming_event(2)
         pending_signals[trade_counter] = {
             "res": res, "entry_p": ep, "timestamp": n,
+            "entry_low": res.get("entry_low", ep),
+            "entry_high": res.get("entry_high", ep),
             "price": res["price"], "chat_ids": [],
         }
         for uid in ALLOWED_USERS:
@@ -2547,39 +2587,74 @@ async def _check_auto_signal(context):
 
 
 async def _expire_pending_signals(context):
-    """Expire signals that are stale, price-moved, or direction-changed."""
+    """Expire pending signals only after a short grace period, using Smart Entry Zone distance and timeframe validation."""
     if not pending_signals:
         return
     try:
-        n   = now_ts()
+        n = now_ts()
         cur = get_btc_price()
         fresh = None
-        try: fresh = full_analysis("BTC", 0)
-        except Exception: pass
+        try:
+            fresh = full_analysis("BTC", 0)
+        except Exception:
+            fresh = None
 
         to_exp = []
         for sid, sig in list(pending_signals.items()):
-            expired = False; reason = ""
+            expired = False
             reason_key = ""
-            if cur and abs(cur - sig["price"]) / sig["price"] * 100 > PRICE_EXPIRY_PCT:
-                expired = True; reason_key = "signal_expired_price"
-            elif fresh and fresh["final"] != sig["res"]["final"]:
-                expired = True; reason_key = "signal_expired_timeframes"
-            elif n - sig["timestamp"] > SIGNAL_EXPIRY:
-                expired = True; reason_key = "signal_expired_time"
+            age = n - float(sig.get("timestamp", n))
+
+            # Avoid the bad UX where a fresh signal is generated and expired in the same cycle.
+            if age < PENDING_SIGNAL_MIN_AGE_BEFORE_EXPIRY:
+                continue
+
+            sig_res = sig.get("res", {})
+            sig_dir = sig_res.get("final")
+            sig_entry = float(sig.get("entry_p", sig_res.get("entry_price", 0)) or 0)
+            sig_atr = float(sig_res.get("atr", sig_entry * 0.015) or sig_entry * 0.015)
+            entry_low = float(sig.get("entry_low", sig_res.get("entry_low", sig_entry)) or sig_entry)
+            entry_high = float(sig.get("entry_high", sig_res.get("entry_high", sig_entry)) or sig_entry)
+
+            # Expire by distance from Smart Entry Zone, not from the market price at signal creation.
+            if cur and is_price_too_far_from_entry_zone(cur, entry_low, entry_high, MAX_DISTANCE_FROM_ZONE_PCT):
+                expired = True
+                reason_key = "signal_expired_price"
+
+            # Expire if the fresh decision is no longer supportive of the original direction.
+            elif fresh:
+                fresh_final = fresh.get("final", "NEUTRAL")
+                fresh_lines = fresh.get("frame_lines", [])
+                fresh_buy, fresh_sell = count_qualified_frame_lines(fresh_lines)
+                supportive = (
+                    sig_dir == "BUY" and fresh_final == "BUY" and fresh_buy == 3 and fresh_sell == 0
+                ) or (
+                    sig_dir == "SELL" and fresh_final == "SELL" and fresh_sell == 3 and fresh_buy == 0
+                )
+                if not supportive:
+                    expired = True
+                    reason_key = "signal_expired_timeframes"
+
+            elif age > SIGNAL_EXPIRY:
+                expired = True
+                reason_key = "signal_expired_time"
+
             if expired:
                 to_exp.append(sid)
+                remember_cancelled_setup("BTC", sig_dir, sig_entry, sig_atr, reason=reason_key)
                 for cid in sig.get("chat_ids", list(ALLOWED_USERS)):
                     msg = f"⏰ SazBot | {t(cid,'signal_expired')} #{sid}"
                     if reason_key:
                         msg += f"\n\n{t(cid, reason_key)}"
-                    try: await context.bot.send_message(chat_id=cid, text=msg)
-                    except Exception: pass
+                    try:
+                        await context.bot.send_message(chat_id=cid, text=msg)
+                    except Exception:
+                        pass
+
         for sid in to_exp:
             pending_signals.pop(sid, None)
     except Exception as e:
         logger.error(f"Expire signals: {e}")
-
 
 async def _economic_alert_no_trades(context):
     """Alert about upcoming high-impact event when no trades are open."""
