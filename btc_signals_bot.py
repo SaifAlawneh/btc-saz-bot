@@ -337,15 +337,15 @@ CONFUSED_EN = ["Didn't get that 😅 Use the buttons 👇", "🤔 Choose from th
 TEXTS = {
     "ar": {
         "choose_lang": "🟡 SazBot | BTC Signals\n\nاختر لغتك:",
-        "welcome": "🟡 SazBot | BTC Signals\n\nمرحباً بك في تجربة تحليل أكثر وضوحاً واحترافية.\n\n\nمتخصص في:\n₿ Bitcoin  BTC/USD\n\n✨ ما يقدمه البوت:\n▫️ تحليل متعدد الفريمات\n▫️ منطقة دخول ذكية مبنية على ATR والتوافق الفني\n▫️ أهداف ووقف خسارة محسوبة\n▫️ تنبيهات تلقائية للفرص القوية\n▫️ متابعة مباشرة للصفقات المفتوحة\n\n⚠️ تحليل تعليمي فقط — ليست توصية مالية",
-        "btn_btc": "📊 تحليل صفقة BTC",
-        "btn_analysis_btc": "📈 قراءة السوق",
+        "welcome": "🟡 SazBot 2.1 | Decision Intelligence\n\nمرحباً بك في تجربة أذكى لقراءة BTC/USD.\n\nSazBot لا يبحث عن أي صفقة؛ بل يقيّم أولاً هل السوق يستحق المخاطرة أم لا.\n\n🧠 ما يقدمه لك:\n▫️ طبقة قرار ذكية لتصفية الضوضاء\n▫️ تقييم جودة الفرصة قبل الدخول\n▫️ قراءة حالة السوق وطاقة الحركة\n▫️ تقدير خطر الندم قبل المخاطرة\n▫️ متابعة منظمة للصفقات والتنبيهات\n\n🚫 أحياناً أفضل قرار هو عدم التداول.\n\n⚠️ تحليل تعليمي فقط — ليست توصية مالية. إدارة المخاطر مسؤوليتك.",
+        "btn_btc": "🧠 مركز القرار BTC",
+        "btn_analysis_btc": "📖 قراءة السوق",
         "btn_prices": "💰 الأسعار", "btn_about": "ℹ️ عن SazBot",
         "btn_lang": "🌐 اللغة", "btn_trades": "📋 الصفقات النشطة",
         "btn_close_trade": "❌ إغلاق صفقة نشطة", "close_trade_title": "اختر الصفقة التي تريد إغلاقها:",
         "btn_stats": "📊 الإحصائيات",
         "no_open_trades": "📭 لا توجد صفقات مفتوحة حالياً",
-        "loading_trade": "⏳ جاري فحص السوق وبناء أفضل سيناريو...",
+        "loading_trade": "⏳ SazBot 2.1 يفحص جودة السوق ويبني القرار...",
         "loading_analysis": "⏳ جاري التحليل...",
         "loading_prices": "⏳ جاري جلب الأسعار...",
         "failed": "❌ البيانات غير متاحة حالياً. حاول مرة أخرى بعد دقيقة.",
@@ -371,10 +371,10 @@ TEXTS = {
         "educational_footer": "⚠️ تحليل تعليمي فقط — ليست توصية مالية.",
         "avoid_new_trades": "تجنب فتح صفقات جديدة حتى يهدأ التذبذب.",
         "no_signal": "⏳ لا توجد فرصة عالية الجودة حالياً\nعدم الدخول أحياناً أفضل من الدخول في فرصة ضعيفة.",
-        "trade_header": "SazBot | إشارة BTC",
-        "auto_header": "SazBot | إشارة BTC تلقائية",
+        "trade_header": "SazBot 2.1 | قرار BTC",
+        "auto_header": "SazBot 2.1 | فرصة BTC تلقائية",
         "update_header": "SazBot | تحديث صفقة BTC",
-        "analysis_header": "SazBot | قراءة السوق",
+        "analysis_header": "SazBot 2.1 | قراءة السوق",
         "entry": "الدخول المرجعي", "entry_zone": "منطقة الدخول الذكية",
         "direction": "اتجاه السوق",
         "confidence": "مستوى الثقة",
@@ -467,7 +467,7 @@ TEXTS = {
         "summary_bear": "✅ الخلاصة: السوق يميل للهبوط",
         "summary_neutral": "🧭 الخلاصة: السوق في منطقة تردد",
         "prices_title": "💰 الأسعار الحالية", "change_24h": "التغيير 24h",
-        "about_text": "ℹ️ عن SazBot 🟡\n\nوُلد SazBot من شغف حقيقي بالأسواق والتقنية، ليقدّم قراءة أوضح لحركة BTC/USD ويساعدك على متابعة السوق بهدوء ووعي أكبر.\n\nصُمم البوت ليختصر الضوضاء، يراقب تغيرات السوق، ويعرض لك السيناريوهات المهمة بطريقة منظمة وسهلة الفهم.\n\n✨ ما يقدمه لك:\n▫️ قراءة أوضح لاتجاه السوق\n▫️ طبقة قرار ذكية لتصفية الضوضاء وتقييم جودة الفرصة قبل المخاطرة\n▫️ تنبيهات عند تغيّر ظروف السوق\n▫️ متابعة منظمة للصفقات النشطة\n▫️ عرض مبسّط للمخاطر والمستويات المهمة\n\nSazBot لا يعدك بالربح، لكنه يساعدك على اتخاذ قرارات أكثر هدوءاً وانضباطاً.\n\n⚠️ التحليل تعليمي فقط وليس توصية مالية. إدارة المخاطر مسؤوليتك.",
+        "about_text": "ℹ️ عن SazBot 2.1 🟡\n\nوُلد SazBot من شغف حقيقي بالأسواق والتقنية، ليقدّم قراءة أوضح لحركة BTC/USD ويساعدك على متابعة السوق بهدوء ووعي أكبر.\n\nصُمم البوت ليختصر الضوضاء، يراقب تغيرات السوق، ويعرض لك السيناريوهات المهمة بطريقة منظمة وسهلة الفهم.\n\n✨ ما يقدمه لك:\n▫️ قراءة أوضح لاتجاه السوق\n▫️ طبقة قرار ذكية لتصفية الضوضاء وتقييم جودة الفرصة قبل المخاطرة\n▫️ تنبيهات عند تغيّر ظروف السوق\n▫️ متابعة منظمة للصفقات النشطة\n▫️ عرض مبسّط للمخاطر والمستويات المهمة\n\nSazBot لا يعدك بالربح، لكنه يساعدك على اتخاذ قرارات أكثر هدوءاً وانضباطاً.\n\n⚠️ التحليل تعليمي فقط وليس توصية مالية. إدارة المخاطر مسؤوليتك.",
         "ind_rsi_oversold": "RSI تشبع بيعي", "ind_rsi_buy": "RSI منطقة شراء",
         "ind_rsi_overbought": "RSI تشبع شرائي", "ind_rsi_sell": "RSI منطقة بيع",
         "ind_macd_pos": "MACD إيجابي ↗️", "ind_macd_neg": "MACD سلبي ↘️",
@@ -480,24 +480,24 @@ TEXTS = {
     },
     "en": {
         "choose_lang": "🟡 SazBot | BTC Signals\n\nChoose your language:",
-        "welcome": "🟡 SazBot | BTC Signals\n\nWelcome to a cleaner and more professional BTC analysis experience.\n\n\nSpecialising in:\n₿ Bitcoin  BTC/USD\n\n✨ What SazBot provides:\n▫️ Multi-timeframe analysis\n▫️ Smart Entry Zone based on ATR and technical confluence\n▫️ Calculated targets and stop loss\n▫️ Auto alerts for stronger setups\n▫️ Live monitoring for open trades\n\n⚠️ Educational only — not financial advice",
-        "btn_btc": "📊 Analyse BTC Setup",
-        "btn_analysis_btc": "📈 Market Read",
+        "welcome": "🟡 SazBot 2.1 | Decision Intelligence\n\nWelcome to a smarter BTC/USD decision experience.\n\nSazBot does not chase every trade. It first evaluates whether the market is worth the risk.\n\n🧠 What it helps with:\n▫️ A decision layer that filters market noise\n▫️ Opportunity quality before entry\n▫️ Market state and energy reading\n▫️ Regret risk before taking risk\n▫️ Structured trade monitoring and alerts\n\n🚫 Sometimes the best decision is not to trade.\n\n⚠️ Educational analysis only — not financial advice. Risk management is your responsibility.",
+        "btn_btc": "🧠 BTC Decision Center",
+        "btn_analysis_btc": "📖 Market Read",
         "btn_prices": "💰 Prices", "btn_about": "ℹ️ About SazBot",
         "btn_lang": "🌐 Language", "btn_trades": "📋 Active Trades",
         "btn_close_trade": "❌ Close Active Trade", "close_trade_title": "Choose the trade you want to close:",
         "btn_stats": "📊 Statistics",
         "no_open_trades": "📭 No open trades at the moment",
-        "loading_trade": "⏳ Scanning the market and building the best scenario...",
+        "loading_trade": "⏳ SazBot 2.1 is scanning market quality and building the decision...",
         "loading_analysis": "⏳ Analyzing...",
         "loading_prices": "⏳ Fetching prices...",
         "failed": "❌ Data is temporarily unavailable. Please try again in a minute.",
         "error": "❌ Error: ",
         "no_signal": "⏳ No high-quality setup yet\nNo trade is better than a weak trade.",
-        "trade_header": "SazBot | BTC Signal",
-        "auto_header": "SazBot | Auto BTC Signal",
+        "trade_header": "SazBot 2.1 | BTC Decision",
+        "auto_header": "SazBot 2.1 | Auto BTC Opportunity",
         "update_header": "SazBot | BTC Trade Update",
-        "analysis_header": "SazBot | Market Analysis",
+        "analysis_header": "SazBot 2.1 | Market Read",
         "entry": "Reference Entry", "entry_zone": "Smart Entry Zone",
         "direction": "Market Bias",
         "confidence": "Confidence",
@@ -590,7 +590,7 @@ TEXTS = {
         "summary_bear": "✅ Summary: Market leaning bearish",
         "summary_neutral": "🧭 Summary: Market in consolidation",
         "prices_title": "💰 Current Prices", "change_24h": "24h Change",
-        "about_text": "ℹ️ About SazBot 🟡\n\nSazBot was built by someone genuinely passionate about markets and technology, with one goal: to make BTC/USD market reading clearer, calmer, and easier to follow.\n\nThe bot helps reduce noise, monitor changing market conditions, and present important scenarios in a simple, organised format.\n\n✨ What it helps with:\n▫️ Clear market reading\n▫️ A decision layer that filters market noise and evaluates opportunity quality before risk\n▫️ Alerts when conditions change\n▫️ Structured tracking for active trades\n▫️ Simple risk and level summaries\n\nSazBot does not promise profit. It helps you approach the market with more discipline and clarity.\n\n⚠️ Educational analysis only — not financial advice. Risk management is your responsibility.",
+        "about_text": "ℹ️ About SazBot 2.1 🟡\n\nSazBot was built by someone genuinely passionate about markets and technology, with one goal: to make BTC/USD market reading clearer, calmer, and easier to follow.\n\nThe bot helps reduce noise, monitor changing market conditions, and present important scenarios in a simple, organised format.\n\n✨ What it helps with:\n▫️ Clear market reading\n▫️ A decision layer that filters market noise and evaluates opportunity quality before risk\n▫️ Alerts when conditions change\n▫️ Structured tracking for active trades\n▫️ Simple risk and level summaries\n\nSazBot does not promise profit. It helps you approach the market with more discipline and clarity.\n\n⚠️ Educational analysis only — not financial advice. Risk management is your responsibility.",
         "ind_rsi_oversold": "RSI Oversold", "ind_rsi_buy": "RSI Buy Zone",
         "ind_rsi_overbought": "RSI Overbought", "ind_rsi_sell": "RSI Sell Zone",
         "ind_macd_pos": "MACD Positive ↗️", "ind_macd_neg": "MACD Negative ↘️",
@@ -2311,8 +2311,16 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                             "",
                         ]
 
+                # Always show SazBot 2.1 decision layer in no-setup / partial setup states.
+                try:
+                    parts.append("")
+                    parts += saz_intelligence_block(res, uid, compact=False)
+                    parts.append("")
+                except Exception as _e:
+                    logger.warning("Decision layer no-setup display: " + str(_e))
+
                 if fls:
-                    parts.append("📊 " + ("حالة الفريمات" if lang == "ar" else "Timeframe Status"))
+                    parts.append("📊 " + ("حالة السوق" if lang == "ar" else "Market State"))
                     parts.append("")
                     for fl in fls:
                         parts.append(display_frame_line(uid, fl))
