@@ -351,18 +351,18 @@ TEXTS = {
         "targets": "الأهداف", "market_filters_blocked": "⚪ الفلاتر منعت التحليل أو البيانات غير متوفرة\n\nحاول بعد دقيقتين 🕐",
         "trade_health": "فحص حالة الصفقة", "distance": "المسافة", "above": "فوق", "below": "تحت", "entry_zone_word": "منطقة الدخول",
         "risk_review": "مراجعة المخاطر", "recommend_cancel": "🔴 التوصية: إلغاء — الظروف تدهورت بوضوح", "recommend_review": "🟡 التوصية: مراجعة — يوجد عامل خطر أساسي بدون دعم كافٍ", "recommend_keep": "🟢 التوصية: إبقاء — الظروف لا تزال داعمة", "recommend_monitor": "🟡 التوصية: مراقبة — الإشارات مختلطة",
-        "full_reversal": "❌ انعكاس كامل في الفريمات", "frames_still_support": "فريمات مؤهلة لا تزال تدعم السيناريو", "frames_oppose": "فريمات مؤهلة أصبحت تعاكس السيناريو",
+        "full_reversal": "❌ تغيرت ظروف السوق بشكل واضح", "frames_still_support": "ظروف السوق لا تزال تدعم السيناريو", "frames_oppose": "ظروف السوق تغيرت بشكل ملحوظ",
         "monthly_supports": "📆 الميل الشهري يدعم السيناريو", "monthly_against": "📆 الميل الشهري يعاكس السيناريو", "weekly_supports": "🗓️ الاتجاه الأسبوعي يدعم السيناريو", "weekly_against": "🗓️ الاتجاه الأسبوعي يعاكس السيناريو",
         "volatility_risk": "⚡ تذبذب مرتفع — المخاطر زادت", "ranging_risk": "↔️ السوق عرضي — الوصول للأهداف قد يكون أصعب", "regime_supports": "📊 حالة السوق تدعم الاتجاه", "regime_against": "📊 حالة السوق تعاكس الاتجاه", "rsi_against": "⚠️ دايفرجنس RSI يعاكس السيناريو", "rsi_supports": "📈 دايفرجنس RSI يدعم السيناريو",
-        "forced_note": "⚠️ سيناريو بمخاطرة أعلى تم فتحه يدوياً.",
+        "forced_note": "⚠️ تم فتح سيناريو بديل بمخاطرة أعلى.",
         "btn_keep_trade": "✅ إبقاء الصفقة", "btn_keep_setup": "✅ إبقاء السيناريو", "btn_cancel_setup": "❌ إلغاء السيناريو", "btn_activate_setup": "✅ تفعيل السيناريو", "btn_ignore": "❌ تجاهل", "btn_update_setup": "✅ تحديث السيناريو",
-        "auto_cancel_timeframes": "❌ تم الإلغاء تلقائياً: جميع الفريمات المؤهلة انعكست إلى", "auto_cancel_conditions": "❌ تم الإلغاء تلقائياً: الظروف تدهورت",
+        "auto_cancel_timeframes": "❌ تم الإلغاء تلقائياً: تغيرت ظروف السوق بشكل ملحوظ", "auto_cancel_conditions": "❌ تم الإلغاء تلقائياً: الظروف تدهورت",
         "setup_activated": "تم تفعيل السيناريو", "price_reached_entry": "وصل السعر إلى منطقة الدخول الذكية. السيناريو أصبح نشطاً.",
         "setup_cancelled_full": "تم إلغاء السيناريو", "price_bias_changed": "وصل السعر إلى منطقة الدخول، لكن اتجاه السوق تغيّر إلى",
         "invalid_before_entry": "السعر ألغى صلاحية السيناريو قبل الدخول.", "entry_alert": "تنبيه منطقة الدخول", "approaching_entry": "السعر يقترب من منطقة الدخول الذكية.",
-        "reference_entry": "الدخول المرجعي", "actual_entry": "سعر الدخول الفعلي", "entry_reference_zone": "منطقة الدخول المرجعية", "override_blocked_distance": "❌ تم رفض الفرصة: السعر ابتعد كثيراً عن منطقة الدخول الذكية، والمخاطرة لم تعد مناسبة.", "override_blocked_frames": "❌ تم رفض الفرصة: لا يوجد توافق كافٍ بين الفريمات المؤهلة حالياً.", "high_impact_event": "حدث مؤثر عالي الأهمية", "impact_high": "التأثير: 🔴 مرتفع. يرجى إدارة المخاطر بحذر.",
+        "reference_entry": "الدخول المرجعي", "actual_entry": "سعر الدخول الفعلي", "entry_reference_zone": "منطقة الدخول المرجعية", "override_blocked_distance": "❌ تم رفض الفرصة: السعر ابتعد كثيراً عن منطقة الدخول الذكية، والمخاطرة لم تعد مناسبة.", "override_blocked_frames": "❌ تم رفض الفرصة: ظروف السوق غير داعمة بما يكفي حالياً.", "high_impact_event": "حدث مؤثر عالي الأهمية", "impact_high": "التأثير: 🔴 مرتفع. يرجى إدارة المخاطر بحذر.",
         "entry_update": "تحديث منطقة الدخول", "conditions_changed_before_activation": "تغيرت ظروف السوق قبل التفعيل.", "old_reference": "الدخول السابق", "new_reference": "الدخول الجديد",
-        "price_moved_against": "تحرك السعر ضد منطقة الدخول الذكية وتغيرت الفريمات إلى",
+        "price_moved_against": "تحرك السعر ضد منطقة الدخول الذكية وتغيرت ظروف السوق.",
         "buy": "شراء  BUY ⬆️", "sell": "بيع  SELL ⬇️",
         "targets_section": "الأهداف المحتملة",
         "tp1": "TP1", "tp2": "TP2", "tp3": "TP3", "sl": "SL",
@@ -371,14 +371,14 @@ TEXTS = {
         "support": "دعم", "resistance": "مقاومة",
         "confluence": "توافق الفريمات",
         "frame_1h": "ساعة", "frame_4h": "4 ساعات", "frame_1d": "يومي",
-        "full_confluence": "✅ توافق قوي — 3/3 فريمات مؤهلة",
-        "partial_confluence": "⚠️ توافق جزئي — 2/3 فريمات مؤهلة",
+        "full_confluence": "توافق قوي بين الفريمات",
+        "partial_confluence": "توافق جزئي بين الفريمات",
         "no_confluence": "⏳ لا توجد فرصة عالية الجودة حالياً",
-        "qualified_note": "يُحسب الفريم مؤهلاً إذا تجاوز حد الثقة المعتمد له: ساعة و4 ساعات 60%، يومي 65%.",
-        "low_conf_note": "إشارة ضعيفة",
+        "qualified_note": "",
+        "low_conf_note": "",
         "partial_title": "⚠️ توافق جزئي",
         "no_quality_title": "⏳ لا توجد فرصة عالية الجودة حالياً",
-        "partial_body": "الاتجاه العام واضح، لكن ليست جميع الفريمات مؤهلة حسب حد الثقة المعتمد.",
+        "partial_body": "الاتجاه العام واضح، لكن التوافق لم يكتمل بعد.",
         "higher_risk_prompt": "يمكن عرض فرصة متاحة بمخاطرة أعلى فقط عند وجود توافق جزئي كافٍ.",
         "no_trade_better": "عدم الدخول أحياناً أفضل من الدخول في فرصة ضعيفة.",
         "btn_higher_risk": "🎯 عرض الفرصة المتاحة",
@@ -428,7 +428,7 @@ TEXTS = {
         "summary_bear": "✅ الخلاصة: السوق يميل للهبوط",
         "summary_neutral": "🧭 الخلاصة: السوق في منطقة تردد",
         "prices_title": "💰 الأسعار الحالية", "change_24h": "التغيير 24h",
-        "about_text": "ℹ️ عن SazBot 🟡\n\nبوت متخصص في تحليل BTC/USD بأسلوب واضح ومختصر.\n\n📊 تحليل متعدد الفريمات\n🎯 منطقة دخول ذكية مبنية على ATR والتوافق الفني\n🛑 وقف خسارة وأهداف محسوبة\n📡 إشارات تلقائية عند ظهور فرص قوية\n🔄 متابعة مباشرة للصفقات المفتوحة\n🔬 RSI, MACD, EMA, BB, Stoch, ATR, Ichimoku\n📊 مصادر البيانات: Twelve Data + Binance\n\n⚠️ التحليل تعليمي فقط وليس توصية مالية.",
+        "about_text": "ℹ️ عن SazBot 🟡\n\nوُلد SazBot من شغف حقيقي بالأسواق والتقنية، ليقدّم قراءة أوضح لحركة BTC/USD ويساعدك على متابعة السوق بهدوء ووعي أكبر.\n\nصُمم البوت ليختصر الضوضاء، يراقب تغيرات السوق، ويعرض لك السيناريوهات المهمة بطريقة منظمة وسهلة الفهم.\n\n✨ ما يقدمه لك:\n▫️ قراءة واضحة لاتجاه السوق\n▫️ تنبيهات عند تغيّر ظروف السوق\n▫️ متابعة منظمة للصفقات النشطة\n▫️ عرض مبسّط للمخاطر والمستويات المهمة\n\nSazBot لا يعدك بالربح، لكنه يساعدك على اتخاذ قرارات أكثر هدوءاً وانضباطاً.\n\n⚠️ التحليل تعليمي فقط وليس توصية مالية. إدارة المخاطر مسؤوليتك.",
         "ind_rsi_oversold": "RSI تشبع بيعي", "ind_rsi_buy": "RSI منطقة شراء",
         "ind_rsi_overbought": "RSI تشبع شرائي", "ind_rsi_sell": "RSI منطقة بيع",
         "ind_macd_pos": "MACD إيجابي ↗️", "ind_macd_neg": "MACD سلبي ↘️",
@@ -474,18 +474,18 @@ TEXTS = {
         "targets": "Targets", "market_filters_blocked": "⚪ Filters blocked the analysis or data is unavailable\n\nTry again in two minutes 🕐",
         "trade_health": "Trade Health Check", "distance": "Distance", "above": "above", "below": "below", "entry_zone_word": "entry zone",
         "risk_review": "Risk Review", "recommend_cancel": "🔴 Recommendation: Cancel — conditions deteriorated clearly", "recommend_review": "🟡 Recommendation: Review — one key risk without enough support", "recommend_keep": "🟢 Recommendation: Keep — conditions remain supportive", "recommend_monitor": "🟡 Recommendation: Monitor — mixed conditions",
-        "full_reversal": "❌ Full timeframe reversal detected", "frames_still_support": "qualified timeframes still support the setup", "frames_oppose": "qualified timeframes now oppose the setup",
+        "full_reversal": "❌ Market conditions changed significantly", "frames_still_support": "Market conditions still support the setup", "frames_oppose": "Market conditions have changed significantly",
         "monthly_supports": "📆 Monthly bias supports the setup", "monthly_against": "📆 Monthly bias is against the setup", "weekly_supports": "🗓️ Weekly trend supports the setup", "weekly_against": "🗓️ Weekly trend is against the setup",
         "volatility_risk": "⚡ High volatility — risk increased", "ranging_risk": "↔️ Ranging market — targets may be harder to reach", "regime_supports": "📊 Market regime supports the direction", "regime_against": "📊 Market regime is against the direction", "rsi_against": "⚠️ RSI divergence is against the setup", "rsi_supports": "📈 RSI divergence supports the setup",
-        "forced_note": "⚠️ Higher-risk setup opened by override.",
+        "forced_note": "⚠️ Alternative higher-risk setup opened manually.",
         "btn_keep_trade": "✅ Keep Trade", "btn_keep_setup": "✅ Keep Setup", "btn_cancel_setup": "❌ Cancel Setup", "btn_activate_setup": "✅ Activate Setup", "btn_ignore": "❌ Ignore", "btn_update_setup": "✅ Update Setup",
-        "auto_cancel_timeframes": "❌ Auto-cancelled: all qualified timeframes shifted to", "auto_cancel_conditions": "❌ Auto-cancelled: conditions deteriorated",
+        "auto_cancel_timeframes": "❌ Auto-cancelled: market conditions changed significantly", "auto_cancel_conditions": "❌ Auto-cancelled: conditions deteriorated",
         "setup_activated": "Trade Activated", "price_reached_entry": "Price reached the Smart Entry Zone. The setup is now active.",
         "setup_cancelled_full": "Setup Cancelled", "price_bias_changed": "Price reached the entry area, but the market bias changed to",
         "invalid_before_entry": "The price invalidated the setup before entry.", "entry_alert": "Entry Zone Alert", "approaching_entry": "Price is approaching the Smart Entry Zone.",
-        "reference_entry": "Reference Entry", "actual_entry": "Actual Entry", "entry_reference_zone": "Reference Entry Zone", "override_blocked_distance": "❌ Setup rejected: price moved too far beyond the Smart Entry Zone and risk is no longer acceptable.", "override_blocked_frames": "❌ Setup rejected: qualified timeframes do not support this scenario enough right now.", "high_impact_event": "High-Impact Event", "impact_high": "Impact: 🔴 High. Manage risk carefully.",
+        "reference_entry": "Reference Entry", "actual_entry": "Actual Entry", "entry_reference_zone": "Reference Entry Zone", "override_blocked_distance": "❌ Setup rejected: price moved too far beyond the Smart Entry Zone and risk is no longer acceptable.", "override_blocked_frames": "❌ Setup rejected: market conditions are not supportive enough right now.", "high_impact_event": "High-Impact Event", "impact_high": "Impact: 🔴 High. Manage risk carefully.",
         "entry_update": "Entry Zone Update", "conditions_changed_before_activation": "Market conditions changed before activation.", "old_reference": "Old Reference", "new_reference": "New Reference",
-        "price_moved_against": "The price moved against the Smart Entry Zone and timeframes shifted to",
+        "price_moved_against": "The price moved against the Smart Entry Zone and market conditions changed.",
         "buy": "BUY ⬆️", "sell": "SELL ⬇️",
         "targets_section": "Potential Targets",
         "tp1": "TP1", "tp2": "TP2", "tp3": "TP3", "sl": "SL",
@@ -494,15 +494,15 @@ TEXTS = {
         "support": "Support", "resistance": "Resistance",
         "confluence": "Timeframe Alignment",
         "frame_1h": "1H", "frame_4h": "4H", "frame_1d": "Daily",
-        "full_confluence": "✅ Strong setup — 3/3 qualified timeframes",
-        "partial_confluence": "⚠️ Partial alignment — 2/3 qualified timeframes",
+        "full_confluence": "Strong timeframe alignment",
+        "partial_confluence": "Partial timeframe alignment",
         "no_confluence": "⏳ No high-quality setup yet",
-        "qualified_note": "A timeframe is qualified only when it meets its confidence threshold: 1H/4H 60%, Daily 65%.",
-        "low_conf_note": "Weak signal",
+        "qualified_note": "",
+        "low_conf_note": "",
         "partial_title": "⚠️ Partial Alignment Detected",
         "no_quality_title": "⏳ No High-Quality Setup Yet",
-        "partial_body": "The overall direction is clear, but not all timeframes meet the confidence threshold yet.",
-        "higher_risk_prompt": "An available higher-risk setup can be shown only when partial alignment is strong enough.",
+        "partial_body": "The overall direction is visible, but market alignment is not complete yet.",
+        "higher_risk_prompt": "An alternative setup is available, but it carries higher risk.",
         "no_trade_better": "No trade is better than a weak trade.",
         "btn_higher_risk": "🎯 View Available Setup",
         "btn_cancel": "❌ Cancel",
@@ -551,7 +551,7 @@ TEXTS = {
         "summary_bear": "✅ Summary: Market leaning bearish",
         "summary_neutral": "🧭 Summary: Market in consolidation",
         "prices_title": "💰 Current Prices", "change_24h": "24h Change",
-        "about_text": "ℹ️ About SazBot 🟡\n\nA focused BTC/USD analysis bot with a clean and professional signal format.\n\n📊 Multi-timeframe analysis\n🎯 Smart Entry Zone based on ATR and technical confluence\n🛑 Calculated stop loss and targets\n📡 Auto alerts for stronger setups\n🔄 Live monitoring for active trades\n🔬 RSI, MACD, EMA, BB, Stoch, ATR, Ichimoku\n📊 Data sources: Twelve Data + Binance\n\n⚠️ Educational analysis only — not financial advice.",
+        "about_text": "ℹ️ About SazBot 🟡\n\nSazBot was built by someone genuinely passionate about markets and technology, with one goal: to make BTC/USD market reading clearer, calmer, and easier to follow.\n\nThe bot helps reduce noise, monitor changing market conditions, and present important scenarios in a simple, organised format.\n\n✨ What it helps with:\n▫️ Clear market reading\n▫️ Alerts when conditions change\n▫️ Structured tracking for active trades\n▫️ Simple risk and level summaries\n\nSazBot does not promise profit. It helps you approach the market with more discipline and clarity.\n\n⚠️ Educational analysis only — not financial advice. Risk management is your responsibility.",
         "ind_rsi_oversold": "RSI Oversold", "ind_rsi_buy": "RSI Buy Zone",
         "ind_rsi_overbought": "RSI Overbought", "ind_rsi_sell": "RSI Sell Zone",
         "ind_macd_pos": "MACD Positive ↗️", "ind_macd_neg": "MACD Negative ↘️",
@@ -560,13 +560,29 @@ TEXTS = {
         "ind_stoch_low": "Stochastic Oversold", "ind_stoch_high": "Stochastic Overbought",
         "stats_title": "SazBot Statistics", "closed_trades": "Closed Trades", "total": "Total", "wins": "Wins", "breakeven_stat": "Breakeven", "losses": "Losses", "win_rate": "Win Rate", "avg_rr": "Average RR", "existing_trades": "Open Trades", "no_existing_trades": "No open trades", "waiting_entry": "Waiting for entry zone", "tp2_done": "TP2 hit", "tp1_done": "TP1 hit", "active_no_target": "Active — no target hit yet",
         "risk_warn_volatile": "⚡ Volatile market — consider smaller size", "risk_warn_ranging": "↔️ Ranging market — targets may be limited", "risk_warn_monthly_bull_sell": "📈 Monthly bias is bullish — SELL is counter-trend", "risk_warn_monthly_bear_buy": "📉 Monthly bias is bearish — BUY is counter-trend", "risk_warn_weekly_bull_sell": "📈 Weekly trend is bullish — SELL is counter-trend", "risk_warn_weekly_bear_buy": "📉 Weekly trend is bearish — BUY is counter-trend", "risk_warn_rsi_against": "⚠️ RSI divergence is against the setup", "risk_warn_counter_weekly": "⚠️ Counter-weekly setup — focus on TP1 and TP2 only",
-        "signal_expired_price": "Price moved too far from the Smart Entry Zone before activation.", "signal_expired_timeframes": "Timeframe alignment changed, so the setup is no longer valid.", "signal_expired_time": "The signal validity period has expired.", "auto_signal_title": "Auto BTC Signal", "event_in": "in",
+        "signal_expired_price": "Price moved too far from the Smart Entry Zone before activation.", "signal_expired_timeframes": "Market conditions changed and the setup is no longer valid.", "signal_expired_time": "The signal validity period has expired.", "auto_signal_title": "Auto BTC Signal", "event_in": "in",
     }
 }
 
 def t(uid, key):
     lang = user_languages.get(uid, "ar")
     return TEXTS[lang].get(key, key)
+
+
+def display_frame_line(uid, line: str) -> str:
+    """Return a user-facing timeframe line without exposing internal eligibility markers."""
+    lang = user_languages.get(uid, "ar")
+    remove_tokens = [
+        " ✅",
+        " ⚪ " + TEXTS.get("ar", {}).get("low_conf_note", "إشارة ضعيفة"),
+        " ⚪ " + TEXTS.get("en", {}).get("low_conf_note", "Weak signal"),
+        " ⚪ إشارة ضعيفة",
+        " ⚪ Weak signal",
+    ]
+    cleaned = str(line)
+    for token in remove_tokens:
+        cleaned = cleaned.replace(token, "")
+    return cleaned.strip()
 
 def gmt_now():
     return datetime.now(timezone.utc).strftime("%d/%m/%Y  %H:%M")
@@ -747,38 +763,66 @@ def get_btc_price():
 
 
 def get_prices():
+    """
+    Fetch BTC price with strict validation.
+    Priority: Twelve Data -> Binance -> CoinGecko.
+    Never returns a zero/invalid price as a valid market price.
+    """
     if TWELVEDATA_KEY:
         try:
             r1 = requests.get("https://api.twelvedata.com/price",
                 params={"symbol": "BTC/USD", "apikey": TWELVEDATA_KEY}, timeout=10)
-            btc_price = float(r1.json().get("price", 0))
+            j1 = r1.json()
+            if r1.status_code != 200 or "price" not in j1:
+                raise ValueError(f"Invalid Twelve Data price response: {j1}")
+
+            btc_price = float(j1.get("price", 0))
+            if btc_price <= 0:
+                raise ValueError(f"Invalid Twelve Data price value: {btc_price}")
+
             r2 = requests.get("https://api.twelvedata.com/time_series",
                 params={"symbol": "BTC/USD", "interval": "1day", "outputsize": 2,
                         "apikey": TWELVEDATA_KEY}, timeout=10)
-            btc_data = r2.json().get("values", [])
-            btc_change = 0
+            j2 = r2.json()
+            btc_data = j2.get("values", [])
+            btc_change = 0.0
             if len(btc_data) >= 2:
                 prev = float(btc_data[1]["close"])
-                btc_change = round((btc_price - prev) / prev * 100, 2) if prev > 0 else 0
+                if prev > 0:
+                    btc_change = round((btc_price - prev) / prev * 100, 2)
+
             return {"bitcoin": {"usd": btc_price, "usd_24h_change": btc_change}}
         except Exception as e:
-            logger.warning("Twelve Data prices: " + str(e))
+            logger.warning("Twelve Data prices failed, trying Binance: " + str(e))
+
     try:
         r1 = requests.get("https://api.binance.com/api/v3/ticker/price",
             params={"symbol": "BTCUSDT"}, timeout=10)
         r2 = requests.get("https://api.binance.com/api/v3/ticker/24hr",
             params={"symbol": "BTCUSDT"}, timeout=10)
         if r1.status_code == 200 and r2.status_code == 200:
-            price  = float(r1.json()["price"])
-            change = float(r2.json()["priceChangePercent"])
+            price  = float(r1.json().get("price", 0))
+            change = float(r2.json().get("priceChangePercent", 0))
+            if price <= 0:
+                raise ValueError(f"Invalid Binance price value: {price}")
             return {"bitcoin": {"usd": price, "usd_24h_change": change}}
-    except: pass
+        raise ValueError(f"Invalid Binance status codes: {r1.status_code}, {r2.status_code}")
+    except Exception as e:
+        logger.warning("Binance prices failed, trying CoinGecko: " + str(e))
+
     try:
         import time; time.sleep(1)
         r = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true", timeout=10)
         if r.status_code == 200:
-            return r.json()
-    except: pass
+            j = r.json()
+            price = float(j.get("bitcoin", {}).get("usd", 0))
+            if price <= 0:
+                raise ValueError(f"Invalid CoinGecko price value: {price}")
+            return j
+        raise ValueError(f"Invalid CoinGecko status code: {r.status_code}")
+    except Exception as e:
+        logger.warning("CoinGecko prices failed: " + str(e))
+
     return None
 
 
@@ -1535,7 +1579,7 @@ def build_trade_msg(res, uid=0, auto=False):
         lines.append(f"{t(uid,'liquidity_zone')}: ${liq[0]:,.0f}")
 
     for fl in res.get("frame_lines", []):
-        lines.append(fl)
+        lines.append(display_frame_line(uid, fl))
     if res.get("confluence_txt"):
         lines.append(res["confluence_txt"])
 
@@ -1643,7 +1687,7 @@ def build_analysis_msg(res, uid=0):
     lines += fib_lines
     lines += ["", "  🔗 "+t(uid,"confluence")]
     for fl in res.get("frame_lines", []):
-        lines.append("  "+fl)
+        lines.append("  "+display_frame_line(uid, fl))
     lines += [
         "",
         "  📊 "+t(uid,"indicators_section"),
@@ -1877,12 +1921,11 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                     parts.append("📊 " + ("حالة الفريمات" if lang == "ar" else "Timeframe Status"))
                     parts.append("")
                     for fl in fls:
-                        parts.append(f"{fl}")
+                        parts.append(display_frame_line(uid, fl))
                     parts.append("")
 
                 if is_two_frame and majority:
-                    parts.append("⚠️ " + ("توافق جزئي — يمكن عرض فرصة متاحة بمخاطرة أعلى." if lang == "ar" else "Partial alignment — an available higher-risk setup can be shown."))
-                    parts.append("ℹ️ " + t(uid,"qualified_note"))
+                    parts.append("🎯 " + ("يوجد سيناريو بديل متاح، لكنه يحمل مستوى مخاطرة أعلى." if lang == "ar" else "An alternative setup is available, but it carries higher risk."))
                     kb_override = InlineKeyboardMarkup([[
                         InlineKeyboardButton(t(uid,"btn_higher_risk"), callback_data=f"override_trade_{asset}"),
                         InlineKeyboardButton(t(uid,"btn_cancel"), callback_data="override_cancel"),
@@ -1893,7 +1936,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                     if daily_against_short:
                         parts.append("🧭 " + ("الاتجاه اليومي ما زال يعاكس الاتجاه قصير المدى." if lang == "ar" else "The Daily trend is still against the short-term direction."))
                         parts.append("")
-                    parts.append("⚠️ " + ("⏳ يفضل انتظار توافق أقوى قبل الدخول." if lang == "ar" else "The setup was rejected until timeframe alignment improves."))
+                    parts.append("⏳ " + ("يفضل انتظار توافق أقوى قبل الدخول." if lang == "ar" else "Waiting for stronger market alignment before entering."))
                     pending_trade_replace.pop(uid, None)
                     await query.message.reply_text("\n".join(parts))
                 return
@@ -2026,8 +2069,10 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             if not d:
                 await query.message.reply_text(t(uid,"failed")); return
             btc = d.get("bitcoin", {})
-            bp  = btc.get("usd", 0)
-            bc  = btc.get("usd_24h_change", 0)
+            bp  = float(btc.get("usd", 0) or 0)
+            bc  = float(btc.get("usd_24h_change", 0) or 0)
+            if bp <= 0:
+                await query.message.reply_text(t(uid,"failed")); return
             lines = [
                 "",
                 "  "+t(uid,"prices_title"),
@@ -2433,9 +2478,9 @@ def _build_health_report(trade: dict, res: dict, current: float):
     cancel_r = []
 
     if match >= 2:
-        hold_r.append(f"✅ {match}/3 {t(uid,'frames_still_support')}")
+        hold_r.append("✅ " + t(uid,"frames_still_support"))
     if opposite >= 2:
-        cancel_r.append(f"⚠️ {opposite}/3 {t(uid,'frames_oppose')}")
+        cancel_r.append("⚠️ " + t(uid,"frames_oppose"))
     if opposite == 3:
         cancel_r.append(t(uid,"full_reversal"))
 
@@ -2504,7 +2549,7 @@ def _build_health_report(trade: dict, res: dict, current: float):
         f"🧭 {t(uid,'confluence')}",
     ]
     for fl in frame_lines:
-        lines.append(fl)
+        lines.append(display_frame_line(uid, fl))
     lines += ["", "📊 " + t(uid,"risk_review")]
     for h in hold_r:
         lines.append(h)
