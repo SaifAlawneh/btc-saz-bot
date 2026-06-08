@@ -39,6 +39,7 @@ FRAME_WEIGHTS = {"1h": 0.20, "4h": 0.30, "1d": 0.50}
 WEIGHTED_DIRECT_THRESHOLD = 0.80
 WEIGHTED_PARTIAL_THRESHOLD = 0.50
 CANCELLED_SETUPS_FILE = "cancelled_setups.json"
+SAZ_MEMORY_FILE = "saz_decision_memory.json"
 TRADES_FILE       = "active_trades.json"
 STATS_FILE        = "trade_stats.json"
 LANGUAGES_FILE    = "user_languages.json"
@@ -133,6 +134,44 @@ def save_cancelled_setups():
             json.dump(valid, f)
     except Exception as e:
         logger.warning("save_cancelled_setups: " + str(e))
+
+def load_saz_memory():
+    try:
+        with open(SAZ_MEMORY_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return data[-300:]
+        return []
+    except Exception:
+        return []
+
+def save_saz_memory(data):
+    try:
+        with open(SAZ_MEMORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(data[-300:], f, ensure_ascii=False)
+    except Exception as e:
+        logger.warning("save_saz_memory: " + str(e))
+
+def update_saz_memory(snapshot):
+    """Store compact decision snapshots so SazBot can estimate opportunity cost and narrative shifts."""
+    try:
+        data = load_saz_memory()
+        now = now_ts()
+        if data and now - float(data[-1].get("ts", 0)) < 300:
+            data[-1] = snapshot
+        else:
+            data.append(snapshot)
+        save_saz_memory(data)
+    except Exception as e:
+        logger.warning("update_saz_memory: " + str(e))
+
+def recent_saz_memory(hours=48):
+    try:
+        now = now_ts()
+        cutoff = hours * 3600
+        return [x for x in load_saz_memory() if now - float(x.get("ts", 0)) <= cutoff]
+    except Exception:
+        return []
 
 def remember_cancelled_setup(trade_or_asset, direction=None, entry=None, atr=None, reason=""):
     try:
@@ -428,7 +467,7 @@ TEXTS = {
         "summary_bear": "✅ الخلاصة: السوق يميل للهبوط",
         "summary_neutral": "🧭 الخلاصة: السوق في منطقة تردد",
         "prices_title": "💰 الأسعار الحالية", "change_24h": "التغيير 24h",
-        "about_text": "ℹ️ عن SazBot 🟡\n\nوُلد SazBot من شغف حقيقي بالأسواق والتقنية، ليقدّم قراءة أوضح لحركة BTC/USD ويساعدك على متابعة السوق بهدوء ووعي أكبر.\n\nصُمم البوت ليختصر الضوضاء، يراقب تغيرات السوق، ويعرض لك السيناريوهات المهمة بطريقة منظمة وسهلة الفهم.\n\n✨ ما يقدمه لك:\n▫️ قراءة واضحة لاتجاه السوق\n▫️ تنبيهات عند تغيّر ظروف السوق\n▫️ متابعة منظمة للصفقات النشطة\n▫️ عرض مبسّط للمخاطر والمستويات المهمة\n\nSazBot لا يعدك بالربح، لكنه يساعدك على اتخاذ قرارات أكثر هدوءاً وانضباطاً.\n\n⚠️ التحليل تعليمي فقط وليس توصية مالية. إدارة المخاطر مسؤوليتك.",
+        "about_text": "ℹ️ عن SazBot 🟡\n\nوُلد SazBot من شغف حقيقي بالأسواق والتقنية، ليقدّم قراءة أوضح لحركة BTC/USD ويساعدك على متابعة السوق بهدوء ووعي أكبر.\n\nصُمم البوت ليختصر الضوضاء، يراقب تغيرات السوق، ويعرض لك السيناريوهات المهمة بطريقة منظمة وسهلة الفهم.\n\n✨ ما يقدمه لك:\n▫️ قراءة أوضح لاتجاه السوق\n▫️ طبقة قرار ذكية لتصفية الضوضاء وتقييم جودة الفرصة قبل المخاطرة\n▫️ تنبيهات عند تغيّر ظروف السوق\n▫️ متابعة منظمة للصفقات النشطة\n▫️ عرض مبسّط للمخاطر والمستويات المهمة\n\nSazBot لا يعدك بالربح، لكنه يساعدك على اتخاذ قرارات أكثر هدوءاً وانضباطاً.\n\n⚠️ التحليل تعليمي فقط وليس توصية مالية. إدارة المخاطر مسؤوليتك.",
         "ind_rsi_oversold": "RSI تشبع بيعي", "ind_rsi_buy": "RSI منطقة شراء",
         "ind_rsi_overbought": "RSI تشبع شرائي", "ind_rsi_sell": "RSI منطقة بيع",
         "ind_macd_pos": "MACD إيجابي ↗️", "ind_macd_neg": "MACD سلبي ↘️",
@@ -551,7 +590,7 @@ TEXTS = {
         "summary_bear": "✅ Summary: Market leaning bearish",
         "summary_neutral": "🧭 Summary: Market in consolidation",
         "prices_title": "💰 Current Prices", "change_24h": "24h Change",
-        "about_text": "ℹ️ About SazBot 🟡\n\nSazBot was built by someone genuinely passionate about markets and technology, with one goal: to make BTC/USD market reading clearer, calmer, and easier to follow.\n\nThe bot helps reduce noise, monitor changing market conditions, and present important scenarios in a simple, organised format.\n\n✨ What it helps with:\n▫️ Clear market reading\n▫️ Alerts when conditions change\n▫️ Structured tracking for active trades\n▫️ Simple risk and level summaries\n\nSazBot does not promise profit. It helps you approach the market with more discipline and clarity.\n\n⚠️ Educational analysis only — not financial advice. Risk management is your responsibility.",
+        "about_text": "ℹ️ About SazBot 🟡\n\nSazBot was built by someone genuinely passionate about markets and technology, with one goal: to make BTC/USD market reading clearer, calmer, and easier to follow.\n\nThe bot helps reduce noise, monitor changing market conditions, and present important scenarios in a simple, organised format.\n\n✨ What it helps with:\n▫️ Clear market reading\n▫️ A decision layer that filters market noise and evaluates opportunity quality before risk\n▫️ Alerts when conditions change\n▫️ Structured tracking for active trades\n▫️ Simple risk and level summaries\n\nSazBot does not promise profit. It helps you approach the market with more discipline and clarity.\n\n⚠️ Educational analysis only — not financial advice. Risk management is your responsibility.",
         "ind_rsi_oversold": "RSI Oversold", "ind_rsi_buy": "RSI Buy Zone",
         "ind_rsi_overbought": "RSI Overbought", "ind_rsi_sell": "RSI Sell Zone",
         "ind_macd_pos": "MACD Positive ↗️", "ind_macd_neg": "MACD Negative ↘️",
@@ -583,6 +622,352 @@ def display_frame_line(uid, line: str) -> str:
     for token in remove_tokens:
         cleaned = cleaned.replace(token, "")
     return cleaned.strip()
+
+
+# ==================== SazBot 2.0 Decision Intelligence Layer ====================
+def _clamp(v, lo=0, hi=100):
+    try:
+        return max(lo, min(hi, int(round(float(v)))))
+    except Exception:
+        return lo
+
+def _frame_snapshot(res):
+    """Parse public frame lines into a lightweight direction/confidence snapshot."""
+    out = []
+    for raw in res.get("frame_lines", []) or []:
+        line = display_frame_line(0, raw)
+        direction = "NEUTRAL"
+        if "BUY" in line:
+            direction = "BUY"
+        elif "SELL" in line:
+            direction = "SELL"
+        m = re.search(r"\((\d+)\s*%\)", line)
+        conf = int(m.group(1)) if m else 0
+        name = line.split(":")[0].strip()
+        out.append({"name": name, "direction": direction, "conf": conf, "raw": line})
+    return out
+
+def _direction_bias_score(frames):
+    """A user-facing bias proxy, not a disclosed trading rule."""
+    buy = sum(f["conf"] for f in frames if f["direction"] == "BUY")
+    sell = sum(f["conf"] for f in frames if f["direction"] == "SELL")
+    total = buy + sell
+    if total <= 0:
+        return 0, "NEUTRAL"
+    if buy > sell:
+        return _clamp((buy / total) * 100), "BUY"
+    if sell > buy:
+        return _clamp((sell / total) * 100), "SELL"
+    return 50, "NEUTRAL"
+
+def _saz_regime_from_res(res, uid=0):
+    lang = user_languages.get(uid, "ar")
+    rg = res.get("regime", "UNKNOWN")
+    rsi = float(res.get("rsi", 50) or 50)
+    bb = res.get("bb_zone", "mid")
+    ema_bull = bool(res.get("ema_bull"))
+    ema_bear = bool(res.get("ema_bear"))
+    macd_bull = bool(res.get("macd_bull"))
+    if rg == "VOLATILE":
+        return ("سوق عالي التذبذب" if lang == "ar" else "High-volatility market"), "VOLATILE"
+    if rg == "RANGING":
+        return ("سوق عرضي / متردد" if lang == "ar" else "Range / indecisive market"), "RANGE"
+    if ema_bull and macd_bull and rsi < 72:
+        return ("اتجاه صاعد منضبط" if lang == "ar" else "Controlled bullish trend"), "TREND_UP"
+    if ema_bear and not macd_bull and rsi > 28:
+        return ("اتجاه هابط منضبط" if lang == "ar" else "Controlled bearish trend"), "TREND_DOWN"
+    if bb in ("high", "low") and (rsi > 68 or rsi < 32):
+        return ("منطقة اندفاع قد تعكس حركة مفاجئة" if lang == "ar" else "Extended move with reversal risk"), "EXTENDED"
+    return ("منطقة انتظار وتقييم" if lang == "ar" else "Wait-and-evaluate zone"), "WAIT"
+
+def saz_decision_intelligence(res, uid=0, persist=True):
+    """SazBot 2.1: decision intelligence based on live analysis, market memory, and behavioural risk.
+    It does not promise outcomes; it ranks whether the current opportunity deserves attention.
+    """
+    lang = user_languages.get(uid, "ar")
+    frames = _frame_snapshot(res)
+    bias_strength, frame_bias = _direction_bias_score(frames)
+    final = res.get("final", "NEUTRAL")
+    base_conf = float(res.get("base_conf", 0) or 0)
+    rr = float(res.get("rr", 0) or 0)
+    price = float(res.get("price", 0) or 0)
+    entry_low = float(res.get("entry_low", res.get("entry_price", price)) or price or 0)
+    entry_high = float(res.get("entry_high", res.get("entry_price", price)) or price or 0)
+    atr = float(res.get("atr", 0) or 0)
+    rsi = float(res.get("rsi", 50) or 50)
+    weekly = res.get("weekly_trend", "NEUTRAL")
+    monthly = res.get("monthly_bias", "NEUTRAL")
+    regime_txt, regime_code = _saz_regime_from_res(res, uid)
+
+    dist = distance_from_entry_zone_pct(price, entry_low, entry_high) if price and entry_low and entry_high else 0
+    atr_pct = (atr / price * 100) if price and atr else 0
+
+    counter_weekly = (final == "BUY" and weekly == "BEAR") or (final == "SELL" and weekly == "BULL")
+    counter_monthly = (final == "BUY" and monthly == "BEAR") or (final == "SELL" and monthly == "BULL")
+    dirs = [f["direction"] for f in frames if f["direction"] != "NEUTRAL"]
+    mixed_frames = len(set(dirs)) > 1
+
+    quality = 45
+    if final in ("BUY", "SELL"):
+        quality += min(max(base_conf - 50, 0), 35)
+    else:
+        quality -= 8
+    quality += min(max((rr - 1.0) * 10, 0), 15)
+    quality += min(max(bias_strength - 50, 0) * 0.25, 12)
+    if regime_code in ("TREND_UP", "TREND_DOWN"):
+        quality += 8
+    if regime_code in ("RANGE", "WAIT"):
+        quality -= 8
+    if regime_code == "VOLATILE":
+        quality -= 12
+    if counter_weekly:
+        quality -= 16
+    if counter_monthly:
+        quality -= 10
+    if mixed_frames:
+        quality -= 10
+    if dist > 0.8:
+        quality -= min(dist * 8, 16)
+    if rsi > 74 or rsi < 26:
+        quality -= 8
+
+    energy = 35 + min(atr_pct * 18, 35)
+    if res.get("macd_bull") or res.get("ema_bull") or res.get("ema_bear"):
+        energy += 8
+    if regime_code == "VOLATILE":
+        energy += 20
+    if regime_code == "RANGE":
+        energy -= 5
+    energy = _clamp(energy)
+
+    # Crowd / move conviction: concentration of agreement + momentum alignment.
+    conviction = 35 + max(bias_strength - 50, 0) * 0.8
+    if not mixed_frames and frame_bias in ("BUY", "SELL"):
+        conviction += 15
+    if regime_code in ("TREND_UP", "TREND_DOWN"):
+        conviction += 10
+    if regime_code == "RANGE":
+        conviction -= 10
+    conviction = _clamp(conviction)
+
+    # Crowd exhaustion: not sentiment scraping; a live market-behaviour proxy.
+    exhaustion = 0
+    if conviction > 78:
+        exhaustion += 30
+    if energy > 75:
+        exhaustion += 25
+    if rsi > 70 or rsi < 30:
+        exhaustion += 20
+    if dist > 0.8:
+        exhaustion += 15
+    if regime_code == "EXTENDED":
+        exhaustion += 20
+    crowd_exhaustion = _clamp(exhaustion)
+    if crowd_exhaustion >= 70:
+        quality -= 10
+
+    # Market memory: opportunity cost and narrative shift.
+    memory = recent_saz_memory(48)
+    recent_quality = [float(x.get("quality", 0)) for x in memory]
+    recent_avg_quality = sum(recent_quality) / len(recent_quality) if recent_quality else 55
+    recent_strong = len([q for q in recent_quality if q >= 78])
+    last = memory[-1] if memory else {}
+    last_bias = last.get("frame_bias", "NEUTRAL")
+    last_regime = last.get("regime_code", "")
+    narrative_shift_score = 0
+    if last_bias in ("BUY", "SELL") and frame_bias in ("BUY", "SELL") and last_bias != frame_bias:
+        narrative_shift_score += 45
+    if last_regime and last_regime != regime_code:
+        narrative_shift_score += 25
+    if mixed_frames:
+        narrative_shift_score += 20
+    narrative_shift_score = _clamp(narrative_shift_score)
+
+    opportunity_cost = 35
+    if quality < recent_avg_quality - 5:
+        opportunity_cost += 25
+    if recent_strong >= 2 and quality < 75:
+        opportunity_cost += 20
+    if decision_context_bad := (counter_weekly or counter_monthly or mixed_frames):
+        opportunity_cost += 10
+    opportunity_cost = _clamp(opportunity_cost)
+    if opportunity_cost >= 70:
+        quality -= 8
+
+    quality = _clamp(quality)
+
+    regret = 100 - quality
+    if dist > 0.8:
+        regret += min(dist * 10, 20)
+    if counter_weekly or counter_monthly:
+        regret += 15
+    if regime_code == "VOLATILE":
+        regret += 10
+    if mixed_frames:
+        regret += 8
+    if crowd_exhaustion >= 70:
+        regret += 10
+    if opportunity_cost >= 70:
+        regret += 8
+    regret = _clamp(regret)
+
+    if narrative_shift_score >= 65:
+        narrative = "SHIFTING"
+    elif regime_code == "VOLATILE" or crowd_exhaustion >= 75:
+        narrative = "UNSTABLE"
+    elif final in ("BUY", "SELL") and not mixed_frames:
+        narrative = "CONSISTENT"
+    else:
+        narrative = "UNCLEAR"
+
+    if quality >= 80 and regret <= 35 and opportunity_cost < 65:
+        opportunity = "HIGH"
+    elif quality >= 62 and regret <= 55:
+        opportunity = "MEDIUM"
+    else:
+        opportunity = "LOW"
+
+    if quality < 55 or regret > 68 or opportunity_cost >= 78 or crowd_exhaustion >= 85 or (final == "NEUTRAL" and mixed_frames):
+        decision = "STAY_OUT"
+    elif opportunity == "LOW":
+        decision = "WAIT"
+    elif final in ("BUY", "SELL"):
+        decision = "TRADEABLE"
+    else:
+        decision = "WAIT"
+
+    if lang == "ar":
+        labels = {
+            "STAY_OUT": "🚫 ابقَ خارج السوق",
+            "WAIT": "⏳ انتظر فرصة أنظف",
+            "TRADEABLE": "🎯 فرصة قابلة للمتابعة",
+            "HIGH": "مرتفعة",
+            "MEDIUM": "متوسطة",
+            "LOW": "منخفضة",
+            "SHIFTING": "الرواية تتغير بين الفريمات",
+            "UNSTABLE": "السوق سريع التغير",
+            "CONSISTENT": "الرواية متماسكة",
+            "UNCLEAR": "الرواية غير واضحة",
+        }
+        exhaustion_txt = "مرتفع" if crowd_exhaustion >= 70 else "متوسط" if crowd_exhaustion >= 45 else "منخفض"
+        opp_cost_txt = "مرتفع" if opportunity_cost >= 70 else "متوسط" if opportunity_cost >= 45 else "منخفض"
+        if decision == "STAY_OUT":
+            story = "السوق لا يقدم فرصة نظيفة حالياً. حماية رأس المال أفضل من مطاردة حركة غير مكتملة."
+        elif decision == "WAIT":
+            story = "هناك حركة في السوق، لكن الانتظار يمنح أفضلية أعلى من الاستعجال."
+        else:
+            story = "الفرصة قابلة للمتابعة، بشرط احترام منطقة الدخول وإدارة المخاطر."
+    else:
+        labels = {
+            "STAY_OUT": "🚫 Stay out",
+            "WAIT": "⏳ Wait for a cleaner setup",
+            "TRADEABLE": "🎯 Tradeable setup",
+            "HIGH": "High",
+            "MEDIUM": "Medium",
+            "LOW": "Low",
+            "SHIFTING": "Narrative is shifting across timeframes",
+            "UNSTABLE": "Market is changing quickly",
+            "CONSISTENT": "Narrative is consistent",
+            "UNCLEAR": "Narrative is unclear",
+        }
+        exhaustion_txt = "High" if crowd_exhaustion >= 70 else "Medium" if crowd_exhaustion >= 45 else "Low"
+        opp_cost_txt = "High" if opportunity_cost >= 70 else "Medium" if opportunity_cost >= 45 else "Low"
+        if decision == "STAY_OUT":
+            story = "The market is not offering a clean opportunity right now. Protecting capital is better than chasing an incomplete move."
+        elif decision == "WAIT":
+            story = "There is movement, but waiting offers a better edge than rushing."
+        else:
+            story = "The setup is worth monitoring, provided entry discipline and risk management are respected."
+
+    snapshot = {
+        "ts": now_ts(), "quality": quality, "energy": energy, "regret": regret,
+        "conviction": conviction, "frame_bias": frame_bias, "regime_code": regime_code,
+        "narrative": narrative, "decision": decision,
+    }
+    if persist:
+        update_saz_memory(snapshot)
+
+    return {
+        "quality": quality,
+        "energy": energy,
+        "regret": regret,
+        "conviction": conviction,
+        "crowd_exhaustion": crowd_exhaustion,
+        "crowd_exhaustion_text": exhaustion_txt,
+        "opportunity_cost": opportunity_cost,
+        "opportunity_cost_text": opp_cost_txt,
+        "narrative_shift_score": narrative_shift_score,
+        "regime_text": regime_txt,
+        "decision": decision,
+        "decision_text": labels[decision],
+        "opportunity": opportunity,
+        "opportunity_text": labels[opportunity],
+        "narrative": narrative,
+        "narrative_text": labels[narrative],
+        "story": story,
+    }
+
+
+def saz_decision_gate(res, uid=0):
+    """Final safety gate: blocks technically valid trades when the decision layer says the opportunity is not clean enough."""
+    try:
+        if not res or res.get("final") not in ("BUY", "SELL"):
+            return res
+        m = saz_decision_intelligence(res, uid, persist=False)
+        if m["decision"] == "STAY_OUT" or m["quality"] < 52 or m["regret"] > 78:
+            blocked = dict(res)
+            blocked["blocked_by_decision_layer"] = True
+            blocked["decision_metrics"] = m
+            blocked["majority"] = None
+            blocked["final"] = "NEUTRAL"
+            blocked["base_conf"] = 0
+            blocked["tp1"] = blocked["tp2"] = blocked["tp3"] = blocked["sl"] = 0
+            blocked["rr"] = 0
+            blocked["confluence_txt"] = ""
+            return blocked
+        return res
+    except Exception as e:
+        logger.warning("saz_decision_gate: " + str(e))
+        return res
+
+def saz_intelligence_block(res, uid=0, compact=False):
+    lang = user_languages.get(uid, "ar")
+    m = saz_decision_intelligence(res, uid)
+    if lang == "ar":
+        lines = [
+            "🧠 SazBot 2.1 | طبقة القرار",
+            f"🧭 حالة السوق: {m['regime_text']}",
+            f"📊 جودة الفرصة: {m['quality']}/100",
+            f"⚡ طاقة السوق: {m['energy']}/100",
+            f"🧠 قناعة الحركة: {m['conviction']}/100",
+            f"🪫 إرهاق الحركة: {m['crowd_exhaustion_text']}",
+            f"⏳ تكلفة الاستعجال: {m['opportunity_cost_text']}",
+            f"⚠️ خطر الندم: {m['regret']}/100",
+            f"🎯 القرار: {m['decision_text']}",
+        ]
+        if not compact:
+            lines += [
+                f"📖 قراءة السوق: {m['narrative_text']}",
+                m["story"],
+            ]
+    else:
+        lines = [
+            "🧠 SazBot 2.1 | Decision Layer",
+            f"🧭 Market State: {m['regime_text']}",
+            f"📊 Opportunity Quality: {m['quality']}/100",
+            f"⚡ Market Energy: {m['energy']}/100",
+            f"🧠 Move Conviction: {m['conviction']}/100",
+            f"🪫 Move Exhaustion: {m['crowd_exhaustion_text']}",
+            f"⏳ Opportunity Cost: {m['opportunity_cost_text']}",
+            f"⚠️ Regret Risk: {m['regret']}/100",
+            f"🎯 Decision: {m['decision_text']}",
+        ]
+        if not compact:
+            lines += [
+                f"📖 Market Story: {m['narrative_text']}",
+                m["story"],
+            ]
+    return lines
 
 def gmt_now():
     return datetime.now(timezone.utc).strftime("%d/%m/%Y  %H:%M")
@@ -1477,7 +1862,7 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
     elif warn_count <= 2: overall_risk = t(uid, "risk_med")
     else:                 overall_risk = t(uid, "risk_high")
 
-    return {
+    result = {
         "final": final, "asset": asset,
         "risk_warnings": risk_warnings, "overall_risk": overall_risk,
         "weekly_trend": weekly_trend, "regime": regime, "regime_strength": regime_strength,
@@ -1501,6 +1886,7 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
         "tf_ar": "1 ساعة", "tf_en": "1 Hour",
         "hold_ar": "2 — 8 ساعات", "hold_en": "2 — 8 Hours",
     }
+    return saz_decision_gate(result, uid)
 
 
 # ==================== بناء الرسائل ====================
@@ -1531,6 +1917,10 @@ def build_trade_msg(res, uid=0, auto=False):
         lines.append(f"🔥 {t(uid,'confidence')}: {confidence}%")
     lines += [
         f"💵 {t(uid,'current_price')}: ${res['price']:,.2f}",
+        "",
+    ]
+    lines += saz_intelligence_block(res, uid, compact=True)
+    lines += [
         "",
         f"🎯 {t(uid,'entry_zone')}",
         entry_zone_txt,
@@ -1681,6 +2071,10 @@ def build_analysis_msg(res, uid=0):
         "  💵 "+t(uid,"current_price") + ":  $"+"{:,.2f}".format(res["price"]),
         "  🟢 "+support_label+":      $"+"{:,.2f}".format(res["support"]),
         "  🔴 "+resistance_label+":   $"+"{:,.2f}".format(res["resistance"]),
+        "",
+    ]
+    lines += ["  " + x for x in saz_intelligence_block(res, uid, compact=False)]
+    lines += [
         "",
         "  📐 "+fib_title,
     ]
@@ -2545,6 +2939,10 @@ def _build_health_report(trade: dict, res: dict, current: float):
     lines += [
         f"💵 {t(uid,'current_price')}: ${current:,.2f}",
         f"📏 {t(uid,'distance')}: {dist:.2f}% {dist_dir} {t(uid,'entry_zone_word')}",
+        "",
+    ]
+    lines += saz_intelligence_block(res, uid, compact=True)
+    lines += [
         "",
         f"🧭 {t(uid,'confluence')}",
     ]
