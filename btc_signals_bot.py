@@ -41,6 +41,7 @@ WEIGHTED_DIRECT_THRESHOLD = 0.80
 WEIGHTED_PARTIAL_THRESHOLD = 0.50
 CANCELLED_SETUPS_FILE = "cancelled_setups.json"
 SAZ_MEMORY_FILE = "saz_decision_memory.json"
+BIAS_ALERT_STATE_FILE = "bias_alert_state.json"
 TRADES_FILE       = "active_trades.json"
 STATS_FILE        = "trade_stats.json"
 LANGUAGES_FILE    = "user_languages.json"
@@ -58,7 +59,22 @@ trade_counter         = 0
 _cache                = {}
 _econ_cache           = {"data": None, "ts": 0}
 _news_notified        = {}
-last_bias_alert_state = {}
+
+def load_bias_alert_state():
+    try:
+        with open(BIAS_ALERT_STATE_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def save_bias_alert_state():
+    try:
+        with open(BIAS_ALERT_STATE_FILE, "w") as f:
+            json.dump(last_bias_alert_state, f, ensure_ascii=False)
+    except Exception as e:
+        logger.warning("save_bias_alert_state: " + str(e))
+
+last_bias_alert_state = load_bias_alert_state()
 cancelled_setups       = []
 
 # ✅ FIX 1: asyncio lock لحماية active_trades من race conditions
@@ -3751,9 +3767,9 @@ def saz_directional_bias(res):
         logger.warning("saz_directional_bias failed: " + str(e))
         return {"bias": "NEUTRAL", "confidence": 0, "quality": 0, "risk": 100}
 
-def build_early_bias_alert(uid, res, trigger_label, price):
+def build_early_bias_alert(uid, res, trigger_label, price, bias_data=None):
     lang = user_languages.get(uid, "ar")
-    b = saz_directional_bias(res)
+    b = bias_data or saz_directional_bias(res)
     bias = b["bias"]
     conf = int(b["confidence"])
     metrics = res.get("decision_metrics") or saz_decision_intelligence(res, uid, persist=False, refresh=False)
@@ -3835,6 +3851,7 @@ def should_send_bias_alert(uid, bias, confidence, trigger_key):
     if same and now - float(old.get("ts", 0)) < 45 * 60:
         return False
     last_bias_alert_state[key] = {"bias": bias, "confidence": confidence, "trigger": trigger_key, "ts": now}
+    save_bias_alert_state()
     return True
 
 
@@ -3928,7 +3945,7 @@ async def send_smart_alerts(context):
             if not should_send_bias_alert(user_id, b["bias"], b["confidence"], trigger_key):
                 continue
 
-            msg = build_early_bias_alert(user_id, res, label, price)
+            msg = build_early_bias_alert(user_id, res, label, price, bias_data=b)
             try:
                 await context.bot.send_message(chat_id=user_id, text=msg)
             except Exception:
