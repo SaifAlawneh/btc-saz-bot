@@ -58,12 +58,24 @@ trade_counter         = 0
 _cache                = {}
 _econ_cache           = {"data": None, "ts": 0}
 _news_notified        = {}
+last_bias_alert_state = {}
 cancelled_setups       = []
 
 # ✅ FIX 1: asyncio lock لحماية active_trades من race conditions
-_trades_lock = asyncio.Lock()
+_trades_lock = None
 
-ALLOWED_USERS = {8490817794, 1548286220}
+def get_trades_lock():
+    """Create the asyncio lock lazily inside the running event loop."""
+    global _trades_lock
+    if _trades_lock is None:
+        _trades_lock = asyncio.Lock()
+    return _trades_lock
+
+ALLOWED_USERS_ENV = os.environ.get("ALLOWED_USERS", "")
+if ALLOWED_USERS_ENV.strip():
+    ALLOWED_USERS = {int(x.strip()) for x in ALLOWED_USERS_ENV.split(",") if x.strip().isdigit()}
+else:
+    ALLOWED_USERS = {8490817794, 1548286220}
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN is missing. Please set it as an environment variable.")
@@ -727,7 +739,7 @@ def saz_decision_intelligence(res, uid=0, persist=True, refresh=False):
     if regime_code in ("RANGE", "WAIT"):
         quality -= 8
     if regime_code == "VOLATILE":
-        quality -= 12
+        quality -= 18
     if counter_weekly:
         quality -= 16
     if counter_monthly:
@@ -796,7 +808,7 @@ def saz_decision_intelligence(res, uid=0, persist=True, refresh=False):
         opportunity_cost += 25
     if recent_strong >= 2 and quality < 75:
         opportunity_cost += 20
-    if decision_context_bad := (counter_weekly or counter_monthly or mixed_frames):
+    if counter_weekly or counter_monthly or mixed_frames:
         opportunity_cost += 10
     opportunity_cost = _clamp(opportunity_cost)
     if opportunity_cost >= 70:
@@ -810,7 +822,7 @@ def saz_decision_intelligence(res, uid=0, persist=True, refresh=False):
     if counter_weekly or counter_monthly:
         regret += 15
     if regime_code == "VOLATILE":
-        regret += 10
+        regret += 16
     if mixed_frames:
         regret += 8
     if crowd_exhaustion >= 70:
@@ -2533,7 +2545,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                     reply_markup=confirm_keyboard(uid))
             else:
                 # ✅ FIX 1: lock عند التعديل على active_trades
-                async with _trades_lock:
+                async with get_trades_lock():
                     active_trades.append(new_trade)
                     if res["asset"] == "BTC":
                         active_btc_trade["data"] = new_trade
@@ -2548,7 +2560,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             old_tr = pending["old"]
             res_old = pending["res"]
             new_tr  = pending["new"]
-            async with _trades_lock:
+            async with get_trades_lock():
                 if old_tr in active_trades:
                     active_trades.remove(old_tr)
                 active_trades.append(new_tr)
@@ -2564,7 +2576,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
         if pending:
             new_tr  = pending["new"]
             res_stored = pending["res"]
-            async with _trades_lock:
+            async with get_trades_lock():
                 active_trades.append(new_tr)
                 if new_tr["asset"] == "BTC":
                     active_btc_trade["data"] = new_tr
@@ -2715,7 +2727,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
         pending_trade_replace.pop(trade_id, None)
         trade = next((tr for tr in active_trades if tr.get("id") == trade_id), None)
         if trade:
-            async with _trades_lock:
+            async with get_trades_lock():
                 active_trades.remove(trade)
                 remember_cancelled_setup(trade, reason="manual_cancel")
                 save_trades()
@@ -2748,7 +2760,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 "frame_snapshot": sig_frame_snapshot,
                 "entry_update_sent": False,
             }
-            async with _trades_lock:
+            async with get_trades_lock():
                 active_trades.append(new_trade)
                 if res_sig["asset"] == "BTC":
                     active_btc_trade["data"] = new_trade
@@ -2772,7 +2784,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
         if trade and "pending_update" in trade:
             upd = trade["pending_update"]
             old_entry = trade["entry"]
-            async with _trades_lock:
+            async with get_trades_lock():
                 trade["entry"]  = upd["entry"]
                 trade["sl"]     = upd["sl"]
                 trade["tp1"]    = upd["tp1"]
@@ -2816,7 +2828,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
         trade_id = int(data.split("_")[2])
         trade = next((tr for tr in active_trades if tr.get("id") == trade_id), None)
         if trade:
-            async with _trades_lock:
+            async with get_trades_lock():
                 active_trades.remove(trade)
                 save_trades()
             await query.message.reply_text(t(uid,"trade_closed")+" #"+str(trade_id))
@@ -2970,7 +2982,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 "last_frame_alert": "", "last_active_alert": "",
                 "forced": True,
             }
-            async with _trades_lock:
+            async with get_trades_lock():
                 active_trades.append(nt)
                 if asset_ov == "BTC": active_btc_trade["data"] = nt
                 save_trades()
@@ -3158,7 +3170,7 @@ async def check_pending_trades(context):
                     ).replace(tzinfo=timezone.utc)
                     age_h = (n - open_dt.timestamp()) / 3600
                     if age_h > PENDING_MAX_AGE:
-                        async with _trades_lock:
+                        async with get_trades_lock():
                             if trade in active_trades:
                                 active_trades.remove(trade)
                             save_trades()
@@ -3177,7 +3189,7 @@ async def check_pending_trades(context):
                     local_res = full_analysis("BTC", chat_id) or res
                     msg, nc = _build_health_report(trade, local_res, cur)
                     if status == "pending":
-                        async with _trades_lock:
+                        async with get_trades_lock():
                             if trade in active_trades:
                                 active_trades.remove(trade)
                             save_trades()
@@ -3208,7 +3220,7 @@ async def check_pending_trades(context):
                     if status == "pending":
                         if nc >= 2:
                             # Auto-cancel: 2+ strong reasons against
-                            async with _trades_lock:
+                            async with get_trades_lock():
                                 if trade in active_trades:
                                     active_trades.remove(trade)
                                 save_trades()
@@ -3499,7 +3511,7 @@ async def _monitor_active_trades(context):
                                      f"{t(chat_id,'price_reached_entry')}\n\n"
                                      f"🛑 SL: ${fresh['sl']:,.2f}\n"
                                      f"🎯 TP1: ${fresh['tp1']:,.2f} | TP2: ${fresh['tp2']:,.2f} | TP3: ${fresh['tp3']:,.2f}")
-                            async with _trades_lock:
+                            async with get_trades_lock():
                                 save_trades()
                     except Exception as e:
                         logger.error(f"Pending arrival: {e}")
@@ -3646,7 +3658,7 @@ async def _monitor_active_trades(context):
             logger.error(f"Monitor trade #{trade.get('id','?')}: {e}")
 
     if to_remove:
-        async with _trades_lock:
+        async with get_trades_lock():
             for tr in to_remove:
                 if tr in active_trades: active_trades.remove(tr)
             save_trades()
@@ -3666,7 +3678,170 @@ async def monitor_btc(context):
     await _monitor_active_trades(context)
 
 
+
+# ==================== Early Bias Alerts ====================
+def saz_directional_bias(res):
+    """Return directional bias based on the current SazBot analysis and DNA metrics.
+    This is an early-bias engine, not a trade signal.
+    """
+    try:
+        metrics = res.get("decision_metrics") or saz_decision_intelligence(res, 0, persist=False, refresh=False)
+        quality = float(metrics.get("quality", 0))
+        risk = float(metrics.get("regret", 100))
+        frames = _frame_snapshot(res)
+        buy_score = sell_score = 0.0
+
+        for f in frames:
+            d = f.get("direction", "NEUTRAL")
+            c = float(f.get("conf", 0) or 0)
+            name = f.get("name", "")
+            # Public names vary by language, so infer weight from name text.
+            if "Daily" in name or "يومي" in name:
+                w = 0.50
+            elif "4H" in name or "4 ساعات" in name:
+                w = 0.30
+            elif "1H" in name or "ساعة" in name:
+                w = 0.20
+            else:
+                w = 0.10
+            if d == "BUY":
+                buy_score += w * c
+            elif d == "SELL":
+                sell_score += w * c
+
+        # Higher-timeframe bias nudges, without exposing internal rules.
+        if res.get("weekly_trend") == "BULL":
+            buy_score += 8
+        elif res.get("weekly_trend") == "BEAR":
+            sell_score += 8
+        if res.get("monthly_bias") == "BULL":
+            buy_score += 5
+        elif res.get("monthly_bias") == "BEAR":
+            sell_score += 5
+
+        # Momentum structure nudges.
+        if res.get("macd_bull"):
+            buy_score += 4
+        else:
+            sell_score += 2
+        if res.get("ema_bull"):
+            buy_score += 5
+        elif res.get("ema_bear"):
+            sell_score += 5
+
+        total = buy_score + sell_score
+        if total <= 0:
+            return {"bias": "NEUTRAL", "confidence": 0, "quality": quality, "risk": risk}
+        if buy_score > sell_score:
+            bias = "BUY"
+            confidence = int(round((buy_score / total) * 100))
+        elif sell_score > buy_score:
+            bias = "SELL"
+            confidence = int(round((sell_score / total) * 100))
+        else:
+            bias = "NEUTRAL"
+            confidence = 50
+
+        # DNA quality limits enthusiasm.
+        if quality < 45 or risk > 82:
+            bias = "NEUTRAL"
+            confidence = min(confidence, 55)
+        return {"bias": bias, "confidence": confidence, "quality": quality, "risk": risk}
+    except Exception as e:
+        logger.warning("saz_directional_bias failed: " + str(e))
+        return {"bias": "NEUTRAL", "confidence": 0, "quality": 0, "risk": 100}
+
+def build_early_bias_alert(uid, res, trigger_label, price):
+    lang = user_languages.get(uid, "ar")
+    b = saz_directional_bias(res)
+    bias = b["bias"]
+    conf = int(b["confidence"])
+    metrics = res.get("decision_metrics") or saz_decision_intelligence(res, uid, persist=False, refresh=False)
+    decision = metrics.get("decision_text", "")
+    quality = int(metrics.get("quality", 0))
+
+    if lang == "ar":
+        if bias == "BUY":
+            bias_line = f"📈 أفضلية الاتجاه: BUY ({conf}%)"
+            read = "قراءة SazBot تميل للصعود، لكن الصفقة لم تكتمل بعد."
+        elif bias == "SELL":
+            bias_line = f"📉 أفضلية الاتجاه: SELL ({conf}%)"
+            read = "قراءة SazBot تميل للهبوط، لكن الصفقة لم تكتمل بعد."
+        else:
+            bias_line = "↔️ أفضلية الاتجاه: محايد"
+            read = "لا توجد أفضلية واضحة للشراء أو البيع حالياً."
+
+        return "\n".join([
+            "⚡ SazBot 2.2 | تنبيه مبكر",
+            "",
+            f"💵 السعر الحالي: ${price:,.2f}",
+            "",
+            "📌 ماذا يحدث؟",
+            trigger_label,
+            "",
+            "🧠 قراءة SazBot:",
+            read,
+            bias_line,
+            f"📊 جودة السوق: {quality}/100",
+            "",
+            "🎯 القرار:",
+            decision,
+            "⏳ بانتظار اكتمال شروط الصفقة قبل إصدار إشارة دخول.",
+            "",
+            f"🕐 {t(uid,'updated_gmt')}: {gmt_now()}",
+            t(uid,"educational_footer"),
+        ])
+
+    else:
+        if bias == "BUY":
+            bias_line = f"📈 Directional Bias: BUY ({conf}%)"
+            read = "SazBot currently leans bullish, but a trade setup is not confirmed yet."
+        elif bias == "SELL":
+            bias_line = f"📉 Directional Bias: SELL ({conf}%)"
+            read = "SazBot currently leans bearish, but a trade setup is not confirmed yet."
+        else:
+            bias_line = "↔️ Directional Bias: Neutral"
+            read = "There is no clear edge for BUY or SELL at the moment."
+
+        return "\n".join([
+            "⚡ SazBot 2.2 | Early Bias Alert",
+            "",
+            f"💵 Current Price: ${price:,.2f}",
+            "",
+            "📌 What is happening?",
+            trigger_label,
+            "",
+            "🧠 SazBot Read:",
+            read,
+            bias_line,
+            f"📊 Market Quality: {quality}/100",
+            "",
+            "🎯 Decision:",
+            decision,
+            "⏳ Waiting for full trade conditions before issuing an entry signal.",
+            "",
+            f"🕐 {t(uid,'updated_gmt')}: {gmt_now()}",
+            t(uid,"educational_footer"),
+        ])
+
+def should_send_bias_alert(uid, bias, confidence, trigger_key):
+    """Avoid spamming the same early-bias alert."""
+    if bias == "NEUTRAL" and confidence < 60:
+        return False
+    now = now_ts()
+    key = str(uid)
+    old = last_bias_alert_state.get(key, {})
+    same = old.get("bias") == bias and old.get("trigger") == trigger_key
+    if same and now - float(old.get("ts", 0)) < 45 * 60:
+        return False
+    last_bias_alert_state[key] = {"bias": bias, "confidence": confidence, "trigger": trigger_key, "ts": now}
+    return True
+
+
 async def send_smart_alerts(context):
+    """Smart alerts now act as Early Bias Alerts.
+    They describe what changed, SazBot's preferred direction if any, and whether a real trade signal is ready.
+    """
     try:
         df = get_data("BTC", days=7, interval="hourly")
         if df is None or len(df) < 30:
@@ -3677,23 +3852,47 @@ async def send_smart_alerts(context):
         rsi   = safe(last["RSI"], 50)
         fib_levels, _, _, _ = calculate_fibonacci(df)
 
-        def build_alerts(uid):
-            lang = user_languages.get(uid, "ar")
-            alerts = []
-            if rsi < 28:
-                alerts.append((f"🔴 RSI تشبع بيعي قوي ({round(rsi,1)}) — فرصة شراء محتملة!" if lang == "ar" else f"🔴 RSI strongly oversold ({round(rsi,1)}) — possible buy pressure!"))
-            elif rsi > 72:
-                alerts.append((f"🔴 RSI تشبع شرائي قوي ({round(rsi,1)}) — احتمال انعكاس!" if lang == "ar" else f"🔴 RSI strongly overbought ({round(rsi,1)}) — possible reversal!"))
-            for pct, level in fib_levels.items():
-                if abs(price - level) / price * 100 < 0.3:
-                    alerts.append((f"📐 السعر عند مستوى Fibonacci {pct}% (${level:,.2f}) — مستوى مهم!" if lang == "ar" else f"📐 Price is near Fibonacci {pct}% (${level:,.2f}) — key level!"))
-                    break
-            bb_u = safe(last["BB_U"], price * 1.02)
-            bb_l = safe(last["BB_L"], price * 0.98)
-            if (bb_u - bb_l) / bb_u * 100 < 2:
-                alerts.append(("💥 Bollinger Squeeze — حركة قوية قادمة!" if lang == "ar" else "💥 Bollinger Squeeze — strong move may be coming!"))
-            return alerts
+        # Pull full SazBot analysis so alerts use the same DNA and decision engine.
+        res = full_analysis("BTC", 0)
+        if not res:
+            return
 
+        # Build high-level triggers without exposing indicator internals.
+        bb_u = safe(last["BB_U"], price * 1.02)
+        bb_l = safe(last["BB_L"], price * 0.98)
+        squeeze = (bb_u - bb_l) / bb_u * 100 < 2
+
+        def trigger_for(uid):
+            lang = user_languages.get(uid, "ar")
+            trigger_key = None
+            label = None
+
+            if squeeze:
+                trigger_key = "compression"
+                label = ("السوق يتحرك داخل نطاق ضيق، وقد تزداد الحركة خلال الفترة القادمة."
+                         if lang == "ar" else
+                         "The market is moving inside a tight range, and volatility may expand soon.")
+            elif rsi < 28:
+                trigger_key = "oversold"
+                label = ("السعر تحت ضغط بيعي واضح وقد تظهر محاولة ارتداد، لكن ننتظر تأكيداً."
+                         if lang == "ar" else
+                         "Price is under clear selling pressure and may attempt a rebound, but confirmation is still needed.")
+            elif rsi > 72:
+                trigger_key = "overbought"
+                label = ("السعر ممتد للأعلى وقد يظهر تباطؤ أو انعكاس، لكن ننتظر تأكيداً."
+                         if lang == "ar" else
+                         "Price is extended to the upside and may slow or reverse, but confirmation is still needed.")
+            else:
+                for pct, level in fib_levels.items():
+                    if abs(price - level) / price * 100 < 0.3:
+                        trigger_key = "key_level"
+                        label = (f"السعر يقترب من مستوى فني مهم قرب ${level:,.2f}."
+                                 if lang == "ar" else
+                                 f"Price is approaching an important technical area near ${level:,.2f}.")
+                        break
+            return trigger_key, label
+
+        # Economic event alert remains separate.
         if not active_trades:
             try:
                 ev30 = get_upcoming_event(hours=0.5)
@@ -3721,14 +3920,17 @@ async def send_smart_alerts(context):
                 pass
 
         for user_id in ALLOWED_USERS:
-            alerts = build_alerts(user_id)
-            if not alerts:
+            trigger_key, label = trigger_for(user_id)
+            if not trigger_key or not label:
                 continue
-            msg = [t(user_id,"smart_market_alert"), "", f"💵 {t(user_id,'current_price')}: ${price:,.2f}", ""]
-            msg.extend(alerts)
-            msg += ["", "🕐 " + t(user_id,"updated_gmt") + ": " + gmt_now(), t(user_id,"educational_footer")]
+
+            b = saz_directional_bias(res)
+            if not should_send_bias_alert(user_id, b["bias"], b["confidence"], trigger_key):
+                continue
+
+            msg = build_early_bias_alert(user_id, res, label, price)
             try:
-                await context.bot.send_message(chat_id=user_id, text="\n".join(msg))
+                await context.bot.send_message(chat_id=user_id, text=msg)
             except Exception:
                 pass
     except Exception as e:
