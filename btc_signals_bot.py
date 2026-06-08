@@ -2,7 +2,7 @@ import os
 import logging
 import asyncio
 import requests
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import pandas as pd
 import numpy as np
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -28,6 +28,16 @@ CACHE_TTL         = 900
 PENDING_MAX_AGE   = 48      # hours: stale pending auto-cancels after this
 OVERRIDE_MIN_QUALIFIED_FRAMES = 2  # Higher-risk override still requires 2 qualified frames in the same direction
 OVERRIDE_MAX_DISTANCE_FROM_ZONE_PCT = 1.0  # Block override if price is too far beyond the entry zone
+# Decision-engine upgrades
+MAX_DISTANCE_FROM_ZONE_PCT = 1.5  # Pending setup expires when price moves too far away from the smart entry zone
+SETUP_COOLDOWN_HOURS = 6          # Do not re-offer the same cancelled setup during this window
+DAILY_STRONG_CONF = 70            # Strong daily trend blocks counter-trend overrides
+OVERRIDE_MIN_AVG_CONF = 65        # Higher-risk scenario needs enough average confidence
+FRAME_THRESHOLDS = {"1h": 60, "4h": 60, "1d": 65}
+FRAME_WEIGHTS = {"1h": 0.20, "4h": 0.30, "1d": 0.50}
+WEIGHTED_DIRECT_THRESHOLD = 0.80
+WEIGHTED_PARTIAL_THRESHOLD = 0.50
+CANCELLED_SETUPS_FILE = "cancelled_setups.json"
 TRADES_FILE       = "active_trades.json"
 STATS_FILE        = "trade_stats.json"
 LANGUAGES_FILE    = "user_languages.json"
@@ -45,6 +55,7 @@ trade_counter         = 0
 _cache                = {}
 _econ_cache           = {"data": None, "ts": 0}
 _news_notified        = {}
+cancelled_setups       = []
 
 # ✅ FIX 1: asyncio lock لحماية active_trades من race conditions
 _trades_lock = asyncio.Lock()
@@ -69,6 +80,124 @@ def entry_zone_from_trade(entry, atr):
 def format_entry_zone(entry, atr):
     low, high = entry_zone_from_trade(entry, atr)
     return f"${low:,.2f} — ${high:,.2f}"
+
+
+def _setup_key(asset, direction, entry, atr):
+    """Bucket similar setups so cancelled ideas are not offered again immediately."""
+    try:
+        width = max(float(atr or 0), float(entry) * 0.005)
+        bucket = round(float(entry) / width)
+        return f"{asset}_{direction}_{bucket}"
+    except Exception:
+        return f"{asset}_{direction}_{round(float(entry), -2)}"
+
+def load_cancelled_setups():
+    try:
+        with open(CANCELLED_SETUPS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        now = datetime.now(timezone.utc).timestamp()
+        cutoff = SETUP_COOLDOWN_HOURS * 3600
+        return [x for x in data if now - float(x.get("ts", 0)) <= cutoff]
+    except Exception:
+        return []
+
+def save_cancelled_setups():
+    try:
+        now = datetime.now(timezone.utc).timestamp()
+        cutoff = SETUP_COOLDOWN_HOURS * 3600
+        valid = [x for x in cancelled_setups if now - float(x.get("ts", 0)) <= cutoff]
+        cancelled_setups[:] = valid
+        with open(CANCELLED_SETUPS_FILE, "w", encoding="utf-8") as f:
+            json.dump(valid, f)
+    except Exception as e:
+        logger.warning("save_cancelled_setups: " + str(e))
+
+def remember_cancelled_setup(trade_or_asset, direction=None, entry=None, atr=None, reason=""):
+    try:
+        if isinstance(trade_or_asset, dict):
+            asset = trade_or_asset.get("asset", "BTC")
+            direction = trade_or_asset.get("direction", direction)
+            entry = trade_or_asset.get("entry", entry)
+            atr = trade_or_asset.get("atr", atr)
+        else:
+            asset = trade_or_asset
+        if not direction or not entry:
+            return
+        key = _setup_key(asset, direction, entry, atr)
+        cancelled_setups.append({"key": key, "ts": datetime.now(timezone.utc).timestamp(), "reason": reason})
+        save_cancelled_setups()
+    except Exception as e:
+        logger.warning("remember_cancelled_setup: " + str(e))
+
+def is_recently_cancelled(asset, direction, entry, atr):
+    try:
+        key = _setup_key(asset, direction, entry, atr)
+        now = datetime.now(timezone.utc).timestamp()
+        cutoff = SETUP_COOLDOWN_HOURS * 3600
+        for x in list(cancelled_setups):
+            if x.get("key") == key and now - float(x.get("ts", 0)) <= cutoff:
+                return True
+        return False
+    except Exception:
+        return False
+
+def frame_threshold(label):
+    return FRAME_THRESHOLDS.get(label, FRAME_MIN_CONFIDENCE)
+
+def frame_strength(direction, conf):
+    if direction == "NEUTRAL":
+        return "NEUTRAL"
+    if conf >= 75:
+        return "Strong " + direction
+    return direction
+
+def weighted_frame_decision(results, relaxed=False):
+    """Weighted MTF decision: Daily leads, 4H confirms, 1H times entry."""
+    buy_weight = sell_weight = 0.0
+    buy_frames = sell_frames = 0
+    buy_conf = []
+    sell_conf = []
+    for label, r in results.items():
+        direction = r.get("direction", "NEUTRAL")
+        conf = r.get("conf", 0)
+        if direction == "NEUTRAL" or conf < frame_threshold(label):
+            continue
+        w = FRAME_WEIGHTS.get(label, 0.0)
+        if direction == "BUY":
+            buy_weight += w; buy_frames += 1; buy_conf.append(conf)
+        elif direction == "SELL":
+            sell_weight += w; sell_frames += 1; sell_conf.append(conf)
+    daily = results.get("1d", {})
+    daily_dir = daily.get("direction", "NEUTRAL")
+    daily_conf = daily.get("conf", 0)
+    majority = None
+    final = "NEUTRAL"
+    frames_conf = 0
+    conf_txt_key = "no_confluence"
+    diff = buy_weight - sell_weight
+    if abs(diff) < 1e-9:
+        return final, majority, frames_conf, conf_txt_key, buy_frames, sell_frames, buy_weight, sell_weight
+    candidate = "BUY" if diff > 0 else "SELL"
+    support_frames = buy_frames if candidate == "BUY" else sell_frames
+    support_weight = buy_weight if candidate == "BUY" else sell_weight
+    avg_conf = (sum(buy_conf) / len(buy_conf)) if candidate == "BUY" and buy_conf else (sum(sell_conf) / len(sell_conf) if sell_conf else 0)
+    # Strong daily counter-trend filter
+    if daily_dir in ("BUY", "SELL") and daily_dir != candidate and daily_conf >= DAILY_STRONG_CONF:
+        return "NEUTRAL", None, 0, "no_confluence", buy_frames, sell_frames, buy_weight, sell_weight
+    # Direct signals need strong weighted support. Partial stays as user-controlled scenario.
+    if support_weight >= WEIGHTED_DIRECT_THRESHOLD and support_frames >= 2:
+        final = candidate
+        frames_conf = 85 if support_frames == 3 else max(70, round(avg_conf))
+        conf_txt_key = "full_confluence" if support_frames == 3 else "partial_confluence"
+    elif support_weight >= WEIGHTED_PARTIAL_THRESHOLD and support_frames >= OVERRIDE_MIN_QUALIFIED_FRAMES:
+        if relaxed and avg_conf >= OVERRIDE_MIN_AVG_CONF:
+            final = candidate
+            frames_conf = max(65, round(avg_conf))
+        else:
+            majority = candidate
+            frames_conf = max(65, round(avg_conf)) if avg_conf else 65
+        conf_txt_key = "partial_confluence"
+    return final, majority, frames_conf, conf_txt_key, buy_frames, sell_frames, buy_weight, sell_weight
 
 def load_languages():
     try:
@@ -122,6 +251,7 @@ if _skipped:
     logger.warning(f"Skipped {_skipped} invalid/stale trades on startup")
 active_trades.extend(_valid_trades)
 trade_counter = _loaded_counter
+cancelled_setups.extend(load_cancelled_setups())
 
 def get_cached(key):
     if key in _cache:
@@ -443,6 +573,9 @@ def get_binance_data(days=30, interval="hourly"):
         elif interval == "4h":
             binance_interval = "4h"
             limit = min(days * 6, 1000)
+        elif interval in ("weekly", "1w"):
+            binance_interval = "1w"
+            limit = min(max(days // 7, 30), 1000)
         else:
             binance_interval = "1d"
             limit = min(days, 1000)
@@ -489,6 +622,9 @@ def get_data(asset="BTC", days=30, interval="hourly"):
             elif interval == "4h":
                 td_interval = "4h"
                 outputsize  = min(days * 6, 500)
+            elif interval in ("weekly", "1w"):
+                td_interval = "1week"
+                outputsize  = min(max(days // 7, 30), 500)
             else:
                 td_interval = "1day"
                 outputsize  = min(days, 500)
@@ -552,6 +688,8 @@ def get_data(asset="BTC", days=30, interval="hourly"):
             result = result.resample("1h").interpolate(method="linear").dropna()
         elif interval == "4h":
             result = result.resample("4h").agg({"Open":"first","High":"max","Low":"min","Close":"last","Volume":"sum"}).dropna()
+        elif interval in ("weekly", "1w"):
+            result = result.resample("1W").agg({"Open":"first","High":"max","Low":"min","Close":"last","Volume":"sum"}).dropna()
         # daily: لا resample — البيانات كافية
         set_cache(cache_key, result)
         logger.info("CoinGecko fallback OK")
@@ -782,9 +920,15 @@ def analyze_frame(df, uid=0):
             else: ss += 10
     except: pass
 
-    direction = "BUY" if sb > ss else "SELL"
+    if sb > ss:
+        direction = "BUY"
+    elif ss > sb:
+        direction = "SELL"
+    else:
+        direction = "NEUTRAL"
     total = sb + ss
     conf  = round(max(sb, ss) / total * 100) if total > 0 else 50
+    strength = frame_strength(direction, conf)
     atr   = safe(last["ATR"], price * 0.01)
     e21_s = safe(last["EMA21"], price * 0.99)
     e50_s = safe(last["EMA50"], price * 0.98)
@@ -796,7 +940,7 @@ def analyze_frame(df, uid=0):
     r1 = round(resistance_levels[0], 2)  if resistance_levels else round(price * 1.01, 2)
 
     return {
-        "direction": direction, "conf": conf, "rsi": round(rsi, 1),
+        "direction": direction, "strength": strength, "conf": conf, "rsi": round(rsi, 1),
         "price": round(price, 2), "atr": round(atr, 2),
         "details": details[:4],
         "support": round(s1, 2), "resistance": round(r1, 2),
@@ -1025,7 +1169,7 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
         df_1h = get_data(asset, days=30,  interval="hourly")
         df_4h = get_data(asset, days=60,  interval="4h")
         df_1d = get_data(asset, days=365, interval="daily")
-        df_1w = get_data(asset, days=365, interval="daily")
+        df_1w = get_data(asset, days=1000, interval="weekly")
     except Exception as e:
         logger.error("Data fetch: " + str(e))
         return None
@@ -1048,24 +1192,11 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
     if len(results) < 2:
         return None
 
-    buy_c = sum(1 for r in results.values() if r["direction"] == "BUY"  and r["conf"] >= FRAME_MIN_CONFIDENCE)
-    sel_c = sum(1 for r in results.values() if r["direction"] == "SELL" and r["conf"] >= FRAME_MIN_CONFIDENCE)
+    final, majority, frames_conf, conf_key, buy_c, sel_c, buy_w, sell_w = weighted_frame_decision(results, relaxed=relaxed)
+    conf_txt = t(uid, conf_key)
 
-    if session == "ASIAN" and buy_c < 2 and sel_c < 2:
+    if session == "ASIAN" and max(buy_c, sel_c) < 2:
         return None
-
-    majority = None
-    final = "NEUTRAL"
-    conf_txt = t(uid, "no_confluence")
-    frames_conf = 0
-    if   buy_c == 3: final="BUY";     conf_txt=t(uid,"full_confluence");    frames_conf=85
-    elif sel_c == 3: final="SELL";    conf_txt=t(uid,"full_confluence");    frames_conf=85
-    elif buy_c == 2:
-        if relaxed: final="BUY";  conf_txt=t(uid,"partial_confluence"); frames_conf=65
-        else:       final="NEUTRAL"; conf_txt=t(uid,"partial_confluence"); frames_conf=65; majority="BUY"
-    elif sel_c == 2:
-        if relaxed: final="SELL"; conf_txt=t(uid,"partial_confluence"); frames_conf=65
-        else:       final="NEUTRAL"; conf_txt=t(uid,"partial_confluence"); frames_conf=65; majority="SELL"
 
     # Two-frame: return NEUTRAL with majority so button_handler shows override button
     if final == "NEUTRAL" and majority:
@@ -1076,9 +1207,10 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
         fl2 = []
         icons2 = {"1h":t(uid,"frame_1h"),"4h":t(uid,"frame_4h"),"1d":t(uid,"frame_1d")}
         for k,r in results.items():
-            qualified = r["conf"] >= FRAME_MIN_CONFIDENCE
+            qualified = r["conf"] >= frame_threshold(k) and r["direction"] != "NEUTRAL"
             status_note = " ✅" if qualified else " ⚪ " + t(uid,"low_conf_note")
-            fl2.append(("🟢" if r["direction"]=="BUY" else "🔴")+" "+icons2.get(k,"")+": "+r["direction"]+" ("+str(r["conf"])+"%)"+status_note)
+            icon = "🟢" if r["direction"]=="BUY" else "🔴" if r["direction"]=="SELL" else "➡️"
+            fl2.append(icon+" "+icons2.get(k,"")+": "+r.get("strength", r["direction"])+" ("+str(r["conf"])+"%)"+status_note)
         return {"final":"NEUTRAL","majority":majority,"asset":asset,
                 "confluence_txt":conf_txt,"base_conf":frames_conf,
                 "price":main2["price"],"tp1":0,"tp2":0,"tp3":0,"sl":0,"rr":0,"atr":main2["atr"],
@@ -1101,9 +1233,10 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
         fl2 = []
         icons2 = {"1h":t(uid,"frame_1h"),"4h":t(uid,"frame_4h"),"1d":t(uid,"frame_1d")}
         for k,r in results.items():
-            qualified = r["conf"] >= FRAME_MIN_CONFIDENCE
+            qualified = r["conf"] >= frame_threshold(k) and r["direction"] != "NEUTRAL"
             status_note = " ✅" if qualified else " ⚪ " + t(uid,"low_conf_note")
-            fl2.append(("🟢" if r["direction"]=="BUY" else "🔴")+" "+icons2.get(k,"")+": "+r["direction"]+" ("+str(r["conf"])+"%)"+status_note)
+            icon = "🟢" if r["direction"]=="BUY" else "🔴" if r["direction"]=="SELL" else "➡️"
+            fl2.append(icon+" "+icons2.get(k,"")+": "+r.get("strength", r["direction"])+" ("+str(r["conf"])+"%)"+status_note)
         return {"final":"NEUTRAL","asset":asset,"confluence_txt":t(uid,"no_confluence"),"base_conf":0,"majority":majority,
                 "price":main2["price"],"tp1":0,"tp2":0,"tp3":0,"sl":0,"rr":0,"atr":main2["atr"],
                 "risk_pct":50,"risk_label":t(uid,"risk_med"),"risk_msg":t(uid,"risk_med_msg"),
@@ -1174,9 +1307,10 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
     frame_lines = []
     icons = {"1h":t(uid,"frame_1h"),"4h":t(uid,"frame_4h"),"1d":t(uid,"frame_1d")}
     for k, r in results.items():
-        qualified = r["conf"] >= FRAME_MIN_CONFIDENCE
+        qualified = r["conf"] >= frame_threshold(k) and r["direction"] != "NEUTRAL"
         status_note = " ✅" if qualified else " ⚪ " + t(uid,"low_conf_note")
-        frame_lines.append(("🟢" if r["direction"]=="BUY" else "🔴")+" "+icons.get(k,"")+": "+r["direction"]+" ("+str(r["conf"])+"%)"+status_note)
+        icon = "🟢" if r["direction"]=="BUY" else "🔴" if r["direction"]=="SELL" else "➡️"
+        frame_lines.append(icon+" "+icons.get(k,"")+": "+r.get("strength", r["direction"])+" ("+str(r["conf"])+"%)"+status_note)
 
     key_fibs = ["Fib "+pct+"%  $"+"{:,.2f}".format(val) for pct,val in sorted(fib_levels.items(), key=lambda x:float(x[0]))]
 
@@ -1222,6 +1356,18 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
         logger.warning("Weekly: " + str(e))
 
     ep = entry_price
+    if is_recently_cancelled(asset, final, entry_price, atr):
+        # Same direction/zone was cancelled recently; do not re-offer it during cooldown.
+        return {"final":"NEUTRAL","asset":asset,"confluence_txt":t(uid,"no_confluence"),"base_conf":0,"majority":None,
+                "price":price,"tp1":0,"tp2":0,"tp3":0,"sl":0,"rr":0,"atr":atr,
+                "risk_pct":60,"risk_label":t(uid,"risk_med"),"risk_msg":t(uid,"risk_med_msg"),
+                "frame_lines":frame_lines,"rsi":main["rsi"],"support":main["support"],"resistance":main["resistance"],
+                "macd_bull":main["macd_bull"],"ema_bull":main["ema_bull"],"ema_bear":main["ema_bear"],"bb_zone":main["bb_zone"],
+                "fib_levels":fib_levels,"fib_ext":fib_ext,"key_fibs":key_fibs[:5],"nearest_fib":nearest_fib,"fib_key":fib_key,
+                "swing_h":swing_h,"swing_l":swing_l,"weekly_trend":weekly_trend,"regime":regime,"regime_strength":regime_strength,
+                "monthly_bias":monthly_bias,"divergence":divergence,"session":session,"bull_obs":bull_obs,"bear_obs":bear_obs,
+                "buy_liq":buy_liq,"sell_liq":sell_liq,"entry_low":entry_low,"entry_high":entry_high,"entry_price":entry_price}
+
     if final == "BUY":
         if not (sl < ep < tp1 < tp2 < tp3):
             sl=round(ep-atr,2); tp1=round(ep+atr,2); tp2=round(ep+2*atr,2); tp3=round(ep+2.5*atr,2)
@@ -1390,13 +1536,17 @@ def build_trade_msg(res, uid=0, auto=False):
 
 def build_update_msg(trade, current_price, update_type, uid=0):
     dir_txt = t(uid,"buy") if trade["direction"] == "BUY" else t(uid,"sell")
+    entry_lines = [f"🎯 {t(uid,'entry_zone')}: {format_entry_zone(trade['entry'], trade.get('atr', 0))}"]
+    if trade.get("status") == "active" and trade.get("actual_entry"):
+        entry_lines.insert(0, f"📍 {t(uid,'actual_entry')}: ${float(trade.get('actual_entry')):,.2f}")
+    else:
+        entry_lines.append(f"📌 {t(uid,'entry')}: ${trade['entry']:,.2f}")
     lines = [
         f"🟡 {t(uid,'update_header')}",
         "₿ BTC/USD",
         "",
         f"📊 {t(uid,'direction')}: {dir_txt}",
-        f"🎯 {t(uid,'entry_zone')}: {format_entry_zone(trade['entry'], trade.get('atr', 0))}",
-        f"📌 {t(uid,'entry')}: ${trade['entry']:,.2f}",
+        *entry_lines,
         f"💵 {t(uid,'current_price')}: ${current_price:,.2f}",
         "",
         update_type,
@@ -1838,6 +1988,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
         if trade:
             async with _trades_lock:
                 active_trades.remove(trade)
+                remember_cancelled_setup(trade, reason="manual_cancel")
                 save_trades()
         await query.message.reply_text(t(uid,"setup_cancelled") + " #"+str(trade_id))
 
@@ -2484,7 +2635,23 @@ async def _monitor_active_trades(context):
 
             # ── Pending: wait for price to reach entry ──
             if trade.get("status") == "pending":
-                arrived = (direction=="BUY"  and cur <= entry*1.001) or                           (direction=="SELL" and cur >= entry*0.999)
+                low_z, high_z = entry_zone_from_trade(entry, atr)
+                if direction == "BUY":
+                    zone_dist = ((cur - high_z) / entry * 100) if cur > high_z else ((low_z - cur) / entry * 100 if cur < low_z else 0)
+                else:
+                    zone_dist = ((low_z - cur) / entry * 100) if cur < low_z else ((cur - high_z) / entry * 100 if cur > high_z else 0)
+                if zone_dist > MAX_DISTANCE_FROM_ZONE_PCT:
+                    to_remove.append(trade)
+                    remember_cancelled_setup(trade, reason="price_moved_too_far")
+                    await context.bot.send_message(chat_id=chat_id,
+                        text=(
+                            f"⚠️ SazBot | {t(chat_id,'setup_cancelled_full')} #{trade_id}\n\n"
+                            f"{t(chat_id,'price_moved_against')}\n\n"
+                            f"🎯 {t(chat_id,'entry_zone')}: {format_entry_zone(entry, atr)}\n"
+                            f"💵 {t(chat_id,'current_price')}: ${cur:,.2f}"
+                        ))
+                    continue
+                arrived = (direction=="BUY"  and low_z <= cur <= high_z) or (direction=="SELL" and low_z <= cur <= high_z)
                 if arrived:
                     try:
                         fresh = full_analysis(trade["asset"], 0)
@@ -2495,6 +2662,7 @@ async def _monitor_active_trades(context):
                                 text=f"🟢 SazBot | {t(chat_id,'setup_activated')} #{trade_id}\n\n{t(chat_id,'price_reached_entry')}")
                         elif fresh["final"] != direction:
                             to_remove.append(trade)
+                            remember_cancelled_setup(trade, reason="bias_changed_at_entry")
                             nd = "BUY ⬆️" if fresh["final"]=="BUY" else "SELL ⬇️"
                             await context.bot.send_message(chat_id=chat_id,
                                 text=f"⚠️ SazBot | {t(chat_id,'setup_cancelled_full')} #{trade_id}\n\n{t(chat_id,'price_bias_changed')} {nd}.")
@@ -2577,6 +2745,7 @@ async def _monitor_active_trades(context):
                                 fc = full_analysis(trade["asset"], chat_id)
                                 if fc and fc["final"] != direction:
                                     to_remove.append(trade)
+                                    remember_cancelled_setup(trade, reason="counter_move")
                                     nd = "BUY ⬆️" if fc["final"]=="BUY" else "SELL ⬇️"
                                     moved = abs(cur-entry)/entry*100
                                     await context.bot.send_message(chat_id=chat_id,
