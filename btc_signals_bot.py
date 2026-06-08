@@ -374,12 +374,12 @@ TEXTS = {
         "full_confluence": "✅ توافق قوي — 3/3 فريمات مؤهلة",
         "partial_confluence": "⚠️ توافق جزئي — 2/3 فريمات مؤهلة",
         "no_confluence": "⏳ لا توجد فرصة عالية الجودة حالياً",
-        "qualified_note": "الفريم يُحسب مؤهلاً فقط إذا كان بنفس الاتجاه وثقته 60% أو أكثر.",
-        "low_conf_note": "أقل من حد الثقة",
+        "qualified_note": "يُحسب الفريم مؤهلاً إذا تجاوز حد الثقة المعتمد له: ساعة و4 ساعات 60%، يومي 65%.",
+        "low_conf_note": "إشارة ضعيفة",
         "partial_title": "⚠️ توافق جزئي",
         "no_quality_title": "⏳ لا توجد فرصة عالية الجودة حالياً",
         "partial_body": "الاتجاه العام واضح، لكن ليست جميع الفريمات مؤهلة حسب حد الثقة المعتمد.",
-        "higher_risk_prompt": "يمكن عرض سيناريو تداول متاح، لكنه أعلى مخاطرة لأنه لا يعتمد على توافق كامل.",
+        "higher_risk_prompt": "يمكن عرض فرصة متاحة بمخاطرة أعلى فقط عند وجود توافق جزئي كافٍ.",
         "no_trade_better": "عدم الدخول أحياناً أفضل من الدخول في فرصة ضعيفة.",
         "btn_higher_risk": "🎯 عرض الفرصة المتاحة",
         "btn_cancel": "❌ إلغاء",
@@ -426,7 +426,7 @@ TEXTS = {
         "bb_mid": "بولنجر: منتصف النطاق",
         "summary_bull": "✅ الخلاصة: السوق يميل للصعود",
         "summary_bear": "✅ الخلاصة: السوق يميل للهبوط",
-        "summary_neutral": "✅ الخلاصة: السوق في منطقة تردد",
+        "summary_neutral": "🧭 الخلاصة: السوق في منطقة تردد",
         "prices_title": "💰 الأسعار الحالية", "change_24h": "التغيير 24h",
         "about_text": "ℹ️ عن SazBot 🟡\n\nبوت متخصص في تحليل BTC/USD بأسلوب واضح ومختصر.\n\n📊 تحليل متعدد الفريمات\n🎯 منطقة دخول ذكية مبنية على ATR والتوافق الفني\n🛑 وقف خسارة وأهداف محسوبة\n📡 إشارات تلقائية عند ظهور فرص قوية\n🔄 متابعة مباشرة للصفقات المفتوحة\n🔬 RSI, MACD, EMA, BB, Stoch, ATR, Ichimoku\n📊 مصادر البيانات: Twelve Data + Binance\n\n⚠️ التحليل تعليمي فقط وليس توصية مالية.",
         "ind_rsi_oversold": "RSI تشبع بيعي", "ind_rsi_buy": "RSI منطقة شراء",
@@ -437,7 +437,7 @@ TEXTS = {
         "ind_stoch_low": "Stochastic تشبع بيعي", "ind_stoch_high": "Stochastic تشبع شرائي",
         "stats_title": "إحصائيات SazBot", "closed_trades": "الصفقات المغلقة", "total": "الإجمالي", "wins": "رابحة", "breakeven_stat": "تعادل", "losses": "خاسرة", "win_rate": "نسبة النجاح", "avg_rr": "متوسط RR", "existing_trades": "الصفقات القائمة", "no_existing_trades": "لا توجد صفقات قائمة", "waiting_entry": "بانتظار منطقة الدخول", "tp2_done": "TP2 تم", "tp1_done": "TP1 تم", "active_no_target": "نشطة — لم يصل أي هدف بعد",
         "risk_warn_volatile": "⚡ السوق متقلب — استخدم حجم صفقة أصغر", "risk_warn_ranging": "↔️ السوق عرضي — الأهداف قد تكون محدودة", "risk_warn_monthly_bull_sell": "📈 الشهري صاعد — البيع عكس الاتجاه العام", "risk_warn_monthly_bear_buy": "📉 الشهري هابط — الشراء عكس الاتجاه العام", "risk_warn_weekly_bull_sell": "📈 الأسبوعي صاعد — البيع عكس الاتجاه", "risk_warn_weekly_bear_buy": "📉 الأسبوعي هابط — الشراء عكس الاتجاه", "risk_warn_rsi_against": "⚠️ دايفرجنس RSI يعاكس السيناريو", "risk_warn_counter_weekly": "⚠️ سيناريو عكس الاتجاه الأسبوعي — الأفضل التركيز على TP1 وTP2 فقط",
-        "signal_expired_price": "تحرك السعر بعيداً عن منطقة الدخول", "signal_expired_timeframes": "تغير توافق الفريمات — انتهت صلاحية السيناريو", "signal_expired_time": "انتهت مدة صلاحية السيناريو", "auto_signal_title": "إشارة BTC تلقائية", "event_in": "خلال",
+        "signal_expired_price": "السعر ابتعد عن منطقة الدخول الذكية قبل التفعيل.", "signal_expired_timeframes": "تغيّر توافق الفريمات، ولم تعد الإشارة صالحة.", "signal_expired_time": "انتهت مدة صلاحية الإشارة.", "auto_signal_title": "إشارة BTC تلقائية", "event_in": "خلال",
     },
     "en": {
         "choose_lang": "🟡 SazBot | BTC Signals\n\nChoose your language:",
@@ -497,12 +497,12 @@ TEXTS = {
         "full_confluence": "✅ Strong setup — 3/3 qualified timeframes",
         "partial_confluence": "⚠️ Partial alignment — 2/3 qualified timeframes",
         "no_confluence": "⏳ No high-quality setup yet",
-        "qualified_note": "A timeframe is counted as qualified only when it matches the direction and confidence is 60% or above.",
-        "low_conf_note": "Below confidence threshold",
+        "qualified_note": "A timeframe is qualified only when it meets its confidence threshold: 1H/4H 60%, Daily 65%.",
+        "low_conf_note": "Weak signal",
         "partial_title": "⚠️ Partial Alignment Detected",
         "no_quality_title": "⏳ No High-Quality Setup Yet",
         "partial_body": "The overall direction is clear, but not all timeframes meet the confidence threshold yet.",
-        "higher_risk_prompt": "A fallback setup can be shown, but it carries higher risk because alignment is not complete.",
+        "higher_risk_prompt": "An available higher-risk setup can be shown only when partial alignment is strong enough.",
         "no_trade_better": "No trade is better than a weak trade.",
         "btn_higher_risk": "🎯 View Available Setup",
         "btn_cancel": "❌ Cancel",
@@ -549,7 +549,7 @@ TEXTS = {
         "bb_mid": "Bollinger: Middle zone",
         "summary_bull": "✅ Summary: Market leaning bullish",
         "summary_bear": "✅ Summary: Market leaning bearish",
-        "summary_neutral": "✅ Summary: Market in consolidation",
+        "summary_neutral": "🧭 Summary: Market in consolidation",
         "prices_title": "💰 Current Prices", "change_24h": "24h Change",
         "about_text": "ℹ️ About SazBot 🟡\n\nA focused BTC/USD analysis bot with a clean and professional signal format.\n\n📊 Multi-timeframe analysis\n🎯 Smart Entry Zone based on ATR and technical confluence\n🛑 Calculated stop loss and targets\n📡 Auto alerts for stronger setups\n🔄 Live monitoring for active trades\n🔬 RSI, MACD, EMA, BB, Stoch, ATR, Ichimoku\n📊 Data sources: Twelve Data + Binance\n\n⚠️ Educational analysis only — not financial advice.",
         "ind_rsi_oversold": "RSI Oversold", "ind_rsi_buy": "RSI Buy Zone",
@@ -560,7 +560,7 @@ TEXTS = {
         "ind_stoch_low": "Stochastic Oversold", "ind_stoch_high": "Stochastic Overbought",
         "stats_title": "SazBot Statistics", "closed_trades": "Closed Trades", "total": "Total", "wins": "Wins", "breakeven_stat": "Breakeven", "losses": "Losses", "win_rate": "Win Rate", "avg_rr": "Average RR", "existing_trades": "Open Trades", "no_existing_trades": "No open trades", "waiting_entry": "Waiting for entry zone", "tp2_done": "TP2 hit", "tp1_done": "TP1 hit", "active_no_target": "Active — no target hit yet",
         "risk_warn_volatile": "⚡ Volatile market — consider smaller size", "risk_warn_ranging": "↔️ Ranging market — targets may be limited", "risk_warn_monthly_bull_sell": "📈 Monthly bias is bullish — SELL is counter-trend", "risk_warn_monthly_bear_buy": "📉 Monthly bias is bearish — BUY is counter-trend", "risk_warn_weekly_bull_sell": "📈 Weekly trend is bullish — SELL is counter-trend", "risk_warn_weekly_bear_buy": "📉 Weekly trend is bearish — BUY is counter-trend", "risk_warn_rsi_against": "⚠️ RSI divergence is against the setup", "risk_warn_counter_weekly": "⚠️ Counter-weekly setup — focus on TP1 and TP2 only",
-        "signal_expired_price": "Price moved away from the entry zone", "signal_expired_timeframes": "Timeframe alignment changed — setup expired", "signal_expired_time": "Setup validity period expired", "auto_signal_title": "Auto BTC Signal", "event_in": "in",
+        "signal_expired_price": "Price moved too far from the Smart Entry Zone before activation.", "signal_expired_timeframes": "Timeframe alignment changed, so the setup is no longer valid.", "signal_expired_time": "The signal validity period has expired.", "auto_signal_title": "Auto BTC Signal", "event_in": "in",
     }
 }
 
@@ -1585,49 +1585,140 @@ def build_update_msg(trade, current_price, update_type, uid=0):
     return "\n".join(lines)
 
 def build_analysis_msg(res, uid=0):
+    """Build a cleaner market-read message.
+
+    Notes:
+    - Shows only the nearest Fibonacci levels to avoid overwhelming users with old/wide swings.
+    - Gives a practical summary when short-term frames conflict with the Daily trend.
+    - Does not change trading logic; this is display/UX only.
+    """
+    lang = user_languages.get(uid, "ar")
     ai = "₿" if res["asset"] == "BTC" else "🥇"
     an = "BTC/USD"
+
     if res["final"] == "BUY" and res["base_conf"] > 60:
-        trend = t(uid,"trend_bull"); summary = t(uid,"summary_bull")
+        trend = t(uid,"trend_bull")
+        summary = t(uid,"summary_bull")
     elif res["final"] == "SELL" and res["base_conf"] > 60:
-        trend = t(uid,"trend_bear"); summary = t(uid,"summary_bear")
+        trend = t(uid,"trend_bear")
+        summary = t(uid,"summary_bear")
     else:
-        trend = t(uid,"trend_neutral"); summary = t(uid,"summary_neutral")
+        trend = t(uid,"trend_neutral")
+        summary = _market_read_summary(res, uid)
+
     rsi      = res["rsi"]
     rsi_txt  = t(uid,"rsi_oversold") if rsi < 30 else t(uid,"rsi_overbought") if rsi > 70 else t(uid,"rsi_neutral")
     macd_txt = t(uid,"macd_bull") if res["macd_bull"] else t(uid,"macd_bear")
     ema_txt  = t(uid,"ema_bull") if res["ema_bull"] else t(uid,"ema_bear") if res["ema_bear"] else t(uid,"ema_mixed")
     bb_txt   = t(uid,"bb_low") if res["bb_zone"]=="low" else t(uid,"bb_high") if res["bb_zone"]=="high" else t(uid,"bb_mid")
+
+    # Show the nearest Fibonacci levels only. The full swing may be wide and visually misleading.
+    fib_lines = []
+    fib_levels = res.get("fib_levels", {}) or {}
+    price = float(res.get("price", 0) or 0)
+    if fib_levels and price:
+        nearest = sorted(fib_levels.items(), key=lambda x: abs(float(x[1]) - price))[:3]
+        nearest = sorted(nearest, key=lambda x: float(x[1]), reverse=True)
+        for pct, val in nearest:
+            fib_lines.append("  Fib "+str(pct)+"%  $"+"{:,.2f}".format(float(val)))
+    else:
+        for f in res.get("key_fibs", [])[:3]:
+            fib_lines.append("  "+f)
+
+    fib_title = "أقرب مستويات Fibonacci" if lang == "ar" else "Nearest Fibonacci Levels"
+    support_label = "أقرب دعم" if lang == "ar" else "Nearest Support"
+    resistance_label = "أقرب مقاومة" if lang == "ar" else "Nearest Resistance"
+
     lines = [
         "",
         "  "+ai+" "+an+"  |  "+t(uid,"analysis_header"),
         "",
-        "",
         "  "+trend,
         "  💵 "+t(uid,"current_price") + ":  $"+"{:,.2f}".format(res["price"]),
-        "  🟢 "+t(uid,"support")+":      $"+"{:,.2f}".format(res["support"]),
-        "  🔴 "+t(uid,"resistance")+":   $"+"{:,.2f}".format(res["resistance"]),
+        "  🟢 "+support_label+":      $"+"{:,.2f}".format(res["support"]),
+        "  🔴 "+resistance_label+":   $"+"{:,.2f}".format(res["resistance"]),
         "",
-        "  📐 "+t(uid,"fib_section")+"  ",
+        "  📐 "+fib_title,
     ]
-    for f in res.get("key_fibs", []):
-        lines.append("  "+f)
-    lines += ["", "  🔗 "+t(uid,"confluence")+"  "]
+    lines += fib_lines
+    lines += ["", "  🔗 "+t(uid,"confluence")]
     for fl in res.get("frame_lines", []):
         lines.append("  "+fl)
     lines += [
         "",
-        "  📊 "+t(uid,"indicators_section")+"  ",
+        "  📊 "+t(uid,"indicators_section"),
         "  RSI ("+str(rsi)+"):  "+rsi_txt,
-        "  "+macd_txt, "  "+ema_txt, "  "+bb_txt,
+        "  "+macd_txt,
+        "  "+ema_txt,
+        "  "+bb_txt,
         "",
-        "  "+summary,
-        "",
+    ]
+    lines += summary
+    lines += [
         "",
         "🕐 "+t(uid,"updated_gmt")+":  "+gmt_now(),
         t(uid,"footer"),
     ]
     return "\n".join(lines)
+
+
+def _market_read_summary(res, uid=0):
+    """Practical market-read summary for neutral/mixed conditions."""
+    lang = user_languages.get(uid, "ar")
+    frame_lines = res.get("frame_lines", []) or []
+
+    def _dir_from_line(line):
+        if "BUY" in line:
+            return "BUY"
+        if "SELL" in line:
+            return "SELL"
+        return "NEUTRAL"
+
+    def _find_line(*tokens):
+        for line in frame_lines:
+            if any(tok in line for tok in tokens):
+                return line
+        return ""
+
+    h1 = _dir_from_line(_find_line("ساعة", "1H"))
+    h4 = _dir_from_line(_find_line("4 ساعات", "4H"))
+    d1 = _dir_from_line(_find_line("يومي", "Daily", "1D"))
+
+    if h1 == h4 and h1 in ("BUY", "SELL") and d1 in ("BUY", "SELL") and d1 != h1:
+        if lang == "ar":
+            short_txt = "إيجابي" if h1 == "BUY" else "سلبي"
+            return [
+                "  🧭 الخلاصة",
+                "",
+                f"  الاتجاه قصير المدى {short_txt}،",
+                "  لكن الاتجاه اليومي ما زال غير داعم بشكل كامل.",
+                "",
+                "  ⏳ يفضل انتظار توافق أقوى قبل الدخول.",
+            ]
+        else:
+            short_txt = "positive" if h1 == "BUY" else "negative"
+            return [
+                "  🧭 Summary",
+                "",
+                f"  Short-term momentum is {short_txt},",
+                "  but the Daily trend is not fully supportive yet.",
+                "",
+                "  ⏳ Waiting for stronger alignment is preferred.",
+            ]
+
+    if lang == "ar":
+        return [
+            "  🧭 الخلاصة",
+            "",
+            "  السوق في منطقة تردد حالياً.",
+            "  ⏳ يفضل انتظار إشارة أوضح قبل الدخول.",
+        ]
+    return [
+        "  🧭 Summary",
+        "",
+        "  The market is currently indecisive.",
+        "  ⏳ Waiting for a clearer setup is preferred.",
+    ]
 
 
 # ==================== لوحات المفاتيح ====================
@@ -1730,39 +1821,81 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 await query.message.reply_text(t(uid,"failed")); return
             if res["final"] == "NEUTRAL":
                 fls = res.get("frame_lines", [])
-                # Get majority from full_analysis (set for 2-frame case)
-                # Fall back to counting frame_lines for 0/1 frame case
-                majority = res.get("majority")
-                if not majority:
-                    buy_f, sell_f = count_qualified_frame_lines(fls)
-                    majority = "BUY" if buy_f > sell_f else "SELL" if sell_f > buy_f else None
-
-                parts = [t(uid,"partial_title") if majority else t(uid,"no_quality_title"), "", t(uid,"partial_body") if majority else t(uid,"no_trade_better"), ""]
-                if fls:
-                    parts.append("📊 " + ("حالة الفريمات:" if user_languages.get(uid,"ar") == "ar" else "Timeframe Status:"))
-                    for fl in fls:
-                        parts.append(f"  {fl}")
-                parts += [""]
-
+                lang = user_languages.get(uid, "ar")
                 buy_f, sell_f = count_qualified_frame_lines(fls)
                 q_count = max(buy_f, sell_f)
                 is_two_frame = q_count == 2
-                if is_two_frame:
-                    warn = "⚠️ 2/3 " + ("فريمات مؤهلة فقط" if user_languages.get(uid,"ar") == "ar" else "qualified timeframes only")
-                elif q_count == 1:
-                    warn = "⚠️ 1/3 " + ("فريم مؤهل فقط — لا توجد فرصة موثوقة" if user_languages.get(uid,"ar") == "ar" else "qualified timeframe only — no reliable setup")
+
+                # Majority is only actionable for the 2/3 partial-alignment case.
+                majority = res.get("majority")
+                if not majority:
+                    majority = "BUY" if buy_f > sell_f else "SELL" if sell_f > buy_f else None
+
+                def _line_dir(line):
+                    if "BUY" in line:
+                        return "BUY"
+                    if "SELL" in line:
+                        return "SELL"
+                    return "NEUTRAL"
+
+                def _find_frame(*tokens):
+                    for line in fls:
+                        if any(tok in line for tok in tokens):
+                            return line
+                    return ""
+
+                h1_dir = _line_dir(_find_frame("ساعة", "1H"))
+                h4_dir = _line_dir(_find_frame("4 ساعات", "4H"))
+                d1_dir = _line_dir(_find_frame("يومي", "Daily", "1D"))
+                short_bias = h1_dir if h1_dir == h4_dir and h1_dir in ("BUY", "SELL") else majority
+                daily_against_short = short_bias in ("BUY", "SELL") and d1_dir in ("BUY", "SELL") and d1_dir != short_bias
+
+                if is_two_frame and majority:
+                    parts = [
+                        t(uid,"partial_title"),
+                        "",
+                        t(uid,"partial_body"),
+                        "",
+                    ]
                 else:
-                    warn = "⚠️ " + ("لا توجد فريمات مؤهلة كفاية — لا يوجد اتجاه واضح" if user_languages.get(uid,"ar") == "ar" else "Not enough qualified timeframes — no clear direction")
-                parts.append(warn)
-                parts.append("ℹ️ " + t(uid,"qualified_note"))
-                parts.append("⚠️ " + t(uid,"higher_risk_prompt"))
-                kb_override = InlineKeyboardMarkup([[
-                    InlineKeyboardButton(t(uid,"btn_higher_risk"), callback_data=f"override_trade_{asset}"),
-                    InlineKeyboardButton(t(uid,"btn_cancel"), callback_data="override_cancel"),
-                ]])
-                # Store res for override use
-                pending_trade_replace[uid] = {"override_res": res}
-                await query.message.reply_text("\n".join(parts), reply_markup=kb_override)
+                    if lang == "ar":
+                        parts = [
+                            "⏳ لا توجد فرصة عالية الجودة حالياً",
+                            "",
+                            "عدم الدخول أحياناً أفضل من الدخول في فرصة ضعيفة.",
+                            "",
+                        ]
+                    else:
+                        parts = [
+                            "⏳ No High-Quality Setup Yet",
+                            "",
+                            "No trade is better than a weak trade.",
+                            "",
+                        ]
+
+                if fls:
+                    parts.append("📊 " + ("حالة الفريمات" if lang == "ar" else "Timeframe Status"))
+                    parts.append("")
+                    for fl in fls:
+                        parts.append(f"{fl}")
+                    parts.append("")
+
+                if is_two_frame and majority:
+                    parts.append("⚠️ " + ("توافق جزئي — يمكن عرض فرصة متاحة بمخاطرة أعلى." if lang == "ar" else "Partial alignment — an available higher-risk setup can be shown."))
+                    parts.append("ℹ️ " + t(uid,"qualified_note"))
+                    kb_override = InlineKeyboardMarkup([[
+                        InlineKeyboardButton(t(uid,"btn_higher_risk"), callback_data=f"override_trade_{asset}"),
+                        InlineKeyboardButton(t(uid,"btn_cancel"), callback_data="override_cancel"),
+                    ]])
+                    pending_trade_replace[uid] = {"override_res": res}
+                    await query.message.reply_text("\n".join(parts), reply_markup=kb_override)
+                else:
+                    if daily_against_short:
+                        parts.append("🧭 " + ("الاتجاه اليومي ما زال يعاكس الاتجاه قصير المدى." if lang == "ar" else "The Daily trend is still against the short-term direction."))
+                        parts.append("")
+                    parts.append("⚠️ " + ("⏳ يفضل انتظار توافق أقوى قبل الدخول." if lang == "ar" else "The setup was rejected until timeframe alignment improves."))
+                    pending_trade_replace.pop(uid, None)
+                    await query.message.reply_text("\n".join(parts))
                 return
             entry_p = res.get("entry_price", res["price"])
             market_p = res["price"]
@@ -2114,8 +2247,13 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 save_trades()
             await query.message.reply_text(t(uid,"trade_closed")+" #"+str(trade_id))
 
-    elif data == "override_cancel":
+    elif data in ("override_cancel", "cancel_request", "noop_cancel"):
         pending_trade_replace.pop(uid, None)
+        # Remove inline buttons from the old message so the user sees the action was handled.
+        try:
+            await query.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
         await query.message.reply_text(t(uid,"cancelled_waiting"))
         return
 
@@ -2643,9 +2781,17 @@ async def _expire_pending_signals(context):
                 to_exp.append(sid)
                 remember_cancelled_setup("BTC", sig_dir, sig_entry, sig_atr, reason=reason_key)
                 for cid in sig.get("chat_ids", list(ALLOWED_USERS)):
-                    msg = f"⏰ SazBot | {t(cid,'signal_expired')} #{sid}"
-                    if reason_key:
-                        msg += f"\n\n{t(cid, reason_key)}"
+                    lang = user_languages.get(cid, "ar")
+                    if lang == "ar":
+                        msg = f"⏰ SazBot | انتهت صلاحية الإشارة #{sid}"
+                        if reason_key:
+                            msg += f"\n\n{t(cid, reason_key)}"
+                        msg += "\n\n⏳ سيتم انتظار فرصة جديدة بجودة أعلى."
+                    else:
+                        msg = f"⏰ SazBot | Signal Expired #{sid}"
+                        if reason_key:
+                            msg += f"\n\n{t(cid, reason_key)}"
+                        msg += "\n\n⏳ Waiting for a higher-quality setup."
                     try:
                         await context.bot.send_message(chat_id=cid, text=msg)
                     except Exception:
