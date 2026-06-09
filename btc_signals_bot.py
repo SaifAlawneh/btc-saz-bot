@@ -91,10 +91,11 @@ cancelled_setups       = []
 _trades_lock = None
 
 def get_trades_lock():
-    """Create the asyncio lock lazily inside the running event loop."""
+    """Return the active trades lock. It is initialised in main() inside the running bot context."""
     global _trades_lock
     if _trades_lock is None:
-        _trades_lock = None
+        # Fallback safety: should normally be initialised in main().
+        _trades_lock = asyncio.Lock()
     return _trades_lock
 
 ALLOWED_USERS_ENV = os.environ.get("ALLOWED_USERS", "")
@@ -304,7 +305,7 @@ def load_languages():
         with open(LANGUAGES_FILE) as f:
             data = json.load(f)
             return {int(k): v for k, v in data.items()}
-    except:
+    except Exception as e:
         return {}
 
 def save_languages():
@@ -316,7 +317,7 @@ def load_trades():
         with open(TRADES_FILE) as f:
             data = json.load(f)
             return data.get("trades", []), data.get("counter", 0)
-    except:
+    except Exception as e:
         return [], 0
 
 def save_trades():
@@ -816,8 +817,8 @@ def saz_decision_intelligence(res, uid=0, persist=True, refresh=False):
         strong_count = len([f for f in frames if f.get("conf", 0) >= 82 and f.get("direction") in ("BUY", "SELL")])
         if strong_count >= 1:
             quality += min(5 * strong_count, 10)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("silent exception: " + str(e))
     if dist > 0.8:
         quality -= min(dist * 8, 16)
     if rsi > 74 or rsi < 26:
@@ -1222,6 +1223,49 @@ def can_show_override_option(res, uid=0):
         logger.warning("can_show_override_option failed: " + str(e))
         return False
 
+
+def recommended_leverage_by_regime(res):
+    """Return conservative educational leverage guidance based on market regime and volatility."""
+    try:
+        price = float(res.get("price", 0) or 0)
+        atr = float(res.get("atr", 0) or 0)
+        atr_pct = (atr / price * 100) if price and atr else 1.0
+        regime = res.get("regime", "UNKNOWN")
+        metrics = res.get("decision_metrics") or {}
+        grade = metrics.get("setup_grade") or saz_setup_grade(metrics) if metrics else "REJECT"
+
+        if regime == "VOLATILE" or atr_pct >= 1.8 or grade in ("C", "REJECT"):
+            return (
+                "3x — 5x\n⚠️ السوق عالي المخاطرة؛ الأفضل تقليل الرافعة أو الانتظار",
+                "3x — 5x\n⚠️ Higher-risk conditions; consider lower leverage or waiting",
+            )
+        if grade == "A" and atr_pct < 0.9:
+            return (
+                "8x — 12x\n⚠️ لا تتجاوز 12x حتى في الفرص القوية",
+                "8x — 12x\n⚠️ Do not exceed 12x even on strong setups",
+            )
+        if grade == "B":
+            return (
+                "5x — 8x\n⚠️ استخدم إدارة مخاطرة صارمة",
+                "5x — 8x\n⚠️ Use strict risk management",
+            )
+        return (
+            "3x — 6x\n⚠️ الأفضل تقليل الحجم مع الظروف غير المكتملة",
+            "3x — 6x\n⚠️ Consider smaller size in incomplete conditions",
+        )
+    except Exception:
+        return (
+            "3x — 5x\n⚠️ استخدم أقل رافعة ممكنة عند عدم وضوح السوق",
+            "3x — 5x\n⚠️ Use the lowest practical leverage when conditions are unclear",
+        )
+
+
+async def run_blocking(func, *args, **kwargs):
+    """Run blocking I/O or CPU-bound helper without freezing the Telegram event loop."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, lambda: func(*args, **kwargs))
+
+
 def gmt_now():
     return datetime.now(timezone.utc).strftime("%d/%m/%Y  %H:%M")
 
@@ -1556,7 +1600,7 @@ def calc_indicators(df):
             df["Vol_High"]= df["Volume"] > df["Vol_MA"] * 1.5
         else:
             df["Vol_High"] = False
-    except:
+    except Exception as e:
         df["Vol_High"] = False
     return df
 
@@ -1565,7 +1609,7 @@ def safe(val, default):
     try:
         v = float(val)
         return default if pd.isna(v) else v
-    except:
+    except Exception as e:
         return default
 
 
@@ -1697,7 +1741,7 @@ def get_monthly_bias(df_daily):
         if lc > pc > tc: return "BULL"
         elif lc < pc < tc: return "BEAR"
         return "NEUTRAL"
-    except:
+    except Exception as e:
         return "NEUTRAL"
 
 
@@ -1716,7 +1760,7 @@ def detect_rsi_divergence(df, lookback=20):
         if prices[-1] < min(prices[:-5]) and rsi[-1] > min(rsi[:-5]) and rsi[-1] < 45:
             return "BULLISH"
         return "NONE"
-    except:
+    except Exception as e:
         return "NONE"
 
 
@@ -1734,7 +1778,7 @@ def find_order_blocks(df, lookback=50):
             if c["Close"] > c["Open"] and all(n["Close"] < n["Open"]) and n["Close"].min() < c["Open"] * 0.995:
                 bear_obs.append({"high": float(c["Close"]), "low": float(c["Open"])})
         return bull_obs[-3:], bear_obs[-3:]
-    except:
+    except Exception as e:
         return [], []
 
 
@@ -1752,7 +1796,7 @@ def find_liquidity_zones(df, lookback=50):
             if lows[i] < lows[i-1] and lows[i] < lows[i+1] and lows[i] < lows[i-2] and lows[i] < lows[i+2]:
                 sell_liq.append(round(float(lows[i]), 2))
         return sorted(buy_liq)[-3:], sorted(sell_liq)[:3]
-    except:
+    except Exception as e:
         return [], []
 
 
@@ -2134,14 +2178,17 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
         "fib_levels": fib_levels, "fib_ext": fib_ext, "key_fibs": key_fibs[:5],
         "nearest_fib": nearest_fib, "fib_key": fib_key,
         "swing_h": swing_h, "swing_l": swing_l,
-        "leverage_ar": "10x — 15x\n⚠️ لا تتجاوز 15x للمبتدئين",
-        "leverage_en": "10x — 15x\n⚠️ Max 15x for beginners",
+        "leverage_ar": "",
+        "leverage_en": "",
         "tf_ar": "1 ساعة", "tf_en": "1 Hour",
         "hold_ar": "2 — 8 ساعات", "hold_en": "2 — 8 Hours",
     }
     # Calculate once per analysis result and reuse everywhere.
     try:
         saz_decision_intelligence(result, uid, persist=True, refresh=True)
+        lev_ar, lev_en = recommended_leverage_by_regime(result)
+        result["leverage_ar"] = lev_ar
+        result["leverage_en"] = lev_en
     except Exception as e:
         logger.warning("decision metrics attach failed: " + str(e))
     return saz_decision_gate(result, uid)
@@ -2521,7 +2568,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
         asset = data.split("_")[1]
         await query.message.reply_text(t(uid,"loading_trade"))
         try:
-            current_price_check = get_btc_price()
+            current_price_check = await run_blocking(get_btc_price)
             if current_price_check:
                 early_similar = next((
                     tr for tr in active_trades
@@ -2538,7 +2585,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             keys_to_clear = [k for k in _cache if k.startswith(asset)]
             for k in keys_to_clear:
                 _cache.pop(k, None)
-            res = full_analysis(asset, uid)
+            res = await run_blocking(full_analysis, asset, uid)
             if not res:
                 await query.message.reply_text(t(uid,"failed")); return
             if isinstance(res, dict) and res.get("blocked_by_saz_dna"):
@@ -2742,7 +2789,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             keys_to_clear = [k for k in _cache if k.startswith(asset)]
             for k in keys_to_clear:
                 _cache.pop(k, None)
-            res = full_analysis(asset, uid)
+            res = await run_blocking(full_analysis, asset, uid)
             if not res:
                 await query.message.reply_text(t(uid,"market_filters_blocked")); return
             await query.message.reply_text(build_analysis_msg(res, uid))
@@ -2752,7 +2799,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "prices":
         try:
-            d = get_prices()
+            d = await run_blocking(get_prices)
             if not d:
                 await query.message.reply_text(t(uid,"failed")); return
             btc = d.get("bitcoin", {})
@@ -2779,7 +2826,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
         if not active_trades:
             await query.message.reply_text(t(uid,"no_open_trades"))
         else:
-            current_price = get_btc_price()
+            current_price = await run_blocking(get_btc_price)
             for tr in active_trades:
                 tid     = tr.get("id","?")
                 de      = "🔴 SELL" if tr["direction"]=="SELL" else "🟢 BUY"
@@ -2984,8 +3031,8 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
         # Remove inline buttons from the old message so the user sees the action was handled.
         try:
             await query.message.edit_reply_markup(reply_markup=None)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("silent action failed: " + str(e))
         await query.message.reply_text(t(uid,"cancelled_waiting"))
         return
 
@@ -3005,7 +3052,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             for k in keys_to_clear: _cache.pop(k, None)
 
             # Use relaxed=True so 2-frame gives real SL/TP instead of NEUTRAL
-            res_fresh = full_analysis(asset_ov, uid, relaxed=True)
+            res_fresh = await run_blocking(full_analysis, asset_ov, uid, relaxed=True)
             res_use   = res_fresh if res_fresh and res_fresh.get("final") != "NEUTRAL" else None
 
             # Fallback only when there is a real 2-frame majority. Never force a setup from a tie or 1/3.
@@ -3037,7 +3084,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
             # Always use CURRENT price — never the cached/old price
-            cur_price = get_btc_price()
+            cur_price = await run_blocking(get_btc_price)
             live_price = cur_price if cur_price else res_use.get("price", 0)
             avg_atr  = res_use.get("atr", live_price * 0.015)
 
@@ -3284,10 +3331,10 @@ async def check_pending_trades(context):
     if not active_trades:
         return
 
-    cur = get_btc_price()
+    cur = await run_blocking(get_btc_price)
     res = None
     try:
-        res = full_analysis("BTC", 0)
+        res = await run_blocking(full_analysis, "BTC", 0)
     except Exception as e:
         logger.error(f"check_pending_trades analysis: {e}")
 
@@ -3323,8 +3370,8 @@ async def check_pending_trades(context):
                         await context.bot.send_message(chat_id=chat_id,
                             text=f"{t(chat_id,'pending_expired_title')} #{tid}\n\n{t(chat_id,'pending_expired_body')}")
                         continue
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("silent exception: " + str(e))
 
             # ── 2. Full reversal: all frames flipped ──
             if total_f > 0 and opposite == total_f:
@@ -3332,7 +3379,7 @@ async def check_pending_trades(context):
                 if trade.get("last_frame_alert") != alert_key:
                     trade["last_frame_alert"] = alert_key
                     opp_dir = "SELL ⬇️" if dire == "BUY" else "BUY ⬆️"
-                    local_res = full_analysis("BTC", chat_id) or res
+                    local_res = (await run_blocking(full_analysis, "BTC", chat_id)) or res
                     msg, nc = _build_health_report(trade, local_res, cur)
                     if status == "pending":
                         async with get_trades_lock():
@@ -3360,7 +3407,7 @@ async def check_pending_trades(context):
 
                 if frames_changed and trade.get("last_frame_alert") != alert_key:
                     trade["last_frame_alert"] = alert_key
-                    local_res = full_analysis("BTC", chat_id) or res
+                    local_res = (await run_blocking(full_analysis, "BTC", chat_id)) or res
                     msg, nc = _build_health_report(trade, local_res, cur)
 
                     if status == "pending":
@@ -3398,7 +3445,7 @@ async def _check_auto_signal(context):
     if (n - last_signal_time.get("BTC", 0)) < SPAM_COOLDOWN:
         return
     try:
-        df_q = get_data("BTC", days=3, interval="hourly")
+        df_q = await run_blocking(get_data, "BTC", days=3, interval="hourly")
         if df_q is None or len(df_q) < 20:
             return
         dq     = calc_indicators(df_q.tail(50).copy())
@@ -3413,7 +3460,7 @@ async def _check_auto_signal(context):
         no_buy  = not any(tr["asset"]=="BTC" and tr["direction"]=="BUY"  for tr in active_trades)
         no_sell = not any(tr["asset"]=="BTC" and tr["direction"]=="SELL" for tr in active_trades)
 
-        res = full_analysis("BTC", 0)
+        res = await run_blocking(full_analysis, "BTC", 0)
         if not res or res.get("final") == "NEUTRAL" or res.get("base_conf", 0) < MIN_CONFIDENCE:
             return
         # Auto-signals must pass the strictest SazBot 2.1 DNA gate before being sent.
@@ -3460,7 +3507,7 @@ async def _check_auto_signal(context):
         trade_counter += 1
         res["id"] = trade_counter
 
-        ev = get_upcoming_event(2)
+        ev = await run_blocking(get_upcoming_event, 2)
         pending_signals[trade_counter] = {
             "res": res, "entry_p": ep, "timestamp": n,
             "entry_low": res.get("entry_low", ep),
@@ -3478,8 +3525,8 @@ async def _check_auto_signal(context):
                 ]])
                 await context.bot.send_message(chat_id=uid, text=sig_msg, reply_markup=kb)
                 pending_signals[trade_counter]["chat_ids"].append(uid)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("silent send/action failed: " + str(e))
     except Exception as e:
         logger.error(f"Auto-signal: {e}")
 
@@ -3490,10 +3537,10 @@ async def _expire_pending_signals(context):
         return
     try:
         n = now_ts()
-        cur = get_btc_price()
+        cur = await run_blocking(get_btc_price)
         fresh = None
         try:
-            fresh = full_analysis("BTC", 0)
+            fresh = await run_blocking(full_analysis, "BTC", 0)
         except Exception:
             fresh = None
 
@@ -3554,8 +3601,8 @@ async def _expire_pending_signals(context):
                         msg += "\n\n⏳ Waiting for a higher-quality setup."
                     try:
                         await context.bot.send_message(chat_id=cid, text=msg)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("silent exception: " + str(e))
 
         for sid in to_exp:
             pending_signals.pop(sid, None)
@@ -3567,7 +3614,7 @@ async def _economic_alert_no_trades(context):
     if active_trades:
         return
     try:
-        ev30 = get_upcoming_event(0.5)
+        ev30 = await run_blocking(get_upcoming_event, 0.5)
         if not ev30:
             return
         ek = _event_key(ev30)
@@ -3587,8 +3634,8 @@ async def _economic_alert_no_trades(context):
                       f"Avoid opening new trades until the event passes.")
             try:
                 await context.bot.send_message(chat_id=uid, text=nm)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("silent send/action failed: " + str(e))
     except Exception as e:
         logger.warning(f"Econ alert: {e}")
 
@@ -3596,7 +3643,7 @@ async def _monitor_active_trades(context):
     """Monitor SL/TP on all active trades, send updates, remove closed ones."""
     if not active_trades:
         return
-    cur = get_btc_price()
+    cur = await run_blocking(get_btc_price)
     if not cur:
         return
 
@@ -3635,7 +3682,7 @@ async def _monitor_active_trades(context):
                 arrived = (direction=="BUY"  and low_z <= cur <= high_z) or (direction=="SELL" and low_z <= cur <= high_z)
                 if arrived:
                     try:
-                        fresh = full_analysis(trade["asset"], 0)
+                        fresh = await run_blocking(full_analysis, trade["asset"], 0)
                         if fresh is None:
                             trade["status"] = "active"
                             trade["actual_entry"] = cur
@@ -3684,7 +3731,7 @@ async def _monitor_active_trades(context):
                                      f"📌 {t(chat_id,'reference_entry')}: ${entry:,.2f}\n💵 {t(chat_id,'current_price')}: ${cur:,.2f}\n📏 {t(chat_id,'distance')}: {dist_pct:.2f}%")
                         # News alert
                         try:
-                            ev = get_upcoming_event(2)
+                            ev = await run_blocking(get_upcoming_event, 2)
                             if ev:
                                 ek = ev.get("event","")
                                 if ek != trade.get("last_news_event",""):
@@ -3698,7 +3745,7 @@ async def _monitor_active_trades(context):
                         ep_passed = (direction=="SELL" and cur < entry*0.99) or                                     (direction=="BUY"  and cur > entry*1.01)
                         if ep_passed and not trade.get("entry_update_sent"):
                             try:
-                                fe = full_analysis(trade["asset"], chat_id)
+                                fe = await run_blocking(full_analysis, trade["asset"], chat_id)
                                 if fe and fe["final"] == direction:
                                     ne = fe.get("entry_price", fe["price"])
                                     if abs(ne - entry) / entry * 100 > 0.1:
@@ -3723,7 +3770,7 @@ async def _monitor_active_trades(context):
                         ctr = (direction=="SELL" and cur > entry*1.02) or                               (direction=="BUY"  and cur < entry*0.98)
                         if ctr:
                             try:
-                                fc = full_analysis(trade["asset"], chat_id)
+                                fc = await run_blocking(full_analysis, trade["asset"], chat_id)
                                 if fc and fc["final"] != direction:
                                     to_remove.append(trade)
                                     remember_cancelled_setup(trade, reason="counter_move")
@@ -3990,7 +4037,7 @@ async def send_smart_alerts(context):
     They describe what changed, SazBot's preferred direction if any, and whether a real trade signal is ready.
     """
     try:
-        df = get_data("BTC", days=7, interval="hourly")
+        df = await run_blocking(get_data, "BTC", days=7, interval="hourly")
         if df is None or len(df) < 30:
             return
         df    = calc_indicators(df)
@@ -4000,7 +4047,7 @@ async def send_smart_alerts(context):
         fib_levels, _, _, _ = calculate_fibonacci(df)
 
         # Pull full SazBot analysis so alerts use the same DNA and decision engine.
-        res = full_analysis("BTC", 0)
+        res = await run_blocking(full_analysis, "BTC", 0)
         if not res:
             return
 
@@ -4042,7 +4089,7 @@ async def send_smart_alerts(context):
         # Economic event alert remains separate.
         if not active_trades:
             try:
-                ev30 = get_upcoming_event(hours=0.5)
+                ev30 = await run_blocking(get_upcoming_event, hours=0.5)
                 if ev30:
                     ev30_key = ev30.get("event", "") + ev30.get("time", "")[:10]
                     if not _news_notified.get(ev30_key):
@@ -4061,10 +4108,10 @@ async def send_smart_alerts(context):
                                             f"Avoid opening new trades until the event passes.")
                             try:
                                 await context.bot.send_message(chat_id=user_id, text=news_msg)
-                            except Exception:
-                                pass
-            except Exception:
-                pass
+                            except Exception as e:
+                                logger.warning("silent exception: " + str(e))
+            except Exception as e:
+                logger.warning("silent send/action failed: " + str(e))
 
         for user_id in ALLOWED_USERS:
             trigger_key, label = trigger_for(user_id)
@@ -4078,22 +4125,30 @@ async def send_smart_alerts(context):
             msg = build_early_bias_alert(user_id, res, label, price, bias_data=b)
             try:
                 await context.bot.send_message(chat_id=user_id, text=msg)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("silent send/action failed: " + str(e))
     except Exception as e:
         logger.error("Smart alerts: " + str(e))
 
 # ==================== أخبار ====================
+
+def fetch_market_news():
+    """Blocking news fetcher. Called via run_blocking() from async send_news."""
+    r = requests.get("https://newsapi.org/v2/everything",
+        params={"q":"bitcoin OR Federal Reserve OR inflation OR CPI",
+                "language":"en","sortBy":"publishedAt","pageSize":5,"apiKey":NEWS_API_KEY},
+        timeout=10)
+    data = r.json()
+    if data.get("status") != "ok":
+        return []
+    return data.get("articles", []) or []
+
+
 async def send_news(context):
     try:
-        r = requests.get("https://newsapi.org/v2/everything",
-            params={"q":"bitcoin OR Federal Reserve OR inflation OR CPI",
-                    "language":"en","sortBy":"publishedAt","pageSize":5,"apiKey":NEWS_API_KEY},
-            timeout=10)
-        data = r.json()
-        if data.get("status") != "ok": return
-        articles = data.get("articles", [])
-        if not articles: return
+        articles = await run_blocking(fetch_market_news)
+        if not articles:
+            return
         lines = ["","  📰 أخبار السوق - SazBot","",""]
         for i, a in enumerate(articles[:5], 1):
             lines.append(str(i)+". "+a.get("title","")[:80])
@@ -4103,7 +4158,6 @@ async def send_news(context):
         await context.bot.send_message(chat_id=CHANNEL_ID, text="\n".join(lines))
     except Exception as e:
         logger.error("News: " + str(e))
-
 
 # 
 #  STATS — Advanced tracking
@@ -4238,7 +4292,7 @@ async def send_daily_summary(context):
             lines.append("")
         if active_trades:
             lines += [f"  🔓 صفقات مفتوحة: {len(active_trades)}  "]
-            cur = get_btc_price()
+            cur = await run_blocking(get_btc_price)
             for tr in active_trades:
                 dire = "🔴 SELL" if tr["direction"] == "SELL" else "🟢 BUY"
                 st3  = "⏳ معلقة" if tr.get("status") == "pending" else "🟢 نشطة"
@@ -4262,7 +4316,11 @@ async def send_daily_summary(context):
 
 # ==================== Main ====================
 def main():
+    global _trades_lock
     app = ApplicationBuilder().token(BOT_TOKEN).build()
+    # Initialise the lock during bot startup instead of at module import time.
+    if _trades_lock is None:
+        _trades_lock = asyncio.Lock()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("version", version_command))
     app.add_handler(CallbackQueryHandler(button_handler))
