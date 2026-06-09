@@ -70,7 +70,7 @@ LAST_PRICE_CACHE_FILE = "last_price_cache.json"
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BUILD_ID = "SAZBOT_FINAL_DNA_WELCOME_KEYBOARD_REWORK_2026_06_10"
+BUILD_ID = "SAZBOT_FINAL_COMPLETE_MONITOR_KEYBOARD_FIXED_2026_06_10"
 
 user_languages        = {}
 active_trades         = []
@@ -1492,31 +1492,31 @@ def apply_saz_dna_gate(res, uid=0, mode="manual"):
     return blocked
 
 def saz_dna_rejection_message(res, uid=0):
-    """Clear bilingual rejection message. Avoid calling it a trade opportunity."""
+    """User-facing explanation that shows the decision, not the internal rule."""
     lang = user_languages.get(uid, "ar")
+    lines = []
     if lang == "ar":
-        lines = [
-            "🚫 SazBot | لا توجد نقطة دخول مناسبة",
+        lines += [
+            "🚫 SazBot 2.1 لم يعتمد هذه الفرصة",
             "",
         ]
         lines += safe_saz_intelligence_block(res, uid, compact=False)
         lines += [
             "",
-            "الخلاصة: الفكرة قد تكون تحت المراقبة، لكن شروط الدخول غير مكتملة الآن.",
-            "انتظر منطقة دخول أفضل أو توافقاً أوضح بين الفريمات.",
+            "القرار النهائي: الانتظار أفضل من الدخول في فرصة غير مكتملة.",
         ]
     else:
-        lines = [
-            "🚫 SazBot | No Suitable Entry",
+        lines += [
+            "🚫 SazBot 2.1 did not approve this setup",
             "",
         ]
         lines += safe_saz_intelligence_block(res, uid, compact=False)
         lines += [
             "",
-            "Summary: the idea may be worth watching, but entry conditions are not complete now.",
-            "Wait for a better entry zone or clearer timeframe alignment.",
+            "Final decision: waiting is better than entering an incomplete setup.",
         ]
     return "\n".join(lines)
+
 
 
 def cap_override_decision_metrics(res, original_res=None, uid=0):
@@ -2694,69 +2694,64 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
 # ==================== بناء الرسائل ====================
 
 def build_override_trade_msg(res, uid=0):
-    """Short bilingual message for available B/C override setups."""
+    """Short, trader-focused message for higher-risk available setup."""
     lang = user_languages.get(uid, "ar")
     m = res.get("decision_metrics") or saz_decision_intelligence(res, uid, persist=False, refresh=False)
     grade = m.get("setup_grade") or saz_setup_grade(m)
     direction = res.get("final", "")
+    dir_txt = ("شراء BUY ⬆️" if direction == "BUY" else "بيع SELL ⬇️") if lang == "ar" else ("BUY ⬆️" if direction == "BUY" else "SELL ⬇️")
     grade_txt = saz_grade_label(grade, uid)
     risk_txt = saz_grade_risk_label(grade, uid)
-    entry_low = float(res.get("entry_low", res.get("entry_price", 0)) or 0)
-    entry_high = float(res.get("entry_high", res.get("entry_price", 0)) or 0)
-    entry = float(res.get("entry_price", res.get("price", 0)) or 0)
-    price = float(res.get("price", 0) or 0)
-    rr = float(res.get("rr", 0) or 0)
+    entry_low = res.get("entry_low", res.get("entry_price", 0))
+    entry_high = res.get("entry_high", res.get("entry_price", 0))
+    entry = res.get("entry_price", res.get("price", 0))
 
     if lang == "ar":
-        dir_txt = "🔴 SELL ⬇️" if direction == "SELL" else "🟢 BUY ⬆️"
-        note = "التوافق غير مكتمل. تعامل معها بحجم أصغر ولا تدخل إذا ابتعد السعر عن منطقة الدخول."
         lines = [
             f"🟡 SazBot | سيناريو متاح #{res.get('id','')}",
             "₿ BTC/USD",
             "",
             f"الاتجاه: {dir_txt}",
-            f"الحالة: {grade_txt}",
+            f"التصنيف: {grade_txt}",
             f"الثقة: {int(res.get('confidence', res.get('base_conf', 0)))}%",
             f"المخاطرة: {risk_txt}",
             "",
-            f"السعر الحالي: ${price:,.2f}",
-            f"منطقة الدخول: ${entry_low:,.2f} — ${entry_high:,.2f}",
-            f"الدخول المرجعي: ${entry:,.2f}",
+            f"السعر الحالي: ${float(res.get('price', 0)):,.2f}",
+            f"منطقة الدخول: ${float(entry_low):,.2f} — ${float(entry_high):,.2f}",
+            f"الدخول المرجعي: ${float(entry):,.2f}",
             "",
             f"TP1: ${float(res.get('tp1', 0)):,.2f}",
             f"TP2: ${float(res.get('tp2', 0)):,.2f}",
             f"TP3: ${float(res.get('tp3', 0)):,.2f}",
             f"SL: ${float(res.get('sl', 0)):,.2f}",
-            f"RR: 1:{rr:.1f}",
+            f"RR: 1:{float(res.get('rr', 0) or 0):.1f}",
             "",
-            f"ملاحظة: {note}",
+            "ملاحظة: هذا سيناريو غير مكتمل التوافق. استخدم حجم أصغر ولا تدخل إذا ابتعد السعر عن منطقة الدخول.",
             "",
             f"🕐 {t(uid,'updated_gmt')}: {gmt_now()}",
             t(uid,"educational_footer"),
         ]
     else:
-        dir_txt = "🔴 SELL ⬇️" if direction == "SELL" else "🟢 BUY ⬆️"
-        note = "Alignment is not complete. Use smaller size and avoid entering if price moves away from the entry zone."
         lines = [
             f"🟡 SazBot | Available Setup #{res.get('id','')}",
             "₿ BTC/USD",
             "",
             f"Direction: {dir_txt}",
-            f"Status: {grade_txt}",
+            f"Grade: {grade_txt}",
             f"Confidence: {int(res.get('confidence', res.get('base_conf', 0)))}%",
             f"Risk: {risk_txt}",
             "",
-            f"Current Price: ${price:,.2f}",
-            f"Entry Zone: ${entry_low:,.2f} — ${entry_high:,.2f}",
-            f"Reference Entry: ${entry:,.2f}",
+            f"Current Price: ${float(res.get('price', 0)):,.2f}",
+            f"Entry Zone: ${float(entry_low):,.2f} — ${float(entry_high):,.2f}",
+            f"Reference Entry: ${float(entry):,.2f}",
             "",
             f"TP1: ${float(res.get('tp1', 0)):,.2f}",
             f"TP2: ${float(res.get('tp2', 0)):,.2f}",
             f"TP3: ${float(res.get('tp3', 0)):,.2f}",
             f"SL: ${float(res.get('sl', 0)):,.2f}",
-            f"RR: 1:{rr:.1f}",
+            f"RR: 1:{float(res.get('rr', 0) or 0):.1f}",
             "",
-            f"Note: {note}",
+            "Note: alignment is not complete. Use smaller size and avoid chasing price outside the entry zone.",
             "",
             f"🕐 {t(uid,'updated_gmt')}: {gmt_now()}",
             t(uid,"educational_footer"),
@@ -3107,9 +3102,6 @@ def confirm_keyboard(uid=0):
     ])
 
 
-# ==================== هاندلرز ====================
-
-
 
 def welcome_message(uid=0):
     """Short bilingual welcome. Keyboard labels stay English; content follows user language."""
@@ -3143,6 +3135,9 @@ def welcome_message(uid=0):
     )
 
 
+# ==================== هاندلرز ====================
+
+
 # ==================== Persistent Reply Keyboard ====================
 BTN_DECISION_CENTER = "🧠 Decision Center"
 BTN_MARKET_READ     = "📖 Market Read"
@@ -3152,17 +3147,6 @@ BTN_ACTIVE_TRADES   = "📈 Active Trades"
 BTN_STATS           = "📊 Statistics"
 BTN_NEWS            = "📰 News"
 BTN_SETTINGS        = "⚙️ Settings"
-
-REPLY_BUTTONS = {
-    BTN_DECISION_CENTER,
-    BTN_MARKET_READ,
-    BTN_PRICES,
-    BTN_FAST_SCALPS,
-    BTN_ACTIVE_TRADES,
-    BTN_STATS,
-    BTN_NEWS,
-    BTN_SETTINGS,
-}
 
 def persistent_keyboard():
     """English-only fixed keyboard shown under the message box."""
@@ -3190,21 +3174,17 @@ async def show_prices_from_reply(update, uid):
         if bp <= 0:
             await update.message.reply_text(t(uid, "failed"), reply_markup=persistent_keyboard())
             return
-        lines = [
-            "💰 Prices",
-            "",
-            f"₿ BTC/USD: ${bp:,.2f}",
-            f"{'📈' if bc > 0 else '📉'} 24h Change: {bc:+.2f}%",
-            "",
-            f"🕐 Last Update (GMT): {gmt_now()}",
-        ]
+        if user_languages.get(uid, "ar") == "ar":
+            lines = ["💰 الأسعار", "", f"₿ BTC/USD: ${bp:,.2f}", f"{'📈' if bc > 0 else '📉'} التغيير 24h: {bc:+.2f}%", "", f"🕐 آخر تحديث (GMT): {gmt_now()}"]
+        else:
+            lines = ["💰 Prices", "", f"₿ BTC/USD: ${bp:,.2f}", f"{'📈' if bc > 0 else '📉'} 24h Change: {bc:+.2f}%", "", f"🕐 Last Update (GMT): {gmt_now()}"]
         await update.message.reply_text("\n".join(lines), reply_markup=persistent_keyboard())
     except Exception as e:
         logger.error("show_prices_from_reply: " + str(e))
         await update.message.reply_text(t(uid, "error") + str(e), reply_markup=persistent_keyboard())
 
 async def show_market_read_from_reply(update, uid):
-    await update.message.reply_text("⏳ Reading BTC market...", reply_markup=persistent_keyboard())
+    await update.message.reply_text("⏳ جاري قراءة السوق..." if user_languages.get(uid, "ar") == "ar" else "⏳ Reading BTC market...", reply_markup=persistent_keyboard())
     try:
         keys_to_clear = [k for k in _cache if k.startswith("BTC")]
         for k in keys_to_clear:
@@ -3219,7 +3199,6 @@ async def show_market_read_from_reply(update, uid):
         await update.message.reply_text(t(uid, "error") + str(e), reply_markup=persistent_keyboard())
 
 async def show_decision_center_from_reply(update, uid):
-    """Open the existing inline decision menu instead of duplicating trade execution logic."""
     await update.message.reply_text(
         ("🧠 مركز القرار\n\nاختر BTC Decision Center بالأسفل لتشغيل قرار الصفقة الكامل." if user_languages.get(uid, "ar") == "ar" else "🧠 Decision Center\n\nChoose BTC Decision Center below to run the full trade decision flow."),
         reply_markup=main_keyboard(uid),
@@ -3232,23 +3211,18 @@ async def show_decision_center_from_reply(update, uid):
 async def show_active_trades_from_reply(update, uid):
     try:
         if not active_trades:
-            await update.message.reply_text("📭 No active trades right now.", reply_markup=persistent_keyboard())
+            await update.message.reply_text(t(uid, "no_open_trades"), reply_markup=persistent_keyboard())
             return
         current_price = await run_blocking(get_btc_price)
-        lines = ["📈 Active Trades", ""]
+        lines = ["📈 الصفقات النشطة" if user_languages.get(uid, "ar") == "ar" else "📈 Active Trades", ""]
         for tr in active_trades:
             tid = tr.get("id", "?")
             direction = "SELL 🔴" if tr.get("direction") == "SELL" else "BUY 🟢"
-            status = "Pending" if tr.get("status") == "pending" else "Active"
+            status = "قيد الانتظار" if tr.get("status") == "pending" and user_languages.get(uid, "ar") == "ar" else ("Pending" if tr.get("status") == "pending" else ("نشطة" if user_languages.get(uid, "ar") == "ar" else "Active"))
             entry = float(tr.get("entry", 0) or 0)
             sl = float(tr.get("sl", 0) or 0)
             tp1 = float(tr.get("tp1", 0) or 0)
-            lines += [
-                f"#{tid} | BTC/USD | {direction}",
-                f"Status: {status}",
-                f"Entry: ${entry:,.2f}",
-                f"TP1: ${tp1:,.2f} | SL: ${sl:,.2f}",
-            ]
+            lines += [f"#{tid} | BTC/USD | {direction}", f"Status: {status}", f"Entry: ${entry:,.2f}", f"TP1: ${tp1:,.2f} | SL: ${sl:,.2f}"]
             if current_price:
                 lines.append(f"Current: ${float(current_price):,.2f}")
             lines.append("")
@@ -3265,23 +3239,19 @@ async def show_stats_from_reply(update, uid):
         await update.message.reply_text(t(uid, "error") + str(e), reply_markup=persistent_keyboard())
 
 async def show_news_from_reply(update, uid):
-    try:
-        await update.message.reply_text(
-            "📰 News alerts are monitored automatically. I will notify you when a high-impact market event is near.",
-            reply_markup=persistent_keyboard(),
-        )
-    except Exception as e:
-        logger.error("show_news_from_reply: " + str(e))
+    msg_ar = "📰 يتم مراقبة الأخبار والأحداث المهمة تلقائياً. سأرسل تنبيهاً عند اقتراب حدث مؤثر على السوق."
+    msg_en = "📰 News and high-impact events are monitored automatically. I will alert you when a market-moving event is near."
+    await update.message.reply_text(msg_ar if user_languages.get(uid, "ar") == "ar" else msg_en, reply_markup=persistent_keyboard())
 
 async def show_settings_from_reply(update, uid):
     await update.message.reply_text(
-        "⚙️ Settings\n\nUse the options below:",
+        "⚙️ الإعدادات\n\nاختر من الخيارات:" if user_languages.get(uid, "ar") == "ar" else "⚙️ Settings\n\nUse the options below:",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("🌐 Language", callback_data="change_lang")],
             [InlineKeyboardButton("ℹ️ About SazBot", callback_data="about")],
         ]),
     )
-    await update.message.reply_text("Quick keyboard remains available below.", reply_markup=persistent_keyboard())
+    await update.message.reply_text("الأزرار السريعة ستبقى متاحة بالأسفل." if user_languages.get(uid, "ar") == "ar" else "Quick keyboard remains available below.", reply_markup=persistent_keyboard())
 
 
 async def why_command(update, context: ContextTypes.DEFAULT_TYPE):
@@ -3395,6 +3365,7 @@ async def start(update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(welcome_message(uid), reply_markup=persistent_keyboard())
 
 
+
 async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
     uid  = update.effective_user.id
     msg_text = update.message.text or ""
@@ -3411,10 +3382,8 @@ async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
         await show_prices_from_reply(update, uid)
         return
     if msg_text == BTN_FAST_SCALPS:
-        await update.message.reply_text(
-            "⚡ Fast Scalps are automatic. I will alert you when a C+ fast opportunity appears.",
-            reply_markup=persistent_keyboard(),
-        )
+        msg = "⚡ تنبيهات المضاربة السريعة تعمل تلقائياً. سأرسل لك تنبيهاً عند ظهور فرصة C+ مناسبة." if user_languages.get(uid, "ar") == "ar" else "⚡ Fast Scalps are automatic. I will alert you when a C+ fast opportunity appears."
+        await update.message.reply_text(msg, reply_markup=persistent_keyboard())
         return
     if msg_text == BTN_ACTIVE_TRADES:
         await show_active_trades_from_reply(update, uid)
@@ -3435,6 +3404,7 @@ async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
     else:
         reply = random.choice(CONFUSED_AR if lang == "ar" else CONFUSED_EN)
     await update.message.reply_text(reply, reply_markup=persistent_keyboard())
+
 
 
 async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
@@ -4384,7 +4354,7 @@ def is_fast_scalp_candidate(res, timing_rescue=False):
 
 
 def build_fast_scalp_msg(res, uid=0):
-    """Short bilingual alert for fast C+ scalp opportunities."""
+    """Short alert for fast C-grade scalp opportunities."""
     lang = user_languages.get(uid, "ar")
     m = res.get("decision_metrics") or saz_decision_intelligence(res, uid, persist=False, refresh=False)
     quality = int(m.get("quality", 0) or 0)
@@ -4396,16 +4366,15 @@ def build_fast_scalp_msg(res, uid=0):
     sl = float(res.get("sl", 0) or 0)
     tp1 = float(res.get("tp1", 0) or 0)
     tp2 = float(res.get("tp2", 0) or 0)
-    rr = float(res.get("rr", 0) or 0)
 
     if lang == "ar":
         dir_txt = "🔴 SELL ⬇️" if direction == "SELL" else "🟢 BUY ⬆️"
         lines = [
-            "⚡ SazBot | مضاربة سريعة",
+            "⚡ SazBot | فرصة مضاربة سريعة",
             "₿ BTC/USD",
             "",
             f"الاتجاه: {dir_txt}",
-            "الحالة: 🟠 C+ | دخول سريع عالي المخاطرة",
+            f"التصنيف: 🟠 C+ Setup",
             f"جودة السوق: {quality}/100",
             "",
             f"السعر الحالي: ${price:,.2f}",
@@ -4415,9 +4384,8 @@ def build_fast_scalp_msg(res, uid=0):
             f"TP1: ${tp1:,.2f}",
             f"TP2: ${tp2:,.2f}",
             f"SL: ${sl:,.2f}",
-            f"RR: 1:{rr:.1f}",
             "",
-            "تنبيه: هذا دخول سريع وليس فرصة رئيسية. استخدم حجم أصغر ولا تطارد السعر خارج منطقة الدخول.",
+            "⚠️ هذه ليست من أفضل الفرص؛ هي مضاربة سريعة فقط. استخدم حجم أصغر ولا تطارد السعر إذا ابتعد عن منطقة الدخول.",
             "",
             f"🕐 {t(uid,'updated_gmt')}: {gmt_now()}",
             t(uid,"educational_footer"),
@@ -4425,11 +4393,11 @@ def build_fast_scalp_msg(res, uid=0):
     else:
         dir_txt = "🔴 SELL ⬇️" if direction == "SELL" else "🟢 BUY ⬆️"
         lines = [
-            "⚡ SazBot | Fast Scalp",
+            "⚡ SazBot | Fast Scalping Opportunity",
             "₿ BTC/USD",
             "",
             f"Direction: {dir_txt}",
-            "Status: 🟠 C+ | High-risk quick entry",
+            f"Grade: 🟠 C+ Setup",
             f"Market Quality: {quality}/100",
             "",
             f"Current Price: ${price:,.2f}",
@@ -4439,9 +4407,8 @@ def build_fast_scalp_msg(res, uid=0):
             f"TP1: ${tp1:,.2f}",
             f"TP2: ${tp2:,.2f}",
             f"SL: ${sl:,.2f}",
-            f"RR: 1:{rr:.1f}",
             "",
-            "Note: this is a fast scalp, not a main setup. Use smaller size and do not chase price outside the entry zone.",
+            "⚠️ This is not an elite setup; it is a fast scalp only. Use smaller size and do not chase price outside the entry zone.",
             "",
             f"🕐 {t(uid,'updated_gmt')}: {gmt_now()}",
             t(uid,"educational_footer"),
@@ -4449,6 +4416,462 @@ def build_fast_scalp_msg(res, uid=0):
     return "\n".join(lines)
 
 
+async def _check_auto_signal(context):
+    """Auto-signal: fires only when RSI is extended, price is near Fib, confidence passes MIN_CONFIDENCE, and 3 qualified timeframes agree."""
+    n = now_ts()
+    if (n - last_signal_time.get("BTC", 0)) < SPAM_COOLDOWN:
+        return
+    try:
+        df_q = await run_blocking(get_data, "BTC", days=3, interval="hourly")
+        if df_q is None or len(df_q) < 20:
+            return
+        dq     = calc_indicators(df_q.tail(50).copy())
+        lq     = dq.iloc[-1]
+        price_q= float(lq["Close"])
+        rsi_q  = safe(lq["RSI"], 50)
+        fib_q, *_ = calculate_fibonacci(df_q)
+
+        # Soft pre-filter only: do not kill valid BTC moves before DNA sees them.
+        near_fib_q = any(abs(price_q - v) / price_q * 100 < 0.7 for v in fib_q.values())
+        rsi_extended_q = (rsi_q < 40 or rsi_q > 60)
+        if not (near_fib_q or rsi_extended_q):
+            return
+
+        no_buy  = not any(tr["asset"]=="BTC" and tr["direction"]=="BUY"  for tr in active_trades)
+        no_sell = not any(tr["asset"]=="BTC" and tr["direction"]=="SELL" for tr in active_trades)
+
+        res = await run_blocking(full_analysis, "BTC", 0)
+        if not res or res.get("final") == "NEUTRAL":
+            return
+        # Auto-signals must pass the strictest SazBot 2.1 DNA gate before being sent.
+        res = apply_saz_dna_gate(res, 0, mode="auto")
+        if not res or res.get("final") == "NEUTRAL" or res.get("blocked_by_saz_dna"):
+            return
+
+        fl = res.get("frame_lines", [])
+        buy_f, sell_f = count_qualified_frame_lines(fl)
+
+        # Auto-signals remain selective, but not impossible:
+        # Prefer full alignment; allow a clean strong setup if the DNA gate approves it.
+        three = (res["final"] == "BUY" and buy_f == 3 and sell_f == 0) or (res["final"] == "SELL" and sell_f == 3 and buy_f == 0)
+        # For BTC, do not kill every setup just because one timeframe is temporarily opposite.
+        # Full alignment is best; strong directional agreement can still be tradable if DNA approves.
+        strong_partial = (
+            (res["final"] == "BUY" and buy_f >= 2 and sell_f <= 1) or
+            (res["final"] == "SELL" and sell_f >= 2 and buy_f <= 1)
+        )
+
+        # Timing rescue: 1H + Daily alignment can be a valid BTC scalp/swing even when 4H is lagging.
+        frame_txt = " ".join(res.get("frame_lines", []))
+        timing_rescue = (
+            (res["final"] == "SELL" and "1H: SELL" in frame_txt and "Daily: SELL" in frame_txt) or
+            (res["final"] == "BUY" and "1H: BUY" in frame_txt and "Daily: BUY" in frame_txt) or
+            (res["final"] == "SELL" and "ساعة: SELL" in frame_txt and "يومي: SELL" in frame_txt) or
+            (res["final"] == "BUY" and "ساعة: BUY" in frame_txt and "يومي: BUY" in frame_txt)
+        )
+
+        fast_scalp = is_fast_scalp_candidate(res, timing_rescue=timing_rescue)
+
+        if not (three or strong_partial or timing_rescue or fast_scalp):
+            return
+
+        res["entry_reason"] = "timing_rescue" if timing_rescue else ("fast_scalp" if fast_scalp else "auto")
+        res["fast_scalp"] = bool(fast_scalp)
+
+        dir_ok = (res["final"]=="BUY" and no_buy) or (res["final"]=="SELL" and no_sell)
+        ep = float(res["entry_price"])
+        sig_atr = float(res.get("atr", ep * 0.015) or ep * 0.015)
+        entry_low = float(res.get("entry_low", ep))
+        entry_high = float(res.get("entry_high", ep))
+
+        # Do not send a new signal if price is already too far away from the Smart Entry Zone.
+        if is_price_too_far_from_entry_zone(res.get("price", price_q), entry_low, entry_high, max_distance_for_setup_grade(res)):
+            return
+
+        # Do not re-offer a recently cancelled setup in the same zone/direction.
+        if is_recently_cancelled("BTC", res["final"], ep, sig_atr):
+            return
+
+        dup = any(tr["asset"]=="BTC" and tr["direction"]==res["final"]
+                  and abs(tr["entry"] - ep) < 0.5 * sig_atr
+                  for tr in active_trades)
+
+        if not (dir_ok and not dup):
+            return
+
+        global trade_counter
+        last_signal_time["BTC"] = n
+        trade_counter += 1
+        res["id"] = trade_counter
+
+        ev = await run_blocking(get_upcoming_event, 2)
+        pending_signals[trade_counter] = {
+            "res": res, "entry_p": ep, "timestamp": n,
+            "entry_low": res.get("entry_low", ep),
+            "entry_high": res.get("entry_high", ep),
+            "price": res["price"], "chat_ids": [],
+        }
+        for uid in ALLOWED_USERS:
+            try:
+                sig_msg = build_fast_scalp_msg(res, uid) if res.get("fast_scalp") else build_trade_msg(res, uid, auto=True)
+                if ev:
+                    sig_msg += f"\n\n⚠️ {t(uid,'high_impact_event')}: {ev.get('event','')} {t(uid,'event_in')} {_mins_txt(ev['mins_left'])}"
+                kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton(t(uid,"btn_activate_setup"), callback_data=f"activate_signal_{trade_counter}"),
+                    InlineKeyboardButton(t(uid,"btn_ignore"), callback_data=f"ignore_signal_{trade_counter}"),
+                ]])
+                await context.bot.send_message(chat_id=uid, text=sig_msg, reply_markup=kb)
+                pending_signals[trade_counter]["chat_ids"].append(uid)
+            except Exception as e:
+                logger.warning("silent send/action failed: " + str(e))
+    except Exception as e:
+        logger.error(f"Auto-signal: {e}")
+
+
+async def _expire_pending_signals(context):
+    """Expire pending signals only after a short grace period, using Smart Entry Zone distance and timeframe validation."""
+    if not pending_signals:
+        return
+    try:
+        n = now_ts()
+        cur = await run_blocking(get_btc_price)
+        fresh = None
+        try:
+            fresh = await run_blocking(full_analysis, "BTC", 0)
+        except Exception:
+            fresh = None
+
+        to_exp = []
+        for sid, sig in list(pending_signals.items()):
+            expired = False
+            reason_key = ""
+            age = n - float(sig.get("timestamp", n))
+
+            # Avoid the bad UX where a fresh signal is generated and expired in the same cycle.
+            if age < PENDING_SIGNAL_MIN_AGE_BEFORE_EXPIRY:
+                continue
+
+            sig_res = sig.get("res", {})
+            sig_dir = sig_res.get("final")
+            sig_entry = float(sig.get("entry_p", sig_res.get("entry_price", 0)) or 0)
+            sig_atr = float(sig_res.get("atr", sig_entry * 0.015) or sig_entry * 0.015)
+            entry_low = float(sig.get("entry_low", sig_res.get("entry_low", sig_entry)) or sig_entry)
+            entry_high = float(sig.get("entry_high", sig_res.get("entry_high", sig_entry)) or sig_entry)
+
+            # Expire by distance from Smart Entry Zone, not from the market price at signal creation.
+            if cur and is_price_too_far_from_entry_zone(cur, entry_low, entry_high, MAX_DISTANCE_FROM_ZONE_PCT):
+                expired = True
+                reason_key = "signal_expired_price"
+
+            # Expire if the fresh decision is no longer supportive of the original direction.
+            elif fresh:
+                fresh_final = fresh.get("final", "NEUTRAL")
+                fresh_lines = fresh.get("frame_lines", [])
+                fresh_buy, fresh_sell = count_qualified_frame_lines(fresh_lines)
+                supportive = (
+                    sig_dir == "BUY" and fresh_final == "BUY" and fresh_buy == 3 and fresh_sell == 0
+                ) or (
+                    sig_dir == "SELL" and fresh_final == "SELL" and fresh_sell == 3 and fresh_buy == 0
+                )
+                if not supportive:
+                    expired = True
+                    reason_key = "signal_expired_timeframes"
+
+            elif age > SIGNAL_EXPIRY:
+                expired = True
+                reason_key = "signal_expired_time"
+
+            if expired:
+                to_exp.append(sid)
+                remember_cancelled_setup("BTC", sig_dir, sig_entry, sig_atr, reason=reason_key)
+                for cid in sig.get("chat_ids", list(ALLOWED_USERS)):
+                    lang = user_languages.get(cid, "ar")
+                    if lang == "ar":
+                        msg = f"⏰ SazBot | انتهت صلاحية الإشارة #{sid}"
+                        if reason_key:
+                            msg += f"\n\n{t(cid, reason_key)}"
+                        msg += "\n\n⏳ سيتم انتظار فرصة جديدة بجودة أعلى."
+                    else:
+                        msg = f"⏰ SazBot | Signal Expired #{sid}"
+                        if reason_key:
+                            msg += f"\n\n{t(cid, reason_key)}"
+                        msg += "\n\n⏳ Waiting for a higher-quality setup."
+                    try:
+                        await context.bot.send_message(chat_id=cid, text=msg)
+                    except Exception as e:
+                        logger.warning("silent exception: " + str(e))
+
+        for sid in to_exp:
+            pending_signals.pop(sid, None)
+    except Exception as e:
+        logger.error(f"Expire signals: {e}")
+
+async def _economic_alert_no_trades(context):
+    """Alert about upcoming high-impact event when no trades are open."""
+    if active_trades:
+        return
+    try:
+        ev30 = await run_blocking(get_upcoming_event, 0.5)
+        if not ev30:
+            return
+        ek = _event_key(ev30)
+        if _news_notified.get(ek):
+            return
+        _news_notified[ek] = True
+        for uid in ALLOWED_USERS:
+            if user_languages.get(uid, "ar") == "ar":
+                nm = (f"📰 تنبيه اقتصادي مهم\n"
+                      f"{ev30['event']} — خلال {_mins_txt(ev30['mins_left'])}\n"
+                      f"التأثير المتوقع: 🔴 عالي\n"
+                      f"{t(uid,'avoid_new_trades')}")
+            else:
+                nm = (f"📰 Important Economic Alert\n"
+                      f"{ev30['event']} — in {_mins_txt(ev30['mins_left'])}\n"
+                      f"Expected impact: 🔴 High\n"
+                      f"Avoid opening new trades until the event passes.")
+            try:
+                await context.bot.send_message(chat_id=uid, text=nm)
+            except Exception as e:
+                logger.warning("silent send/action failed: " + str(e))
+    except Exception as e:
+        logger.warning(f"Econ alert: {e}")
+
+async def _monitor_active_trades(context):
+    """Monitor SL/TP on all active trades, send updates, remove closed ones."""
+    if not active_trades:
+        return
+    cur = await run_blocking(get_btc_price)
+    if not cur:
+        return
+
+    to_remove = []
+    _session, _ = get_current_session()
+
+    for trade in list(active_trades):
+        try:
+            chat_id   = trade["chat_id"]
+            direction = trade["direction"]
+            entry     = trade["entry"]
+            atr       = trade["atr"]
+            tp1       = trade["tp1"]; tp2 = trade["tp2"]; tp3 = trade["tp3"]
+            sl        = trade["sl"]
+            trade_id  = trade.get("id", "?")
+            update_msg= None; closed = False
+
+            # ── Pending: wait for price to reach entry ──
+            if trade.get("status") == "pending":
+                low_z, high_z = entry_zone_from_trade(entry, atr)
+                if direction == "BUY":
+                    zone_dist = ((cur - high_z) / entry * 100) if cur > high_z else ((low_z - cur) / entry * 100 if cur < low_z else 0)
+                else:
+                    zone_dist = ((low_z - cur) / entry * 100) if cur < low_z else ((cur - high_z) / entry * 100 if cur > high_z else 0)
+                if zone_dist > MAX_DISTANCE_FROM_ZONE_PCT:
+                    to_remove.append(trade)
+                    remember_cancelled_setup(trade, reason="price_moved_too_far")
+                    await context.bot.send_message(chat_id=chat_id,
+                        text=(
+                            f"⚠️ SazBot | {t(chat_id,'setup_cancelled_full')} #{trade_id}\n\n"
+                            f"{t(chat_id,'price_moved_against')}\n\n"
+                            f"🎯 {t(chat_id,'entry_zone')}: {format_entry_zone(entry, atr)}\n"
+                            f"💵 {t(chat_id,'current_price')}: ${cur:,.2f}"
+                        ))
+                    continue
+                arrived = (direction=="BUY"  and low_z <= cur <= high_z) or (direction=="SELL" and low_z <= cur <= high_z)
+                if arrived:
+                    try:
+                        fresh = await run_blocking(full_analysis, trade["asset"], 0)
+                        if fresh is None:
+                            trade["status"] = "active"
+                            trade["actual_entry"] = cur
+                            await context.bot.send_message(chat_id=chat_id,
+                                text=f"🟢 SazBot | {t(chat_id,'setup_activated')} #{trade_id}\n\n{t(chat_id,'price_reached_entry')}")
+                        elif fresh["final"] != direction:
+                            to_remove.append(trade)
+                            remember_cancelled_setup(trade, reason="bias_changed_at_entry")
+                            nd = "BUY ⬆️" if fresh["final"]=="BUY" else "SELL ⬇️"
+                            await context.bot.send_message(chat_id=chat_id,
+                                text=f"⚠️ SazBot | {t(chat_id,'setup_cancelled_full')} #{trade_id}\n\n{t(chat_id,'price_bias_changed')} {nd}.")
+                        else:
+                            trade.update({"status":"active","actual_entry":cur,"sl":fresh["sl"],
+                                          "tp1":fresh["tp1"],"tp2":fresh["tp2"],
+                                          "tp3":fresh["tp3"],"atr":fresh["atr"],
+                                          "orig_sl":fresh["sl"]})
+                            await context.bot.send_message(chat_id=chat_id,
+                                text=f"🟢 SazBot | {t(chat_id,'setup_activated')} #{trade_id}\n\n"
+                                     f"{t(chat_id,'price_reached_entry')}\n\n"
+                                     f"🛑 SL: ${fresh['sl']:,.2f}\n"
+                                     f"🎯 TP1: ${fresh['tp1']:,.2f} | TP2: ${fresh['tp2']:,.2f} | TP3: ${fresh['tp3']:,.2f}")
+                            async with get_trades_lock():
+                                save_trades()
+                                save_runtime_state()
+                    except Exception as e:
+                        logger.error(f"Pending arrival: {e}")
+                        trade["status"] = "active"
+                        trade["actual_entry"] = cur
+                        await context.bot.send_message(chat_id=chat_id,
+                            text=f"🟢 SazBot | {t(chat_id,'setup_activated')} #{trade_id}\n\n{t(chat_id,'price_reached_entry')}")
+                else:
+                    # SL hit before entry
+                    sl_pre = (direction=="BUY" and cur <= sl) or (direction=="SELL" and cur >= sl)
+                    if sl_pre:
+                        to_remove.append(trade)
+                        await context.bot.send_message(chat_id=chat_id,
+                            text=f"⚠️ SazBot | {t(chat_id,'setup_cancelled_full')} #{trade_id}\n\n"
+                                 f"{t(chat_id,'invalid_before_entry')}\n\n"
+                                 f"🛑 SL: ${sl:,.2f}\n💵 {t(chat_id,'current_price')}: ${cur:,.2f}")
+                    else:
+                        dist_pct = abs(cur - entry) / entry * 100
+                        if dist_pct <= 0.5 and not trade.get("entry_alert_sent"):
+                            trade["entry_alert_sent"] = True
+                            await context.bot.send_message(chat_id=chat_id,
+                                text=f"🎯 SazBot | {t(chat_id,'entry_alert')} #{trade_id}\n\n"
+                                     f"{t(chat_id,'approaching_entry')}\n\n"
+                                     f"📌 {t(chat_id,'reference_entry')}: ${entry:,.2f}\n💵 {t(chat_id,'current_price')}: ${cur:,.2f}\n📏 {t(chat_id,'distance')}: {dist_pct:.2f}%")
+                        # News alert
+                        try:
+                            ev = await run_blocking(get_upcoming_event, 2)
+                            if ev:
+                                ek = ev.get("event","")
+                                if ek != trade.get("last_news_event",""):
+                                    trade["last_news_event"] = ek
+                                    await context.bot.send_message(chat_id=chat_id,
+                                        text=f"⚠️ SazBot | {t(chat_id,'high_impact_event')} #{trade_id}\n\n"
+                                             f"{ek} {t(chat_id,'event_in')} {_mins_txt(ev['mins_left'])}.\n"
+                                             f"{t(chat_id,'impact_high')}")
+                        except Exception: pass
+                        # Entry-passed update
+                        ep_passed = (direction=="SELL" and cur < entry*0.99) or                                     (direction=="BUY"  and cur > entry*1.01)
+                        if ep_passed and not trade.get("entry_update_sent"):
+                            try:
+                                fe = await run_blocking(full_analysis, trade["asset"], chat_id)
+                                if fe and fe["final"] == direction:
+                                    ne = fe.get("entry_price", fe["price"])
+                                    if abs(ne - entry) / entry * 100 > 0.1:
+                                        trade["entry_update_sent"] = True
+                                        trade["pending_update"] = {
+                                            "entry":ne,"sl":fe["sl"],"tp1":fe["tp1"],
+                                            "tp2":fe["tp2"],"tp3":fe["tp3"],
+                                        }
+                                        kb_upd = InlineKeyboardMarkup([[
+                                            InlineKeyboardButton(t(chat_id,"btn_update_setup"), callback_data=f"update_entry_{trade_id}"),
+                                            InlineKeyboardButton(t(chat_id,"btn_ignore"), callback_data=f"ignore_entry_{trade_id}"),
+                                        ]])
+                                        await context.bot.send_message(chat_id=chat_id,
+                                            text=f"📊 SazBot | {t(chat_id,'entry_update')} #{trade_id}\n\n"
+                                                 f"{t(chat_id,'conditions_changed_before_activation')}\n\n"
+                                                 f"{t(chat_id,'old_reference')}: ${entry:,.2f}\n{t(chat_id,'new_reference')}: ${ne:,.2f}\n\n"
+                                                 f"🛑 SL: ${fe['sl']:,.2f}\n🎯 TP1: ${fe['tp1']:,.2f} | TP2: ${fe['tp2']:,.2f}",
+                                            reply_markup=kb_upd)
+                            except Exception as e:
+                                logger.warning(f"Entry update: {e}")
+                        # Counter-move cancel
+                        ctr = (direction=="SELL" and cur > entry*1.02) or                               (direction=="BUY"  and cur < entry*0.98)
+                        if ctr:
+                            try:
+                                fc = await run_blocking(full_analysis, trade["asset"], chat_id)
+                                if fc and fc["final"] != direction:
+                                    to_remove.append(trade)
+                                    remember_cancelled_setup(trade, reason="counter_move")
+                                    nd = "BUY ⬆️" if fc["final"]=="BUY" else "SELL ⬇️"
+                                    moved = abs(cur-entry)/entry*100
+                                    await context.bot.send_message(chat_id=chat_id,
+                                        text=f"⚠️ SazBot | {t(chat_id,'setup_cancelled_full')} #{trade_id}\n\n"
+                                             f"{t(chat_id,'price_moved_against')} {nd}.")
+                            except Exception as e:
+                                logger.warning(f"Counter-move: {e}")
+                continue  # done with pending
+
+            # ── Active: TP / SL logic ──
+            if direction == "BUY":
+                if cur >= tp3:
+                    update_msg = f"🏆 SazBot | {t(chat_id,'tp3_hit')} #{trade_id}"
+                    record_trade_result(trade_id, "win", trade.get("rr",0), direction, _session, setup_grade=trade.get("setup_grade",""), entry_reason=trade.get("entry_reason","standard")); closed=True
+                elif not trade["tp1_hit"] and cur >= tp1:
+                    trade["tp1_hit"]=True; trade["sl"]=entry
+                    update_msg = f"✅ SazBot | {t(chat_id,'tp1_hit')} #{trade_id}\n${entry:,.2f}"
+                elif trade["tp1_hit"] and not trade["tp2_hit"] and cur >= tp2:
+                    trade["tp2_hit"]=True
+                    nsl = round(tp2-0.25*abs(tp1-tp2), 2); trade["sl"]=nsl
+                    update_msg = f"✅✅ SazBot | {t(chat_id,'tp2_hit')} #{trade_id}\n${nsl:,.2f}"
+                elif cur <= trade["sl"]:
+                    if trade.get("tp2_hit"):
+                        rp = round(abs(tp2-entry)/abs(entry-trade.get("orig_sl",sl)),2) if abs(entry-trade.get("orig_sl",sl))>0 else 1.0
+                        update_msg = f"✅ SazBot | {t(chat_id,'protected_profit')} #{trade_id}"
+                        record_trade_result(trade_id, "win", rp, direction, _session, setup_grade=trade.get("setup_grade",""), entry_reason=trade.get("entry_reason","standard"))
+                    elif trade.get("tp1_hit"):
+                        update_msg = f"🟡 SazBot | {t(chat_id,'breakeven')} #{trade_id}"
+                        record_trade_result(trade_id, "breakeven", 0, direction, _session, setup_grade=trade.get("setup_grade",""), entry_reason=trade.get("entry_reason","standard"))
+                    else:
+                        update_msg = f"🛑 SazBot | {t(chat_id,'sl_hit')} #{trade_id}"
+                        record_trade_result(trade_id, "loss", 0, direction, _session, setup_grade=trade.get("setup_grade",""), entry_reason=trade.get("entry_reason","standard"))
+                    closed=True
+                elif trade["tp1_hit"] and cur > tp1+0.5*atr:
+                    nsl = round(cur-0.8*atr, 2)
+                    if nsl > trade["sl"] and nsl-trade["sl"] >= atr:
+                        trade["sl"]=nsl
+                        update_msg = f"📊 #{trade_id} {t(chat_id,'trailing_sl')} → ${nsl:,.2f}"
+            else:  # SELL
+                if cur <= tp3:
+                    update_msg = f"🏆 SazBot | {t(chat_id,'tp3_hit')} #{trade_id}"
+                    record_trade_result(trade_id, "win", trade.get("rr",0), direction, _session, setup_grade=trade.get("setup_grade",""), entry_reason=trade.get("entry_reason","standard")); closed=True
+                elif not trade["tp1_hit"] and cur <= tp1:
+                    trade["tp1_hit"]=True; trade["sl"]=entry
+                    update_msg = f"✅ SazBot | {t(chat_id,'tp1_hit')} #{trade_id}\n${entry:,.2f}"
+                elif trade["tp1_hit"] and not trade["tp2_hit"] and cur <= tp2:
+                    trade["tp2_hit"]=True
+                    nsl = round(tp2+0.25*abs(tp1-tp2), 2); trade["sl"]=nsl
+                    update_msg = f"✅✅ SazBot | {t(chat_id,'tp2_hit')} #{trade_id}\n${nsl:,.2f}"
+                elif cur >= trade["sl"]:
+                    if trade.get("tp2_hit"):
+                        rp = round(abs(tp2-entry)/abs(entry-trade.get("orig_sl",sl)),2) if abs(entry-trade.get("orig_sl",sl))>0 else 1.0
+                        update_msg = f"✅ SazBot | {t(chat_id,'protected_profit')} #{trade_id}"
+                        record_trade_result(trade_id, "win", rp, direction, _session, setup_grade=trade.get("setup_grade",""), entry_reason=trade.get("entry_reason","standard"))
+                    elif trade.get("tp1_hit"):
+                        update_msg = f"🟡 SazBot | {t(chat_id,'breakeven')} #{trade_id}"
+                        record_trade_result(trade_id, "breakeven", 0, direction, _session, setup_grade=trade.get("setup_grade",""), entry_reason=trade.get("entry_reason","standard"))
+                    else:
+                        update_msg = f"🛑 SazBot | {t(chat_id,'sl_hit')} #{trade_id}"
+                        record_trade_result(trade_id, "loss", 0, direction, _session, setup_grade=trade.get("setup_grade",""), entry_reason=trade.get("entry_reason","standard"))
+                    closed=True
+                elif trade["tp1_hit"] and cur < tp1-0.5*atr:
+                    nsl = round(cur+0.8*atr, 2)
+                    if nsl < trade["sl"] and trade["sl"]-nsl >= atr:
+                        trade["sl"]=nsl
+                        update_msg = f"📊 #{trade_id} {t(chat_id,'trailing_sl')} → ${nsl:,.2f}"
+
+            if update_msg:
+                await context.bot.send_message(chat_id=chat_id,
+                    text=build_update_msg(trade, cur, update_msg, chat_id))
+            if closed:
+                to_remove.append(trade)
+
+        except Exception as e:
+            logger.error(f"Monitor trade #{trade.get('id','?')}: {e}")
+
+    if to_remove:
+        async with get_trades_lock():
+            for tr in to_remove:
+                if tr in active_trades: active_trades.remove(tr)
+            save_trades()
+            save_runtime_state()
+
+
+async def monitor_btc(context):
+    """
+    Main 60-second job — orchestrates 4 sub-tasks:
+    1. Auto-signal detection
+    2. Expire stale pending signals
+    3. Economic event alert (no open trades)
+    4. SL/TP monitoring on active trades
+    """
+    await _check_auto_signal(context)
+    await _expire_pending_signals(context)
+    await _economic_alert_no_trades(context)
+    await _monitor_active_trades(context)
+
+
+
+# ==================== Early Bias Alerts ====================
 def saz_directional_bias(res):
     """Return directional bias based on the current SazBot analysis and DNA metrics.
     This is an early-bias engine, not a trade signal.
