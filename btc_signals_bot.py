@@ -28,6 +28,14 @@ PENDING_SIGNAL_MIN_AGE_BEFORE_EXPIRY = 5 * 60  # Do not expire a fresh signal in
 SPAM_COOLDOWN     = 1800
 CACHE_TTL         = 900
 PENDING_MAX_AGE   = 48      # hours: stale pending auto-cancels after this
+
+def pending_max_age_for_regime(regime="UNKNOWN"):
+    """BTC pending setups should expire faster in unstable or unclear conditions."""
+    if regime == "VOLATILE":
+        return 12 * 60 * 60
+    if regime == "RANGING":
+        return 24 * 60 * 60
+    return PENDING_MAX_AGE * 60 * 60
 OVERRIDE_MIN_QUALIFIED_FRAMES = 2  # Higher-risk override still requires 2 qualified frames in the same direction
 OVERRIDE_MAX_DISTANCE_FROM_ZONE_PCT = 1.0  # Block override if price is too far beyond the entry zone
 # Decision-engine upgrades
@@ -48,6 +56,8 @@ LANGUAGES_FILE    = "user_languages.json"
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+BUILD_ID = "SAZBOT_2_2_DNA_EARLY_BIAS_OVERRIDE_FIXED_2026_06_09"
 
 user_languages        = {}
 active_trades         = []
@@ -84,7 +94,7 @@ def get_trades_lock():
     """Create the asyncio lock lazily inside the running event loop."""
     global _trades_lock
     if _trades_lock is None:
-        _trades_lock = asyncio.Lock()
+        _trades_lock = None
     return _trades_lock
 
 ALLOWED_USERS_ENV = os.environ.get("ALLOWED_USERS", "")
@@ -366,7 +376,7 @@ CONFUSED_EN = ["Didn't get that 😅 Use the buttons 👇", "🤔 Choose from th
 TEXTS = {
     "ar": {
         "choose_lang": "🟡 SazBot | BTC Signals\n\nاختر لغتك:",
-        "welcome": "🟡 SazBot 2.1 | Decision Intelligence\n\nمرحباً بك في تجربة أذكى لقراءة BTC/USD.\n\nSazBot لا يبحث عن أي صفقة؛ بل يقيّم أولاً هل السوق يستحق المخاطرة أم لا.\n\n🧠 ما يقدمه لك:\n▫️ طبقة قرار ذكية لتصفية الضوضاء\n▫️ تقييم جودة الفرصة قبل الدخول\n▫️ قراءة حالة السوق وطاقة الحركة\n▫️ تقدير خطر الندم قبل المخاطرة\n▫️ متابعة منظمة للصفقات والتنبيهات\n\n🚫 أحياناً أفضل قرار هو عدم التداول.\n\n⚠️ تحليل تعليمي فقط — ليست توصية مالية. إدارة المخاطر مسؤوليتك.",
+        "welcome": "🟡 SazBot 2.1 | Decision Intelligence\n\nمرحباً بك في تجربة أذكى لقراءة BTC/USD.\n\nSazBot لا يبحث عن أي صفقة؛ بل يقيّم أولاً هل السوق يستحق المخاطرة أم لا.\n\n🧠 ما يقدمه لك:\n▫️ طبقة قرار ذكية لتصفية الضوضاء\n▫️ تقييم جودة الفرصة قبل الدخول\n▫️ قراءة حالة السوق بوضوح\n▫️ تقييم جودة القرار قبل المخاطرة\n▫️ متابعة منظمة للصفقات والتنبيهات\n\n🚫 أحياناً أفضل قرار هو عدم التداول.\n\n⚠️ تحليل تعليمي فقط — ليست توصية مالية. إدارة المخاطر مسؤوليتك.",
         "btn_btc": "🧠 مركز القرار BTC",
         "btn_analysis_btc": "📖 قراءة السوق",
         "btn_prices": "💰 الأسعار", "btn_about": "ℹ️ عن SazBot",
@@ -510,7 +520,7 @@ TEXTS = {
     },
     "en": {
         "choose_lang": "🟡 SazBot | BTC Signals\n\nChoose your language:",
-        "welcome": "🟡 SazBot 2.1 | Decision Intelligence\n\nWelcome to a smarter BTC/USD decision experience.\n\nSazBot does not chase every trade. It first evaluates whether the market is worth the risk.\n\n🧠 What it helps with:\n▫️ A decision layer that filters market noise\n▫️ Opportunity quality before entry\n▫️ Market state and energy reading\n▫️ Regret risk before taking risk\n▫️ Structured trade monitoring and alerts\n\n🚫 Sometimes the best decision is not to trade.\n\n⚠️ Educational analysis only — not financial advice. Risk management is your responsibility.",
+        "welcome": "🟡 SazBot 2.1 | Decision Intelligence\n\nWelcome to a smarter BTC/USD decision experience.\n\nSazBot does not chase every trade. It first evaluates whether the market is worth the risk.\n\n🧠 What it helps with:\n▫️ A decision layer that filters market noise\n▫️ Opportunity quality before entry\n▫️ Clear market-state reading\n▫️ Decision quality before taking risk\n▫️ Structured trade monitoring and alerts\n\n🚫 Sometimes the best decision is not to trade.\n\n⚠️ Educational analysis only — not financial advice. Risk management is your responsibility.",
         "btn_btc": "🧠 BTC Decision Center",
         "btn_analysis_btc": "📖 Market Read",
         "btn_prices": "💰 Prices", "btn_about": "ℹ️ About SazBot",
@@ -842,7 +852,7 @@ def saz_decision_intelligence(res, uid=0, persist=True, refresh=False):
     if mixed_frames:
         regret += 8
     if crowd_exhaustion >= 70:
-        regret += 10
+        regret += 16
     if opportunity_cost >= 70:
         regret += 8
     regret = _clamp(regret)
@@ -1122,6 +1132,38 @@ def saz_dna_rejection_message(res, uid=0):
             "Final decision: waiting is better than entering an incomplete setup.",
         ]
     return "\n".join(lines)
+
+
+def can_show_override_option(res, uid=0):
+    """Return True only if the available setup can actually be displayed.
+    This prevents showing the override button and then rejecting it immediately.
+    """
+    try:
+        if not res or res.get("majority") not in ("BUY", "SELL"):
+            return False
+
+        test = dict(res)
+        best_dir = res.get("majority")
+        test["final"] = best_dir
+        test["base_conf"] = max(float(test.get("base_conf", 0) or 0), 65)
+
+        price = float(test.get("price", 0) or 0)
+        entry = float(test.get("entry_price", price) or price)
+        atr = float(test.get("atr", entry * 0.015) or entry * 0.015)
+        entry_low = float(test.get("entry_low", entry - ENTRY_ZONE_ATR_FACTOR * atr) or entry)
+        entry_high = float(test.get("entry_high", entry + ENTRY_ZONE_ATR_FACTOR * atr) or entry)
+
+        if not price or not entry:
+            return False
+
+        if is_price_too_far_from_entry_zone(price, entry_low, entry_high, OVERRIDE_MAX_DISTANCE_FROM_ZONE_PCT):
+            return False
+
+        allowed, _m, _reason = saz_dna_assessment(test, uid, mode="override")
+        return bool(allowed)
+    except Exception as e:
+        logger.warning("can_show_override_option failed: " + str(e))
+        return False
 
 def gmt_now():
     return datetime.now(timezone.utc).strftime("%d/%m/%Y  %H:%M")
@@ -2350,6 +2392,32 @@ def confirm_keyboard(uid=0):
 
 
 # ==================== هاندلرز ====================
+async def version_command(update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if uid not in ALLOWED_USERS:
+        return
+    lang = user_languages.get(uid, "ar")
+    if lang == "ar":
+        msg = (
+            f"🧩 SazBot System\n\n"
+            f"Build ID: {BUILD_ID}\n"
+            f"DNA Gate: Enabled\n"
+            f"Early Bias: Enabled\n"
+            f"Override Guard: Enabled\n"
+            f"Decision Metrics: Consistent"
+        )
+    else:
+        msg = (
+            f"🧩 SazBot System\n\n"
+            f"Build ID: {BUILD_ID}\n"
+            f"DNA Gate: Enabled\n"
+            f"Early Bias: Enabled\n"
+            f"Override Guard: Enabled\n"
+            f"Decision Metrics: Consistent"
+        )
+    await update.message.reply_text(msg)
+
+
 async def start(update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ALLOWED_USERS:
@@ -2481,7 +2549,9 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                         parts.append(display_frame_line(uid, fl))
                     parts.append("")
 
-                if is_two_frame and majority:
+                show_override = is_two_frame and majority and can_show_override_option(res, uid)
+
+                if show_override:
                     parts.append("🎯 " + ("يوجد سيناريو بديل متاح، لكنه يحمل مستوى مخاطرة أعلى." if lang == "ar" else "An alternative setup is available, but it carries higher risk."))
                     kb_override = InlineKeyboardMarkup([[
                         InlineKeyboardButton(t(uid,"btn_higher_risk"), callback_data=f"override_trade_{asset}"),
@@ -2494,6 +2564,9 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                         parts.append("🧭 " + ("الاتجاه اليومي ما زال يعاكس الاتجاه قصير المدى." if lang == "ar" else "The Daily trend is still against the short-term direction."))
                         parts.append("")
                     parts.append("⏳ " + ("يفضل انتظار توافق أقوى قبل الدخول." if lang == "ar" else "Waiting for stronger market alignment before entering."))
+                    if is_two_frame and majority:
+                        parts.append("")
+                        parts.append("🚫 " + ("لا توجد فرصة بديلة مناسبة الآن؛ السعر أو المخاطرة لم تعد ضمن نطاق مقبول." if lang == "ar" else "No suitable alternative setup now; price or risk is no longer within an acceptable range."))
                     pending_trade_replace.pop(uid, None)
                     await query.message.reply_text("\n".join(parts))
                 return
@@ -4134,6 +4207,7 @@ async def send_daily_summary(context):
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("version", version_command))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.job_queue.run_repeating(monitor_btc,          interval=60,      first=30)
