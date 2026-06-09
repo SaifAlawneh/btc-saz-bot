@@ -54,11 +54,12 @@ BIAS_ALERT_STATE_FILE = "bias_alert_state.json"
 TRADES_FILE       = "active_trades.json"
 STATS_FILE        = "trade_stats.json"
 LANGUAGES_FILE    = "user_languages.json"
+STATE_FILE        = "sazbot_runtime_state.json"
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BUILD_ID = "SAZBOT_FINAL_DNA_OVERRIDE_BC_SHORT_MSG_2026_06_09"
+BUILD_ID = "SAZBOT_FINAL_DNA_STATE_REGRET_FIXED_2026_06_09"
 
 user_languages        = {}
 active_trades         = []
@@ -1056,6 +1057,7 @@ def saz_decision_intelligence(res, uid=0, persist=True, refresh=False):
     mixed_frames = len(set(dirs)) > 1
 
     quality = 45
+    regret = 100 - quality  # initial; may be adjusted by risk modifiers before final clamp
     if final in ("BUY", "SELL"):
         quality += min(max(base_conf - 50, 0), 35)
     else:
@@ -1166,7 +1168,7 @@ def saz_decision_intelligence(res, uid=0, persist=True, refresh=False):
     # Opportunity cost affects the final decision, but should not double-penalise quality.
     quality = _clamp(quality)
 
-    regret = 100 - quality
+    regret = _clamp(regret)
     if dist > 0.8:
         regret += min(dist * 10, 20)
     if counter_weekly or counter_monthly:
@@ -1532,7 +1534,7 @@ def cap_override_decision_metrics(res, original_res=None, uid=0):
 
 def can_show_override_option(res, uid=0):
     """Return True only if the available setup can actually be displayed.
-    This prevents showing the override button and then rejecting it immediately.
+    This mirrors the override execution checks, including recalculated smart entry distance.
     """
     try:
         if not res or res.get("majority") not in ("BUY", "SELL"):
@@ -1542,24 +1544,44 @@ def can_show_override_option(res, uid=0):
         best_dir = res.get("majority")
         test["final"] = best_dir
         test["base_conf"] = max(float(test.get("base_conf", 0) or 0), 65)
+        test["confidence"] = max(float(test.get("confidence", 0) or 0), 65)
 
         price = float(test.get("price", 0) or 0)
-        entry = float(test.get("entry_price", price) or price)
-        atr = float(test.get("atr", entry * 0.015) or entry * 0.015)
-        entry_low = float(test.get("entry_low", entry - ENTRY_ZONE_ATR_FACTOR * atr) or entry)
-        entry_high = float(test.get("entry_high", entry + ENTRY_ZONE_ATR_FACTOR * atr) or entry)
-
-        if not price or not entry:
+        atr = float(test.get("atr", price * 0.015) or price * 0.015)
+        if not price or not atr:
             return False
 
-        if is_price_too_far_from_entry_zone(price, entry_low, entry_high, OVERRIDE_MAX_DISTANCE_FROM_ZONE_PCT):
+        # Recalculate the same smart entry zone that override_trade will use.
+        fib_l = test.get("fib_levels", {}) or {}
+        fib_e = test.get("fib_ext", {}) or {}
+        if fib_l:
+            entry, _entry_rsn = find_smart_entry(
+                price, best_dir, fib_l, fib_e, atr,
+                test.get("support", price * 0.99),
+                test.get("resistance", price * 1.01),
+                test.get("bull_obs", []), test.get("bear_obs", [])
+            )
+        else:
+            entry = float(test.get("entry_price", price) or price)
+
+        entry_low, entry_high = entry_zone_from_trade(entry, atr)
+        test["entry_price"] = entry
+        test["entry_low"] = entry_low
+        test["entry_high"] = entry_high
+
+        # Same directional distance logic used after pressing the button.
+        too_far_buy = best_dir == "BUY" and price > entry_high * (1 + OVERRIDE_MAX_DISTANCE_FROM_ZONE_PCT / 100)
+        too_far_sell = best_dir == "SELL" and price < entry_low * (1 - OVERRIDE_MAX_DISTANCE_FROM_ZONE_PCT / 100)
+        if too_far_buy or too_far_sell:
             return False
 
+        # DNA must approve the same higher-risk path.
         allowed, _m, _reason = saz_dna_assessment(test, uid, mode="override")
         return bool(allowed)
     except Exception as e:
         logger.warning("can_show_override_option failed: " + str(e))
         return False
+
 
 
 def recommended_leverage_by_regime(res):
@@ -3150,7 +3172,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                     parts.append("⏳ " + ("يفضل انتظار توافق أقوى قبل الدخول." if lang == "ar" else "Waiting for stronger market alignment before entering."))
                     if is_two_frame and majority:
                         parts.append("")
-                        parts.append("🚫 " + ("لا توجد فرصة بديلة مناسبة الآن؛ السعر أو المخاطرة لم تعد ضمن نطاق مقبول." if lang == "ar" else "No suitable alternative setup now; price or risk is no longer within an acceptable range."))
+                        parts.append("🚫 " + ("لا توجد فرصة بديلة مناسبة الآن؛ السعر ابتعد عن منطقة الدخول أو أن المخاطرة غير مناسبة." if lang == "ar" else "No suitable alternative setup now; price moved away from the entry zone or risk is no longer suitable."))
                     pending_trade_replace.pop(uid, None)
                     await query.message.reply_text("\n".join(parts))
                 return
