@@ -58,7 +58,7 @@ LANGUAGES_FILE    = "user_languages.json"
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BUILD_ID = "SAZBOT_FINAL_DNA_MORE_OPPORTUNITIES_2026_06_09"
+BUILD_ID = "SAZBOT_FINAL_DNA_MORE_OPPS_REASON_TRACKING_2026_06_09"
 
 user_languages        = {}
 active_trades         = []
@@ -87,6 +87,100 @@ def save_bias_alert_state():
 
 last_bias_alert_state = load_bias_alert_state()
 cancelled_setups       = []
+
+
+
+# ==================== Entry Reason Performance Tracking ====================
+def _empty_reason_stats():
+    return {
+        "standard": {"total": 0, "wins": 0, "losses": 0, "breakeven": 0, "total_rr": 0.0},
+        "timing_rescue": {"total": 0, "wins": 0, "losses": 0, "breakeven": 0, "total_rr": 0.0},
+        "override": {"total": 0, "wins": 0, "losses": 0, "breakeven": 0, "total_rr": 0.0},
+        "manual": {"total": 0, "wins": 0, "losses": 0, "breakeven": 0, "total_rr": 0.0},
+        "auto": {"total": 0, "wins": 0, "losses": 0, "breakeven": 0, "total_rr": 0.0},
+    }
+
+def normalise_reason_stats(stats):
+    rs = stats.setdefault("reason_stats", _empty_reason_stats())
+    for r, base in _empty_reason_stats().items():
+        rs.setdefault(r, base.copy())
+        for k, v in base.items():
+            rs[r].setdefault(k, v)
+    return stats
+
+def record_reason_result(stats, reason, result, rr=0.0):
+    normalise_reason_stats(stats)
+    reason = reason if reason in stats["reason_stats"] else "standard"
+    row = stats["reason_stats"][reason]
+    row["total"] += 1
+    if result == "win":
+        row["wins"] += 1
+        row["total_rr"] += float(rr or 0)
+    elif result == "breakeven":
+        row["breakeven"] += 1
+    else:
+        row["losses"] += 1
+    return stats
+
+def entry_reason_label(reason, uid=0):
+    lang = user_languages.get(uid, "ar")
+    if lang == "ar":
+        return {
+            "standard": "الفرص القياسية",
+            "timing_rescue": "Timing Rescue",
+            "override": "فرص أعلى مخاطرة",
+            "manual": "الطلبات اليدوية",
+            "auto": "الإشارات التلقائية",
+        }.get(reason, "غير محدد")
+    return {
+        "standard": "Standard Signals",
+        "timing_rescue": "Timing Rescue",
+        "override": "Higher-Risk Setups",
+        "manual": "Manual Requests",
+        "auto": "Auto Signals",
+    }.get(reason, "Unknown")
+
+def format_reason_edge_report(uid=0):
+    lang = user_languages.get(uid, "ar")
+    stats = normalise_reason_stats(load_stats())
+    lines = []
+    if lang == "ar":
+        lines += ["", "📌 أداء أسباب الدخول", ""]
+        for reason in ["standard", "timing_rescue", "override", "auto", "manual"]:
+            row = stats["reason_stats"].get(reason, {})
+            total = int(row.get("total", 0) or 0)
+            if total == 0:
+                continue
+            wins = int(row.get("wins", 0) or 0)
+            losses = int(row.get("losses", 0) or 0)
+            be = int(row.get("breakeven", 0) or 0)
+            wr = round(wins / total * 100) if total else 0
+            avg_rr = round(float(row.get("total_rr", 0.0) or 0.0) / wins, 2) if wins else 0
+            lines.append(f"{entry_reason_label(reason, uid)}")
+            lines.append(f"الصفقات: {total} | رابحة: {wins} | خاسرة: {losses} | تعادل: {be}")
+            lines.append(f"نسبة النجاح: {wr}% | متوسط RR: 1:{avg_rr}")
+            lines.append("")
+        if len(lines) <= 3:
+            lines.append("لا توجد بيانات كافية بعد.")
+    else:
+        lines += ["", "📌 Entry Reason Performance", ""]
+        for reason in ["standard", "timing_rescue", "override", "auto", "manual"]:
+            row = stats["reason_stats"].get(reason, {})
+            total = int(row.get("total", 0) or 0)
+            if total == 0:
+                continue
+            wins = int(row.get("wins", 0) or 0)
+            losses = int(row.get("losses", 0) or 0)
+            be = int(row.get("breakeven", 0) or 0)
+            wr = round(wins / total * 100) if total else 0
+            avg_rr = round(float(row.get("total_rr", 0.0) or 0.0) / wins, 2) if wins else 0
+            lines.append(f"{entry_reason_label(reason, uid)}")
+            lines.append(f"Trades: {total} | Wins: {wins} | Losses: {losses} | BE: {be}")
+            lines.append(f"Win Rate: {wr}% | Avg RR: 1:{avg_rr}")
+            lines.append("")
+        if len(lines) <= 3:
+            lines.append("Not enough data yet.")
+    return "\n".join(lines)
 
 
 # ==================== Grade Performance Tracking ====================
@@ -122,7 +216,7 @@ def record_grade_result(stats, grade, result, rr=0.0):
 
 def format_grade_edge_report(uid=0):
     lang = user_languages.get(uid, "ar")
-    stats = normalise_grade_stats(load_stats())
+    stats = normalise_reason_stats(normalise_grade_stats(load_stats()))
     lines = []
     if lang == "ar":
         lines += ["📊 SazBot | أداء التصنيفات", ""]
@@ -2711,6 +2805,7 @@ async def why_command(update, context: ContextTypes.DEFAULT_TYPE):
                 f"⚠️ مستوى المخاطرة: {saz_grade_risk_label(grade, uid)}",
                 f"🧭 الحالة: {m.get('regime_text', 'غير واضحة')}",
                 f"🎯 القرار: {m.get('decision_text', '')}",
+                f"📌 سبب الدخول المحتمل: {entry_reason_label(res.get('entry_reason', 'standard'), uid)}",
                 "",
                 "أهم العوامل:",
             ]
@@ -2734,6 +2829,7 @@ async def why_command(update, context: ContextTypes.DEFAULT_TYPE):
                 f"⚠️ Risk Level: {saz_grade_risk_label(grade, uid)}",
                 f"🧭 State: {m.get('regime_text', 'Unclear')}",
                 f"🎯 Decision: {m.get('decision_text', '')}",
+                f"📌 Potential Entry Reason: {entry_reason_label(res.get('entry_reason', 'standard'), uid)}",
                 "",
                 "Key factors:",
             ]
@@ -2758,7 +2854,7 @@ async def edge_command(update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ALLOWED_USERS:
         return
-    await update.message.reply_text(format_grade_edge_report(uid))
+    await update.message.reply_text(format_grade_edge_report(uid) + "\n" + format_reason_edge_report(uid))
 
 
 async def version_command(update, context: ContextTypes.DEFAULT_TYPE):
@@ -2977,6 +3073,8 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 "actual_entry": market_p if not is_pending else None,
                 "chat_id": query.message.chat_id, "open_time": gmt_now(),
                 "frame_snapshot": frame_snapshot,
+                "setup_grade": (res.get("decision_metrics", {}) or {}).get("setup_grade", ""),
+                "entry_reason": res.get("entry_reason", "manual"),
             }
             already_open = next((tr for tr in active_trades
                 if tr["asset"] == new_trade["asset"] and tr["direction"] == new_trade["direction"]), None)
@@ -3221,6 +3319,8 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 "chat_id": chat_id_s, "open_time": gmt_now(),
                 "frame_snapshot": sig_frame_snapshot,
                 "entry_update_sent": False,
+                "setup_grade": (res_sig.get("decision_metrics", {}) or {}).get("setup_grade", ""),
+                "entry_reason": res_sig.get("entry_reason", "auto"),
             }
             async with get_trades_lock():
                 active_trades.append(new_trade)
@@ -3446,8 +3546,8 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 "entry_alert_sent": False, "last_news_event": "",
                 "last_frame_alert": "", "last_active_alert": "",
                 "forced": True,
-                "setup_grade": (res_sig.get("decision_metrics", {}) or {}).get("setup_grade", ""),
                 "setup_grade": (res_use.get("decision_metrics", {}) or {}).get("setup_grade", ""),
+                "entry_reason": res_use.get("entry_reason", "override"),
             }
             async with get_trades_lock():
                 active_trades.append(nt)
@@ -3774,6 +3874,8 @@ async def _check_auto_signal(context):
         if not (three or strong_partial or timing_rescue):
             return
 
+        res["entry_reason"] = "timing_rescue" if timing_rescue else "auto"
+
         dir_ok = (res["final"]=="BUY" and no_buy) or (res["final"]=="SELL" and no_sell)
         ep = float(res["entry_price"])
         sig_atr = float(res.get("atr", ep * 0.015) or ep * 0.015)
@@ -4081,7 +4183,7 @@ async def _monitor_active_trades(context):
             if direction == "BUY":
                 if cur >= tp3:
                     update_msg = f"🏆 SazBot | {t(chat_id,'tp3_hit')} #{trade_id}"
-                    record_trade_result(trade_id, "win", trade.get("rr",0), direction, _session); closed=True
+                    record_trade_result(trade_id, "win", trade.get("rr",0), direction, _session, setup_grade=trade.get("setup_grade",""), entry_reason=trade.get("entry_reason","standard")); closed=True
                 elif not trade["tp1_hit"] and cur >= tp1:
                     trade["tp1_hit"]=True; trade["sl"]=entry
                     update_msg = f"✅ SazBot | {t(chat_id,'tp1_hit')} #{trade_id}\n${entry:,.2f}"
@@ -4093,13 +4195,13 @@ async def _monitor_active_trades(context):
                     if trade.get("tp2_hit"):
                         rp = round(abs(tp2-entry)/abs(entry-trade.get("orig_sl",sl)),2) if abs(entry-trade.get("orig_sl",sl))>0 else 1.0
                         update_msg = f"✅ SazBot | {t(chat_id,'protected_profit')} #{trade_id}"
-                        record_trade_result(trade_id, "win", rp, direction, _session)
+                        record_trade_result(trade_id, "win", rp, direction, _session, setup_grade=trade.get("setup_grade",""), entry_reason=trade.get("entry_reason","standard"))
                     elif trade.get("tp1_hit"):
                         update_msg = f"🟡 SazBot | {t(chat_id,'breakeven')} #{trade_id}"
-                        record_trade_result(trade_id, "breakeven", 0, direction, _session)
+                        record_trade_result(trade_id, "breakeven", 0, direction, _session, setup_grade=trade.get("setup_grade",""), entry_reason=trade.get("entry_reason","standard"))
                     else:
                         update_msg = f"🛑 SazBot | {t(chat_id,'sl_hit')} #{trade_id}"
-                        record_trade_result(trade_id, "loss", 0, direction, _session)
+                        record_trade_result(trade_id, "loss", 0, direction, _session, setup_grade=trade.get("setup_grade",""), entry_reason=trade.get("entry_reason","standard"))
                     closed=True
                 elif trade["tp1_hit"] and cur > tp1+0.5*atr:
                     nsl = round(cur-0.8*atr, 2)
@@ -4109,7 +4211,7 @@ async def _monitor_active_trades(context):
             else:  # SELL
                 if cur <= tp3:
                     update_msg = f"🏆 SazBot | {t(chat_id,'tp3_hit')} #{trade_id}"
-                    record_trade_result(trade_id, "win", trade.get("rr",0), direction, _session); closed=True
+                    record_trade_result(trade_id, "win", trade.get("rr",0), direction, _session, setup_grade=trade.get("setup_grade",""), entry_reason=trade.get("entry_reason","standard")); closed=True
                 elif not trade["tp1_hit"] and cur <= tp1:
                     trade["tp1_hit"]=True; trade["sl"]=entry
                     update_msg = f"✅ SazBot | {t(chat_id,'tp1_hit')} #{trade_id}\n${entry:,.2f}"
@@ -4121,13 +4223,13 @@ async def _monitor_active_trades(context):
                     if trade.get("tp2_hit"):
                         rp = round(abs(tp2-entry)/abs(entry-trade.get("orig_sl",sl)),2) if abs(entry-trade.get("orig_sl",sl))>0 else 1.0
                         update_msg = f"✅ SazBot | {t(chat_id,'protected_profit')} #{trade_id}"
-                        record_trade_result(trade_id, "win", rp, direction, _session)
+                        record_trade_result(trade_id, "win", rp, direction, _session, setup_grade=trade.get("setup_grade",""), entry_reason=trade.get("entry_reason","standard"))
                     elif trade.get("tp1_hit"):
                         update_msg = f"🟡 SazBot | {t(chat_id,'breakeven')} #{trade_id}"
-                        record_trade_result(trade_id, "breakeven", 0, direction, _session)
+                        record_trade_result(trade_id, "breakeven", 0, direction, _session, setup_grade=trade.get("setup_grade",""), entry_reason=trade.get("entry_reason","standard"))
                     else:
                         update_msg = f"🛑 SazBot | {t(chat_id,'sl_hit')} #{trade_id}"
-                        record_trade_result(trade_id, "loss", 0, direction, _session)
+                        record_trade_result(trade_id, "loss", 0, direction, _session, setup_grade=trade.get("setup_grade",""), entry_reason=trade.get("entry_reason","standard"))
                     closed=True
                 elif trade["tp1_hit"] and cur < tp1-0.5*atr:
                     nsl = round(cur+0.8*atr, 2)
@@ -4474,6 +4576,7 @@ def load_stats() -> dict:
             "current_streak": 0, "best_streak": 0, "worst_streak": 0,
             "last_result": None,
             "grade_stats": _empty_grade_stats(),
+            "reason_stats": _empty_reason_stats(),
         }
 
 def save_stats(stats: dict):
@@ -4481,8 +4584,8 @@ def save_stats(stats: dict):
         json.dump(stats, f, ensure_ascii=False)
 
 def record_trade_result(trade_id, result: str, rr: float = 0.0,
-                        direction: str = "", session: str = "", setup_grade: str = ""):
-    stats = normalise_grade_stats(load_stats())
+                        direction: str = "", session: str = "", setup_grade: str = "", entry_reason: str = ""):
+    stats = normalise_reason_stats(normalise_grade_stats(load_stats()))
     stats["total"] = stats.get("total", 0) + 1
 
     # ── result counters ──
@@ -4531,11 +4634,14 @@ def record_trade_result(trade_id, result: str, rr: float = 0.0,
         "id": trade_id, "result": result, "rr": rr,
         "direction": direction, "session": session,
         "grade": setup_grade,
+        "entry_reason": entry_reason,
         "time": gmt_now(),
     })
     stats["trades"] = stats["trades"][-100:]
     if setup_grade:
         record_grade_result(stats, setup_grade, result, rr)
+    if entry_reason:
+        record_reason_result(stats, entry_reason, result, rr)
     save_stats(stats)
     logger.info(f"Trade #{trade_id} closed: {result} | RR={rr} | {direction} | {session}")
 
