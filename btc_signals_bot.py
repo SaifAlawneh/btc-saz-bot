@@ -58,7 +58,7 @@ LANGUAGES_FILE    = "user_languages.json"
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BUILD_ID = "SAZBOT_FINAL_DNA_MORE_OPPS_REASON_TRACKING_2026_06_09"
+BUILD_ID = "SAZBOT_FINAL_DNA_OVERRIDE_BC_SHORT_MSG_2026_06_09"
 
 user_languages        = {}
 active_trades         = []
@@ -1478,6 +1478,58 @@ def saz_dna_rejection_message(res, uid=0):
     return "\n".join(lines)
 
 
+
+def cap_override_decision_metrics(res, original_res=None, uid=0):
+    """Re-grade higher-risk override scenarios realistically.
+    Override is never A because alignment is incomplete, but it can be B if quality/risk are strong.
+    """
+    try:
+        m = dict((res.get("decision_metrics") or saz_decision_intelligence(res, uid, persist=False, refresh=False)) or {})
+        q = int(m.get("quality", 0) or 0)
+        r = int(m.get("regret", 100) or 100)
+
+        # Check actual support/opposition from qualified frames.
+        fls = res.get("frame_lines", [])
+        buy_f, sell_f = count_qualified_frame_lines(fls)
+        final_dir = res.get("final")
+        support = buy_f if final_dir == "BUY" else sell_f
+        oppose = sell_f if final_dir == "BUY" else buy_f
+
+        # Realistic override grading:
+        # B = strong higher-risk setup; C = aggressive setup.
+        if q >= 65 and r <= 65 and support >= 2 and oppose <= 1:
+            grade = "B"
+            m["setup_grade"] = "B"
+            m["quality"] = min(q, 74)
+            m["regret"] = max(r, 45)
+            if user_languages.get(uid, "ar") == "ar":
+                m["decision_text"] = "🟡 فرصة جيدة قابلة للمتابعة"
+                m["story"] = "الفرصة جيدة لكنها ليست مكتملة التوافق. استخدم حجم أصغر والتزم بمنطقة الدخول."
+            else:
+                m["decision_text"] = "🟡 Good setup to monitor"
+                m["story"] = "This is a good setup, but alignment is not complete. Use smaller size and strict entry discipline."
+        else:
+            grade = "C"
+            m["setup_grade"] = "C"
+            m["quality"] = min(q if q else 55, 64)
+            m["regret"] = max(r if r else 60, 58)
+            if user_languages.get(uid, "ar") == "ar":
+                m["decision_text"] = "🟠 سيناريو مضاربة قابل للمتابعة"
+                m["story"] = "هذه فرصة أعلى مخاطرة لأنها لا تعتمد على توافق كامل. استخدم حجم أصغر والتزم بمنطقة الدخول."
+            else:
+                m["decision_text"] = "🟠 Aggressive setup to monitor"
+                m["story"] = "This is a higher-risk setup because timeframe alignment is not complete. Use smaller size and strict entry discipline."
+
+        res["decision_metrics"] = m
+        res["setup_grade"] = grade
+        res["forced"] = True
+        res["saz_dna_reason"] = "override_higher_risk"
+        return res
+    except Exception as e:
+        logger.warning("cap_override_decision_metrics failed: " + str(e))
+        return res
+
+
 def can_show_override_option(res, uid=0):
     """Return True only if the available setup can actually be displayed.
     This prevents showing the override button and then rejecting it immediately.
@@ -2481,6 +2533,73 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
 
 
 # ==================== بناء الرسائل ====================
+
+def build_override_trade_msg(res, uid=0):
+    """Short, trader-focused message for higher-risk available setup."""
+    lang = user_languages.get(uid, "ar")
+    m = res.get("decision_metrics") or saz_decision_intelligence(res, uid, persist=False, refresh=False)
+    grade = m.get("setup_grade") or saz_setup_grade(m)
+    direction = res.get("final", "")
+    dir_txt = ("شراء BUY ⬆️" if direction == "BUY" else "بيع SELL ⬇️") if lang == "ar" else ("BUY ⬆️" if direction == "BUY" else "SELL ⬇️")
+    grade_txt = saz_grade_label(grade, uid)
+    risk_txt = saz_grade_risk_label(grade, uid)
+    entry_low = res.get("entry_low", res.get("entry_price", 0))
+    entry_high = res.get("entry_high", res.get("entry_price", 0))
+    entry = res.get("entry_price", res.get("price", 0))
+
+    if lang == "ar":
+        lines = [
+            f"🟡 SazBot | سيناريو متاح #{res.get('id','')}",
+            "₿ BTC/USD",
+            "",
+            f"الاتجاه: {dir_txt}",
+            f"التصنيف: {grade_txt}",
+            f"الثقة: {int(res.get('confidence', res.get('base_conf', 0)))}%",
+            f"المخاطرة: {risk_txt}",
+            "",
+            f"السعر الحالي: ${float(res.get('price', 0)):,.2f}",
+            f"منطقة الدخول: ${float(entry_low):,.2f} — ${float(entry_high):,.2f}",
+            f"الدخول المرجعي: ${float(entry):,.2f}",
+            "",
+            f"TP1: ${float(res.get('tp1', 0)):,.2f}",
+            f"TP2: ${float(res.get('tp2', 0)):,.2f}",
+            f"TP3: ${float(res.get('tp3', 0)):,.2f}",
+            f"SL: ${float(res.get('sl', 0)):,.2f}",
+            f"RR: 1:{float(res.get('rr', 0) or 0):.1f}",
+            "",
+            "ملاحظة: هذا سيناريو غير مكتمل التوافق. استخدم حجم أصغر ولا تدخل إذا ابتعد السعر عن منطقة الدخول.",
+            "",
+            f"🕐 {t(uid,'updated_gmt')}: {gmt_now()}",
+            t(uid,"educational_footer"),
+        ]
+    else:
+        lines = [
+            f"🟡 SazBot | Available Setup #{res.get('id','')}",
+            "₿ BTC/USD",
+            "",
+            f"Direction: {dir_txt}",
+            f"Grade: {grade_txt}",
+            f"Confidence: {int(res.get('confidence', res.get('base_conf', 0)))}%",
+            f"Risk: {risk_txt}",
+            "",
+            f"Current Price: ${float(res.get('price', 0)):,.2f}",
+            f"Entry Zone: ${float(entry_low):,.2f} — ${float(entry_high):,.2f}",
+            f"Reference Entry: ${float(entry):,.2f}",
+            "",
+            f"TP1: ${float(res.get('tp1', 0)):,.2f}",
+            f"TP2: ${float(res.get('tp2', 0)):,.2f}",
+            f"TP3: ${float(res.get('tp3', 0)):,.2f}",
+            f"SL: ${float(res.get('sl', 0)):,.2f}",
+            f"RR: 1:{float(res.get('rr', 0) or 0):.1f}",
+            "",
+            "Note: alignment is not complete. Use smaller size and avoid chasing price outside the entry zone.",
+            "",
+            f"🕐 {t(uid,'updated_gmt')}: {gmt_now()}",
+            t(uid,"educational_footer"),
+        ]
+    return "\n".join(lines)
+
+
 def build_trade_msg(res, uid=0, auto=False):
     ai      = "₿" if res["asset"] == "BTC" else "🥇"
     an      = "BTC/USD"
@@ -3522,10 +3641,12 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 await query.message.reply_text(saz_dna_rejection_message(res_use, uid))
                 return
 
-            trade_msg = build_trade_msg(res_use, uid)
+            res_use["decision_metrics"] = _m_override
+            res_use = cap_override_decision_metrics(res_use, original_res=res_ov, uid=uid)
+
+            trade_msg = build_override_trade_msg(res_use, uid)
             fl_now    = res_use.get("frame_lines", [])
-            warning = "\n\n" + t(uid,"higher_risk_warning")
-            await query.message.reply_text(trade_msg + warning)
+            await query.message.reply_text(trade_msg)
 
             is_p = abs(entry_p - res_use["price"]) / res_use["price"] * 100 > 0.1
             snap = {
@@ -3547,7 +3668,8 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 "last_frame_alert": "", "last_active_alert": "",
                 "forced": True,
                 "setup_grade": (res_use.get("decision_metrics", {}) or {}).get("setup_grade", ""),
-                "entry_reason": res_use.get("entry_reason", "override"),
+                "entry_reason": "override",
+                "entry_note": res_use.get("entry_reason", ""),
             }
             async with get_trades_lock():
                 active_trades.append(nt)
