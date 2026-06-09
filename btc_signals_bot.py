@@ -20,6 +20,7 @@ NEWS_API_KEY   = os.environ.get("NEWS_API_KEY", "")
 FINNHUB_KEY    = os.environ.get("FINNHUB_KEY", "")
 
 MIN_CONFIDENCE    = 68
+AUTO_SIGNAL_MODE  = os.environ.get("AUTO_SIGNAL_MODE", "balanced").lower()  # conservative | balanced | active
 FRAME_MIN_CONFIDENCE = 60  # Minimum confidence required for a timeframe to be counted in confluence
 ENTRY_ZONE_ATR_FACTOR = 0.25  # Entry zone width on each side of smart entry, based on ATR
 PRICE_EXPIRY_PCT  = 1.0   # Pending signal expires if BTC moves this % away from signal price
@@ -57,7 +58,7 @@ LANGUAGES_FILE    = "user_languages.json"
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BUILD_ID = "SAZBOT_FINAL_DNA_ABC_BALANCED_v5_2026_06_09"
+BUILD_ID = "SAZBOT_FINAL_DNA_MORE_OPPORTUNITIES_2026_06_09"
 
 user_languages        = {}
 active_trades         = []
@@ -86,6 +87,135 @@ def save_bias_alert_state():
 
 last_bias_alert_state = load_bias_alert_state()
 cancelled_setups       = []
+
+
+# ==================== Grade Performance Tracking ====================
+def _empty_grade_stats():
+    return {
+        "A": {"total": 0, "wins": 0, "losses": 0, "breakeven": 0, "total_rr": 0.0},
+        "B": {"total": 0, "wins": 0, "losses": 0, "breakeven": 0, "total_rr": 0.0},
+        "C": {"total": 0, "wins": 0, "losses": 0, "breakeven": 0, "total_rr": 0.0},
+        "REJECT": {"total": 0, "wins": 0, "losses": 0, "breakeven": 0, "total_rr": 0.0},
+    }
+
+def normalise_grade_stats(stats):
+    gs = stats.setdefault("grade_stats", _empty_grade_stats())
+    for g, base in _empty_grade_stats().items():
+        gs.setdefault(g, base.copy())
+        for k, v in base.items():
+            gs[g].setdefault(k, v)
+    return stats
+
+def record_grade_result(stats, grade, result, rr=0.0):
+    normalise_grade_stats(stats)
+    grade = grade if grade in ("A", "B", "C", "REJECT") else "REJECT"
+    row = stats["grade_stats"][grade]
+    row["total"] += 1
+    if result == "win":
+        row["wins"] += 1
+        row["total_rr"] += float(rr or 0)
+    elif result == "breakeven":
+        row["breakeven"] += 1
+    else:
+        row["losses"] += 1
+    return stats
+
+def format_grade_edge_report(uid=0):
+    lang = user_languages.get(uid, "ar")
+    stats = normalise_grade_stats(load_stats())
+    lines = []
+    if lang == "ar":
+        lines += ["📊 SazBot | أداء التصنيفات", ""]
+        for g in ["A", "B", "C"]:
+            row = stats["grade_stats"].get(g, {})
+            total = int(row.get("total", 0) or 0)
+            wins = int(row.get("wins", 0) or 0)
+            losses = int(row.get("losses", 0) or 0)
+            be = int(row.get("breakeven", 0) or 0)
+            wr = round(wins / total * 100) if total else 0
+            avg_rr = round(float(row.get("total_rr", 0.0) or 0.0) / wins, 2) if wins else 0
+            lines.append(f"{saz_grade_label(g, uid)}")
+            lines.append(f"الصفقات: {total} | رابحة: {wins} | خاسرة: {losses} | تعادل: {be}")
+            lines.append(f"نسبة النجاح: {wr}% | متوسط RR: 1:{avg_rr}")
+            lines.append("")
+        lines.append("كلما زاد عدد الصفقات المسجلة، أصبح تقييم A/B/C أدق.")
+    else:
+        lines += ["📊 SazBot | Grade Performance", ""]
+        for g in ["A", "B", "C"]:
+            row = stats["grade_stats"].get(g, {})
+            total = int(row.get("total", 0) or 0)
+            wins = int(row.get("wins", 0) or 0)
+            losses = int(row.get("losses", 0) or 0)
+            be = int(row.get("breakeven", 0) or 0)
+            wr = round(wins / total * 100) if total else 0
+            avg_rr = round(float(row.get("total_rr", 0.0) or 0.0) / wins, 2) if wins else 0
+            lines.append(f"{saz_grade_label(g, uid)}")
+            lines.append(f"Trades: {total} | Wins: {wins} | Losses: {losses} | BE: {be}")
+            lines.append(f"Win Rate: {wr}% | Avg RR: 1:{avg_rr}")
+            lines.append("")
+        lines.append("The more closed trades are recorded, the more meaningful A/B/C performance becomes.")
+    return "\n".join(lines)
+
+
+# ==================== Runtime State Persistence ====================
+def _json_safe_key_dict(d):
+    """JSON object keys are strings; keep values as-is."""
+    try:
+        return {str(k): v for k, v in dict(d).items()}
+    except Exception:
+        return {}
+
+def _int_key_dict(d):
+    out = {}
+    try:
+        for k, v in dict(d).items():
+            try:
+                out[int(k)] = v
+            except Exception:
+                out[k] = v
+    except Exception:
+        pass
+    return out
+
+def save_runtime_state():
+    """Persist volatile runtime state so Railway restarts do not wipe bot memory."""
+    try:
+        state = {
+            "active_trades": active_trades,
+            "active_btc_trade": active_btc_trade,
+            "pending_trade_replace": _json_safe_key_dict(pending_trade_replace),
+            "last_signal_time": last_signal_time,
+            "pending_signals": _json_safe_key_dict(pending_signals),
+            "trade_counter": trade_counter,
+            "_news_notified": _news_notified,
+            "last_bias_alert_state": last_bias_alert_state,
+        }
+        with open(STATE_FILE, "w") as f:
+            json.dump(state, f, ensure_ascii=False)
+    except Exception as e:
+        logger.warning("save_runtime_state failed: " + str(e))
+
+def load_runtime_state():
+    """Load persisted runtime state on startup."""
+    global active_trades, active_btc_trade, pending_trade_replace, last_signal_time
+    global pending_signals, trade_counter, _news_notified, last_bias_alert_state
+    try:
+        with open(STATE_FILE) as f:
+            state = json.load(f)
+        active_trades = state.get("active_trades", active_trades) or []
+        active_btc_trade = state.get("active_btc_trade", active_btc_trade) or {}
+        pending_trade_replace = _int_key_dict(state.get("pending_trade_replace", {}))
+        last_signal_time = state.get("last_signal_time", last_signal_time) or {}
+        pending_signals = _int_key_dict(state.get("pending_signals", {}))
+        trade_counter = int(state.get("trade_counter", trade_counter) or 0)
+        _news_notified = state.get("_news_notified", _news_notified) or {}
+        last_bias_alert_state = state.get("last_bias_alert_state", last_bias_alert_state) or {}
+        logger.info("Runtime state loaded successfully.")
+    except FileNotFoundError:
+        logger.info("No runtime state file found; starting clean.")
+    except Exception as e:
+        logger.warning("load_runtime_state failed: " + str(e))
+
 
 # ✅ FIX 1: asyncio lock لحماية active_trades من race conditions
 _trades_lock = None
@@ -140,6 +270,23 @@ def distance_from_entry_zone_pct(price, entry_low, entry_high):
         return abs(price - edge) / edge * 100
     except Exception:
         return 0.0
+
+
+def max_distance_for_setup_grade(res, default_pct=MAX_DISTANCE_FROM_ZONE_PCT):
+    """Allow more distance only for stronger setups; keep C strict."""
+    try:
+        m = res.get("decision_metrics") or {}
+        grade = m.get("setup_grade") or saz_setup_grade(m)
+        if grade == "A":
+            return max(default_pct, 2.0)
+        if grade == "B":
+            return max(default_pct, 1.5)
+        if grade == "C":
+            return min(default_pct, 1.0)
+        return min(default_pct, 0.8)
+    except Exception:
+        return default_pct
+
 
 def is_price_too_far_from_entry_zone(price, entry_low, entry_high, max_pct=MAX_DISTANCE_FROM_ZONE_PCT):
     return distance_from_entry_zone_pct(price, entry_low, entry_high) > max_pct
@@ -725,15 +872,17 @@ def _saz_regime_from_res(res, uid=0):
 
 # ==================== SazBot Final ABC Setup Grading ====================
 def saz_setup_grade(metrics):
-    """Convert internal DNA metrics into a clear setup grade."""
+    """Convert internal DNA metrics into a clear setup grade.
+    A/B remain selective. C is intentionally wider so SazBot does not miss valid BTC moves.
+    """
     try:
         q = float(metrics.get("quality", 0))
         r = float(metrics.get("regret", 100))
         if q >= 80 and r <= 45:
             return "A"
-        if q >= 65 and r <= 60:
+        if q >= 65 and r <= 62:
             return "B"
-        if q >= 50 and r <= 75:
+        if q >= 45 and r <= 82:
             return "C"
         return "REJECT"
     except Exception:
@@ -760,6 +909,25 @@ def saz_grade_risk_label(grade, uid=0):
     if lang == "ar":
         return {"A": "منخفضة", "B": "متوسطة", "C": "مرتفعة", "REJECT": "مرتفعة"}.get(grade, "مرتفعة")
     return {"A": "Low", "B": "Medium", "C": "High", "REJECT": "High"}.get(grade, "High")
+
+
+def event_risk_adjustment(uid=0):
+    """Return (quality_penalty, regret_add, auto_block, label) based on high-impact events."""
+    try:
+        ev = get_upcoming_event(2)
+        if not ev:
+            return 0, 0, False, ""
+        mins = float(ev.get("mins_left", 9999) or 9999)
+        name = ev.get("event", "")
+        if mins <= 30:
+            return 18, 22, True, name
+        if mins <= 120:
+            return 10, 12, False, name
+        return 0, 0, False, ""
+    except Exception as e:
+        logger.warning("event_risk_adjustment failed: " + str(e))
+        return 0, 0, False, ""
+
 
 def saz_decision_intelligence(res, uid=0, persist=True, refresh=False):
     """SazBot 2.1: decision intelligence based on live analysis, market memory, and behavioural risk.
@@ -812,6 +980,17 @@ def saz_decision_intelligence(res, uid=0, persist=True, refresh=False):
         quality -= 5
     if mixed_frames:
         quality -= 5
+    # directional_rescue_bonus:
+    # If 1H and Daily agree strongly, do not over-penalise only because 4H is temporarily opposite.
+    try:
+        f1 = next((f for f in frames if "1H" in f.get("name", "") or "ساعة" in f.get("name", "")), {})
+        fd = next((f for f in frames if "Daily" in f.get("name", "") or "يومي" in f.get("name", "")), {})
+        if f1.get("direction") == fd.get("direction") and f1.get("direction") in ("BUY", "SELL"):
+            if f1.get("conf", 0) >= 70 and fd.get("conf", 0) >= 65:
+                quality += 8
+                regret -= 6
+    except Exception:
+        pass
     # strong_trend_bonus: very strong lower/higher timeframe readings deserve a small quality boost
     try:
         strong_count = len([f for f in frames if f.get("conf", 0) >= 82 and f.get("direction") in ("BUY", "SELL")])
@@ -884,6 +1063,12 @@ def saz_decision_intelligence(res, uid=0, persist=True, refresh=False):
     if counter_weekly or counter_monthly or mixed_frames:
         opportunity_cost += 10
     opportunity_cost = _clamp(opportunity_cost)
+    # Event risk is part of the DNA, not only a notification.
+    ev_q_penalty, ev_regret_add, ev_auto_block, event_risk_label = event_risk_adjustment(uid)
+    if ev_q_penalty:
+        quality -= ev_q_penalty
+        regret += ev_regret_add
+
     # Opportunity cost affects the final decision, but should not double-penalise quality.
     quality = _clamp(quality)
 
@@ -996,6 +1181,8 @@ def saz_decision_intelligence(res, uid=0, persist=True, refresh=False):
         "narrative": narrative,
         "narrative_text": labels[narrative],
         "story": story,
+        "event_risk_label": event_risk_label if "event_risk_label" in locals() else "",
+        "event_auto_block": ev_auto_block if "ev_auto_block" in locals() else False,
     }
     metrics["setup_grade"] = saz_setup_grade(metrics)
     if isinstance(res, dict):
@@ -1092,9 +1279,9 @@ def safe_saz_intelligence_block(res, uid=0, compact=False):
 # This is not a UI layer. It is the core decision filter used before any setup is shown,
 # auto-sent, overridden, or kept alive.
 SAZ_DNA_LIMITS = {
-    "manual":   {"min_quality": 55, "max_regret": 70, "max_opp_cost": 75, "max_exhaustion": 84},
-    "auto":     {"min_quality": 62, "max_regret": 60, "max_opp_cost": 68, "max_exhaustion": 76},
-    "override": {"min_quality": 58, "max_regret": 65, "max_opp_cost": 68, "max_exhaustion": 74},
+    "manual":   {"min_quality": 45, "max_regret": 82, "max_opp_cost": 78, "max_exhaustion": 84},
+    "auto":     {"min_quality": 52, "max_regret": 78, "max_opp_cost": 72, "max_exhaustion": 76},
+    "override": {"min_quality": 50, "max_regret": 78, "max_opp_cost": 75, "max_exhaustion": 78},
     "health":   {"min_quality": 50, "max_regret": 76, "max_opp_cost": 82, "max_exhaustion": 88},
 }
 
@@ -1116,8 +1303,13 @@ def saz_dna_assessment(res, uid=0, mode="manual"):
         if grade == "REJECT":
             return False, m, "grade_reject"
 
+        if mode == "auto" and m.get("event_auto_block"):
+            return False, m, "auto_event_block"
+
         if mode == "auto" and grade not in ("A", "B"):
-            return False, m, "auto_requires_ab"
+            # Allow C setups for BTC when risk is still controlled; label keeps it transparent.
+            if not (grade == "C" and float(m.get("quality", 0)) >= 45 and float(m.get("regret", 100)) <= 82):
+                return False, m, "auto_requires_abc_controlled"
 
         if mode == "override" and grade not in ("A", "B", "C"):
             return False, m, "override_reject"
@@ -2496,6 +2688,79 @@ def confirm_keyboard(uid=0):
 
 
 # ==================== هاندلرز ====================
+
+async def why_command(update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if uid not in ALLOWED_USERS:
+        return
+    try:
+        res = await run_blocking(full_analysis, "BTC", uid)
+        if not res:
+            await update.message.reply_text(t(uid, "failed"))
+            return
+        m = res.get("decision_metrics") or saz_decision_intelligence(res, uid)
+        lang = user_languages.get(uid, "ar")
+        grade = m.get("setup_grade") or saz_setup_grade(m)
+        lines = []
+        if lang == "ar":
+            lines += [
+                "🧠 لماذا هذا القرار؟",
+                "",
+                f"🏷️ التصنيف: {saz_grade_label(grade, uid)}",
+                f"📊 جودة السوق: {int(m.get('quality', 0))}/100",
+                f"⚠️ مستوى المخاطرة: {saz_grade_risk_label(grade, uid)}",
+                f"🧭 الحالة: {m.get('regime_text', 'غير واضحة')}",
+                f"🎯 القرار: {m.get('decision_text', '')}",
+                "",
+                "أهم العوامل:",
+            ]
+            if m.get("event_risk_label"):
+                lines.append(f"• حدث اقتصادي قريب: {m.get('event_risk_label')}")
+            if res.get("frame_lines"):
+                for fl in res.get("frame_lines", [])[:3]:
+                    lines.append("• " + display_frame_line(uid, fl))
+            if grade == "REJECT":
+                lines.append("• الجودة أو المخاطرة لا تسمح بفتح صفقة حالياً.")
+            elif grade == "C":
+                lines.append("• الفرصة مضاربية وتحتاج التزاماً صارماً بمنطقة الدخول.")
+            else:
+                lines.append("• الفرصة مقبولة بشرط الالتزام بإدارة المخاطر.")
+        else:
+            lines += [
+                "🧠 Why this decision?",
+                "",
+                f"🏷️ Grade: {saz_grade_label(grade, uid)}",
+                f"📊 Market Quality: {int(m.get('quality', 0))}/100",
+                f"⚠️ Risk Level: {saz_grade_risk_label(grade, uid)}",
+                f"🧭 State: {m.get('regime_text', 'Unclear')}",
+                f"🎯 Decision: {m.get('decision_text', '')}",
+                "",
+                "Key factors:",
+            ]
+            if m.get("event_risk_label"):
+                lines.append(f"• Upcoming event risk: {m.get('event_risk_label')}")
+            if res.get("frame_lines"):
+                for fl in res.get("frame_lines", [])[:3]:
+                    lines.append("• " + display_frame_line(uid, fl))
+            if grade == "REJECT":
+                lines.append("• Quality or risk does not justify opening a trade now.")
+            elif grade == "C":
+                lines.append("• This is an aggressive setup and requires strict entry discipline.")
+            else:
+                lines.append("• The setup is acceptable if risk management is respected.")
+        await update.message.reply_text("\n".join(lines))
+    except Exception as e:
+        logger.error("why_command: " + str(e))
+        await update.message.reply_text(t(uid, "failed"))
+
+
+async def edge_command(update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if uid not in ALLOWED_USERS:
+        return
+    await update.message.reply_text(format_grade_edge_report(uid))
+
+
 async def version_command(update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ALLOWED_USERS:
@@ -2743,6 +3008,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                     if res["asset"] == "BTC":
                         active_btc_trade["data"] = new_trade
                     save_trades()
+                    save_runtime_state()
         except Exception as e:
             logger.error("Trade handler: " + str(e))
             await query.message.reply_text(t(uid,"error") + str(e))
@@ -2760,6 +3026,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 if new_tr["asset"] == "BTC":
                     active_btc_trade["data"] = new_tr
                 save_trades()
+                save_runtime_state()
             await query.message.reply_text(build_trade_msg(res_old, uid))
         else:
             await query.message.reply_text(t(uid,"request_expired"))
@@ -2774,6 +3041,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 if new_tr["asset"] == "BTC":
                     active_btc_trade["data"] = new_tr
                 save_trades()
+                save_runtime_state()
             await query.message.reply_text(build_trade_msg(res_stored, uid))
         else:
             await query.message.reply_text(t(uid,"request_expired"))
@@ -2924,6 +3192,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 active_trades.remove(trade)
                 remember_cancelled_setup(trade, reason="manual_cancel")
                 save_trades()
+                save_runtime_state()
         await query.message.reply_text(t(uid,"setup_cancelled") + " #"+str(trade_id))
 
     elif data.startswith("activate_signal_"):
@@ -2958,6 +3227,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 if res_sig["asset"] == "BTC":
                     active_btc_trade["data"] = new_trade
                 save_trades()
+                save_runtime_state()
             status_txt = "⏳ " + t(uid,"pending") + " — " + t(uid,"entry_zone") + " " + format_entry_zone(entry_p, res_sig.get("atr", 0)) if is_pending else "🟢 " + t(uid,"active")
             confirm_msg = "✅ SazBot | " + t(uid,"setup_activated") + " #"+str(sig_id)+"\n"+status_txt
             for cid in chat_ids_s:
@@ -2987,6 +3257,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 trade.pop("pending_update", None)
                 trade["entry_update_sent"] = False
                 save_trades()
+                save_runtime_state()
             await query.message.reply_text(
                 t(uid,"entry_zone_updated")+" #"+str(trade_id)+"\n\n"
                 + t(uid,"old_reference") + ": $"+"{:,.2f}".format(old_entry)+"\n"
@@ -3024,6 +3295,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             async with get_trades_lock():
                 active_trades.remove(trade)
                 save_trades()
+                save_runtime_state()
             await query.message.reply_text(t(uid,"trade_closed")+" #"+str(trade_id))
 
     elif data in ("override_cancel", "cancel_request", "noop_cancel"):
@@ -3174,11 +3446,14 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 "entry_alert_sent": False, "last_news_event": "",
                 "last_frame_alert": "", "last_active_alert": "",
                 "forced": True,
+                "setup_grade": (res_sig.get("decision_metrics", {}) or {}).get("setup_grade", ""),
+                "setup_grade": (res_use.get("decision_metrics", {}) or {}).get("setup_grade", ""),
             }
             async with get_trades_lock():
                 active_trades.append(nt)
                 if asset_ov == "BTC": active_btc_trade["data"] = nt
                 save_trades()
+                save_runtime_state()
         except Exception as e:
             logger.error(f"Override trade: {e}")
             await query.message.reply_text(t(uid, "error") + str(e))
@@ -3367,6 +3642,7 @@ async def check_pending_trades(context):
                             if trade in active_trades:
                                 active_trades.remove(trade)
                             save_trades()
+                            save_runtime_state()
                         await context.bot.send_message(chat_id=chat_id,
                             text=f"{t(chat_id,'pending_expired_title')} #{tid}\n\n{t(chat_id,'pending_expired_body')}")
                         continue
@@ -3386,6 +3662,7 @@ async def check_pending_trades(context):
                             if trade in active_trades:
                                 active_trades.remove(trade)
                             save_trades()
+                            save_runtime_state()
                         await context.bot.send_message(chat_id=chat_id,
                             text=msg + f"\n\n{t(chat_id,'auto_cancel_timeframes')} {opp_dir}")
                     else:
@@ -3417,6 +3694,7 @@ async def check_pending_trades(context):
                                 if trade in active_trades:
                                     active_trades.remove(trade)
                                 save_trades()
+                                save_runtime_state()
                             await context.bot.send_message(chat_id=chat_id,
                                 text=msg + "\n\n" + t(chat_id,"auto_cancel_conditions"))
                         else:
@@ -3454,14 +3732,17 @@ async def _check_auto_signal(context):
         rsi_q  = safe(lq["RSI"], 50)
         fib_q, *_ = calculate_fibonacci(df_q)
 
-        if not (rsi_q < 40 or rsi_q > 60): return
-        if not any(abs(price_q - v) / price_q * 100 < 1.5 for v in fib_q.values()): return
+        # Soft pre-filter only: do not kill valid BTC moves before DNA sees them.
+        near_fib_q = any(abs(price_q - v) / price_q * 100 < 0.7 for v in fib_q.values())
+        rsi_extended_q = (rsi_q < 40 or rsi_q > 60)
+        if not (near_fib_q or rsi_extended_q):
+            return
 
         no_buy  = not any(tr["asset"]=="BTC" and tr["direction"]=="BUY"  for tr in active_trades)
         no_sell = not any(tr["asset"]=="BTC" and tr["direction"]=="SELL" for tr in active_trades)
 
         res = await run_blocking(full_analysis, "BTC", 0)
-        if not res or res.get("final") == "NEUTRAL" or res.get("base_conf", 0) < MIN_CONFIDENCE:
+        if not res or res.get("final") == "NEUTRAL":
             return
         # Auto-signals must pass the strictest SazBot 2.1 DNA gate before being sent.
         res = apply_saz_dna_gate(res, 0, mode="auto")
@@ -3474,11 +3755,23 @@ async def _check_auto_signal(context):
         # Auto-signals remain selective, but not impossible:
         # Prefer full alignment; allow a clean strong setup if the DNA gate approves it.
         three = (res["final"] == "BUY" and buy_f == 3 and sell_f == 0) or (res["final"] == "SELL" and sell_f == 3 and buy_f == 0)
+        # For BTC, do not kill every setup just because one timeframe is temporarily opposite.
+        # Full alignment is best; strong directional agreement can still be tradable if DNA approves.
         strong_partial = (
-            (res["final"] == "BUY" and buy_f >= 2 and sell_f == 0) or
-            (res["final"] == "SELL" and sell_f >= 2 and buy_f == 0)
+            (res["final"] == "BUY" and buy_f >= 2 and sell_f <= 1) or
+            (res["final"] == "SELL" and sell_f >= 2 and buy_f <= 1)
         )
-        if not (three or strong_partial):
+
+        # Timing rescue: 1H + Daily alignment can be a valid BTC scalp/swing even when 4H is lagging.
+        frame_txt = " ".join(res.get("frame_lines", []))
+        timing_rescue = (
+            (res["final"] == "SELL" and "1H: SELL" in frame_txt and "Daily: SELL" in frame_txt) or
+            (res["final"] == "BUY" and "1H: BUY" in frame_txt and "Daily: BUY" in frame_txt) or
+            (res["final"] == "SELL" and "ساعة: SELL" in frame_txt and "يومي: SELL" in frame_txt) or
+            (res["final"] == "BUY" and "ساعة: BUY" in frame_txt and "يومي: BUY" in frame_txt)
+        )
+
+        if not (three or strong_partial or timing_rescue):
             return
 
         dir_ok = (res["final"]=="BUY" and no_buy) or (res["final"]=="SELL" and no_sell)
@@ -3488,7 +3781,7 @@ async def _check_auto_signal(context):
         entry_high = float(res.get("entry_high", ep))
 
         # Do not send a new signal if price is already too far away from the Smart Entry Zone.
-        if is_price_too_far_from_entry_zone(res.get("price", price_q), entry_low, entry_high, MAX_DISTANCE_FROM_ZONE_PCT):
+        if is_price_too_far_from_entry_zone(res.get("price", price_q), entry_low, entry_high, max_distance_for_setup_grade(res)):
             return
 
         # Do not re-offer a recently cancelled setup in the same zone/direction.
@@ -3706,6 +3999,7 @@ async def _monitor_active_trades(context):
                                      f"🎯 TP1: ${fresh['tp1']:,.2f} | TP2: ${fresh['tp2']:,.2f} | TP3: ${fresh['tp3']:,.2f}")
                             async with get_trades_lock():
                                 save_trades()
+                                save_runtime_state()
                     except Exception as e:
                         logger.error(f"Pending arrival: {e}")
                         trade["status"] = "active"
@@ -3855,6 +4149,7 @@ async def _monitor_active_trades(context):
             for tr in to_remove:
                 if tr in active_trades: active_trades.remove(tr)
             save_trades()
+            save_runtime_state()
 
 
 async def monitor_btc(context):
@@ -4178,6 +4473,7 @@ def load_stats() -> dict:
             # Streak
             "current_streak": 0, "best_streak": 0, "worst_streak": 0,
             "last_result": None,
+            "grade_stats": _empty_grade_stats(),
         }
 
 def save_stats(stats: dict):
@@ -4185,8 +4481,8 @@ def save_stats(stats: dict):
         json.dump(stats, f, ensure_ascii=False)
 
 def record_trade_result(trade_id, result: str, rr: float = 0.0,
-                        direction: str = "", session: str = ""):
-    stats = load_stats()
+                        direction: str = "", session: str = "", setup_grade: str = ""):
+    stats = normalise_grade_stats(load_stats())
     stats["total"] = stats.get("total", 0) + 1
 
     # ── result counters ──
@@ -4234,9 +4530,12 @@ def record_trade_result(trade_id, result: str, rr: float = 0.0,
     stats.setdefault("trades", []).append({
         "id": trade_id, "result": result, "rr": rr,
         "direction": direction, "session": session,
+        "grade": setup_grade,
         "time": gmt_now(),
     })
     stats["trades"] = stats["trades"][-100:]
+    if setup_grade:
+        record_grade_result(stats, setup_grade, result, rr)
     save_stats(stats)
     logger.info(f"Trade #{trade_id} closed: {result} | RR={rr} | {direction} | {session}")
 
@@ -4317,12 +4616,15 @@ async def send_daily_summary(context):
 # ==================== Main ====================
 def main():
     global _trades_lock
+    load_runtime_state()
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     # Initialise the lock during bot startup instead of at module import time.
     if _trades_lock is None:
         _trades_lock = asyncio.Lock()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("version", version_command))
+    app.add_handler(CommandHandler("why", why_command))
+    app.add_handler(CommandHandler("edge", edge_command))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.job_queue.run_repeating(monitor_btc,          interval=60,      first=30)
