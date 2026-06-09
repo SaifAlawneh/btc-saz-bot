@@ -57,7 +57,7 @@ LANGUAGES_FILE    = "user_languages.json"
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BUILD_ID = "SAZBOT_FINAL_DNA_ABC_NO_VERSION_MIX_2026_06_09"
+BUILD_ID = "SAZBOT_FINAL_DNA_ABC_BALANCED_v5_2026_06_09"
 
 user_languages        = {}
 active_trades         = []
@@ -1092,9 +1092,9 @@ def safe_saz_intelligence_block(res, uid=0, compact=False):
 # This is not a UI layer. It is the core decision filter used before any setup is shown,
 # auto-sent, overridden, or kept alive.
 SAZ_DNA_LIMITS = {
-    "manual":   {"min_quality": 62, "max_regret": 62, "max_opp_cost": 72, "max_exhaustion": 82},
-    "auto":     {"min_quality": 72, "max_regret": 52, "max_opp_cost": 62, "max_exhaustion": 72},
-    "override": {"min_quality": 68, "max_regret": 55, "max_opp_cost": 62, "max_exhaustion": 70},
+    "manual":   {"min_quality": 55, "max_regret": 70, "max_opp_cost": 75, "max_exhaustion": 84},
+    "auto":     {"min_quality": 62, "max_regret": 60, "max_opp_cost": 68, "max_exhaustion": 76},
+    "override": {"min_quality": 58, "max_regret": 65, "max_opp_cost": 68, "max_exhaustion": 74},
     "health":   {"min_quality": 50, "max_regret": 76, "max_opp_cost": 82, "max_exhaustion": 88},
 }
 
@@ -3454,8 +3454,8 @@ async def _check_auto_signal(context):
         rsi_q  = safe(lq["RSI"], 50)
         fib_q, *_ = calculate_fibonacci(df_q)
 
-        if not (rsi_q < 35 or rsi_q > 65): return
-        if not any(abs(price_q - v) / price_q * 100 < 0.5 for v in fib_q.values()): return
+        if not (rsi_q < 40 or rsi_q > 60): return
+        if not any(abs(price_q - v) / price_q * 100 < 1.5 for v in fib_q.values()): return
 
         no_buy  = not any(tr["asset"]=="BTC" and tr["direction"]=="BUY"  for tr in active_trades)
         no_sell = not any(tr["asset"]=="BTC" and tr["direction"]=="SELL" for tr in active_trades)
