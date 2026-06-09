@@ -57,7 +57,7 @@ LANGUAGES_FILE    = "user_languages.json"
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BUILD_ID = "SAZBOT_2_2_DNA_EARLY_BIAS_OVERRIDE_FIXED_2026_06_09"
+BUILD_ID = "SAZBOT_FINAL_DNA_ABC_NO_VERSION_MIX_2026_06_09"
 
 user_languages        = {}
 active_trades         = []
@@ -721,6 +721,45 @@ def _saz_regime_from_res(res, uid=0):
         return ("منطقة اندفاع قد تعكس حركة مفاجئة" if lang == "ar" else "Extended move with reversal risk"), "EXTENDED"
     return ("منطقة انتظار وتقييم" if lang == "ar" else "Wait-and-evaluate zone"), "WAIT"
 
+
+# ==================== SazBot Final ABC Setup Grading ====================
+def saz_setup_grade(metrics):
+    """Convert internal DNA metrics into a clear setup grade."""
+    try:
+        q = float(metrics.get("quality", 0))
+        r = float(metrics.get("regret", 100))
+        if q >= 80 and r <= 45:
+            return "A"
+        if q >= 65 and r <= 60:
+            return "B"
+        if q >= 50 and r <= 75:
+            return "C"
+        return "REJECT"
+    except Exception:
+        return "REJECT"
+
+def saz_grade_label(grade, uid=0):
+    lang = user_languages.get(uid, "ar")
+    if lang == "ar":
+        return {
+            "A": "🟢 A Setup | فرصة ممتازة",
+            "B": "🟡 B Setup | فرصة جيدة",
+            "C": "🟠 C Setup | فرصة مضاربة",
+            "REJECT": "🚫 لا توجد فرصة مناسبة",
+        }.get(grade, "🚫 لا توجد فرصة مناسبة")
+    return {
+        "A": "🟢 A Setup | Elite opportunity",
+        "B": "🟡 B Setup | Good opportunity",
+        "C": "🟠 C Setup | Aggressive opportunity",
+        "REJECT": "🚫 No suitable setup",
+    }.get(grade, "🚫 No suitable setup")
+
+def saz_grade_risk_label(grade, uid=0):
+    lang = user_languages.get(uid, "ar")
+    if lang == "ar":
+        return {"A": "منخفضة", "B": "متوسطة", "C": "مرتفعة", "REJECT": "مرتفعة"}.get(grade, "مرتفعة")
+    return {"A": "Low", "B": "Medium", "C": "High", "REJECT": "High"}.get(grade, "High")
+
 def saz_decision_intelligence(res, uid=0, persist=True, refresh=False):
     """SazBot 2.1: decision intelligence based on live analysis, market memory, and behavioural risk.
     It does not promise outcomes; it ranks whether the current opportunity deserves attention.
@@ -765,13 +804,20 @@ def saz_decision_intelligence(res, uid=0, persist=True, refresh=False):
     if regime_code in ("RANGE", "WAIT"):
         quality -= 8
     if regime_code == "VOLATILE":
-        quality -= 18
+        quality -= 12
     if counter_weekly:
-        quality -= 16
+        quality -= 8
     if counter_monthly:
-        quality -= 10
+        quality -= 5
     if mixed_frames:
-        quality -= 10
+        quality -= 5
+    # strong_trend_bonus: very strong lower/higher timeframe readings deserve a small quality boost
+    try:
+        strong_count = len([f for f in frames if f.get("conf", 0) >= 82 and f.get("direction") in ("BUY", "SELL")])
+        if strong_count >= 1:
+            quality += min(5 * strong_count, 10)
+    except Exception:
+        pass
     if dist > 0.8:
         quality -= min(dist * 8, 16)
     if rsi > 74 or rsi < 26:
@@ -837,9 +883,7 @@ def saz_decision_intelligence(res, uid=0, persist=True, refresh=False):
     if counter_weekly or counter_monthly or mixed_frames:
         opportunity_cost += 10
     opportunity_cost = _clamp(opportunity_cost)
-    if opportunity_cost >= 70:
-        quality -= 8
-
+    # Opportunity cost affects the final decision, but should not double-penalise quality.
     quality = _clamp(quality)
 
     regret = 100 - quality
@@ -848,7 +892,7 @@ def saz_decision_intelligence(res, uid=0, persist=True, refresh=False):
     if counter_weekly or counter_monthly:
         regret += 15
     if regime_code == "VOLATILE":
-        regret += 16
+        regret += 10
     if mixed_frames:
         regret += 8
     if crowd_exhaustion >= 70:
@@ -952,6 +996,7 @@ def saz_decision_intelligence(res, uid=0, persist=True, refresh=False):
         "narrative_text": labels[narrative],
         "story": story,
     }
+    metrics["setup_grade"] = saz_setup_grade(metrics)
     if isinstance(res, dict):
         res["decision_metrics"] = metrics
     return metrics
@@ -968,50 +1013,51 @@ def saz_decision_gate(res, uid=0):
         return apply_saz_dna_gate(res, uid, mode="manual")
 
 def saz_intelligence_block(res, uid=0, compact=False):
-    """Public SazBot 2.1 summary.
-    The DNA still calculates many internal factors, but the user sees a clean decision summary.
-    """
+    """Clean user-facing decision summary. Internal DNA remains richer."""
     lang = user_languages.get(uid, "ar")
     m = saz_decision_intelligence(res, uid)
-
     quality = int(m.get("quality", 0))
-    regret = int(m.get("regret", 100))
-    if lang == "ar":
-        if regret >= 75:
-            risk_label = "مرتفعة"
-        elif regret >= 50:
-            risk_label = "متوسطة"
-        else:
-            risk_label = "منخفضة"
+    grade = m.get("setup_grade") or saz_setup_grade(m)
+    risk_label = saz_grade_risk_label(grade, uid)
+    grade_label = saz_grade_label(grade, uid)
 
+    if lang == "ar":
         lines = [
-            "🧠 تقييم SazBot 2.1",
+            "🧠 تقييم SazBot",
+            f"🏷️ التصنيف: {grade_label}",
             f"📊 جودة السوق: {quality}/100",
             f"⚠️ مستوى المخاطرة: {risk_label}",
             f"🧭 الحالة: {m['regime_text']}",
             f"🎯 القرار: {m['decision_text']}",
         ]
         if not compact:
-            lines.append(m["story"])
+            if grade == "REJECT":
+                lines.append("السوق لا يقدم فرصة مناسبة حالياً. الانتظار أفضل من الدخول في سيناريو غير مكتمل.")
+            elif grade == "C":
+                lines.append("هذه فرصة مضاربة وليست من أفضل الفرص. استخدم مخاطرة أقل والتزم بمنطقة الدخول.")
+            elif grade == "B":
+                lines.append("الفرصة جيدة، لكنها تحتاج التزاماً واضحاً بإدارة المخاطر.")
+            else:
+                lines.append("الفرصة قوية نسبياً، مع ضرورة الالتزام بمنطقة الدخول وإدارة المخاطر.")
     else:
-        if regret >= 75:
-            risk_label = "High"
-        elif regret >= 50:
-            risk_label = "Medium"
-        else:
-            risk_label = "Low"
-
         lines = [
-            "🧠 SazBot 2.1 Assessment",
+            "🧠 SazBot Assessment",
+            f"🏷️ Grade: {grade_label}",
             f"📊 Market Quality: {quality}/100",
             f"⚠️ Risk Level: {risk_label}",
             f"🧭 State: {m['regime_text']}",
             f"🎯 Decision: {m['decision_text']}",
         ]
         if not compact:
-            lines.append(m["story"])
+            if grade == "REJECT":
+                lines.append("The market is not offering a suitable setup right now. Waiting is better than forcing an incomplete scenario.")
+            elif grade == "C":
+                lines.append("This is an aggressive setup, not a top-quality opportunity. Use smaller risk and strict entry discipline.")
+            elif grade == "B":
+                lines.append("This is a good setup, but it still requires disciplined risk management.")
+            else:
+                lines.append("This is a relatively strong setup, provided entry discipline and risk management are respected.")
     return lines
-
 
 def safe_saz_intelligence_block(res, uid=0, compact=False):
     """User-facing SazBot 2.1 decision layer.
@@ -1061,13 +1107,24 @@ def saz_dna_assessment(res, uid=0, mode="manual"):
         m = saz_decision_intelligence(res, uid, persist=False, refresh=False)
         limits = SAZ_DNA_LIMITS.get(mode, SAZ_DNA_LIMITS["manual"])
 
-        if m.get("decision") == "STAY_OUT":
-            return False, m, "stay_out"
-        if float(m.get("quality", 0)) < limits["min_quality"]:
-            return False, m, "quality_low"
-        if float(m.get("regret", 100)) > limits["max_regret"]:
+        grade = m.get("setup_grade") or saz_setup_grade(m)
+        m["setup_grade"] = grade
+
+        # ABC model:
+        # A/B are approved. C can be approved for manual/override as aggressive, but auto requires B or A.
+        if grade == "REJECT":
+            return False, m, "grade_reject"
+
+        if mode == "auto" and grade not in ("A", "B"):
+            return False, m, "auto_requires_ab"
+
+        if mode == "override" and grade not in ("A", "B", "C"):
+            return False, m, "override_reject"
+
+        # Hard safety limits still apply, but less binary than before.
+        if float(m.get("regret", 100)) > limits["max_regret"] and grade != "A":
             return False, m, "regret_high"
-        if float(m.get("opportunity_cost", 100)) > limits["max_opp_cost"]:
+        if float(m.get("opportunity_cost", 100)) > limits["max_opp_cost"] and grade == "C":
             return False, m, "opportunity_cost_high"
         if float(m.get("crowd_exhaustion", 100)) > limits["max_exhaustion"]:
             return False, m, "exhaustion_high"
