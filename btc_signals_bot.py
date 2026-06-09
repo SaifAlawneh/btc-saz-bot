@@ -5,7 +5,7 @@ import requests
 from datetime import datetime, timezone, timedelta
 import pandas as pd
 import numpy as np
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 import ta
 import random
@@ -18,13 +18,19 @@ CHANNEL_ID     = os.environ.get("CHANNEL_ID", "@btc_signals_saz")
 TWELVEDATA_KEY = os.environ.get("TWELVEDATA_KEY", "")
 NEWS_API_KEY   = os.environ.get("NEWS_API_KEY", "")
 FINNHUB_KEY    = os.environ.get("FINNHUB_KEY", "")
+ALLOWED_USERS_ENV = os.environ.get("ALLOWED_USERS", "")
+if ALLOWED_USERS_ENV.strip():
+    ALLOWED_USERS = {int(x.strip()) for x in ALLOWED_USERS_ENV.split(",") if x.strip().isdigit()}
+else:
+    ALLOWED_USERS = {8490817794, 1548286220}
+
 
 MIN_CONFIDENCE    = 68
 AUTO_SIGNAL_MODE  = os.environ.get("AUTO_SIGNAL_MODE", "balanced").lower()  # conservative | balanced | active
 FAST_SCALP_ENABLED = os.environ.get("FAST_SCALP_ENABLED", "true").lower() == "true"
 FAST_SCALP_MIN_QUALITY = int(os.environ.get("FAST_SCALP_MIN_QUALITY", "55"))
 FAST_SCALP_MAX_REGRET = int(os.environ.get("FAST_SCALP_MAX_REGRET", "72"))
-FAST_SCALP_COOLDOWN = int(os.environ.get("FAST_SCALP_COOLDOWN", str(SPAM_COOLDOWN)))
+FAST_SCALP_COOLDOWN = int(os.environ.get("FAST_SCALP_COOLDOWN", "1800"))
 FRAME_MIN_CONFIDENCE = 60  # Minimum confidence required for a timeframe to be counted in confluence
 ENTRY_ZONE_ATR_FACTOR = 0.25  # Entry zone width on each side of smart entry, based on ATR
 PRICE_EXPIRY_PCT  = 1.0   # Pending signal expires if BTC moves this % away from signal price
@@ -64,7 +70,7 @@ LAST_PRICE_CACHE_FILE = "last_price_cache.json"
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BUILD_ID = "SAZBOT_FINAL_DNA_BILINGUAL_MESSAGES_REVIEWED_2026_06_09"
+BUILD_ID = "SAZBOT_FINAL_DNA_WELCOME_KEYBOARD_REWORK_2026_06_10"
 
 user_languages        = {}
 active_trades         = []
@@ -321,24 +327,11 @@ def load_runtime_state():
 
 
 # ✅ FIX 1: asyncio lock لحماية active_trades من race conditions
-_trades_lock = None
-
+_trades_lock = asyncio.Lock()
 def get_trades_lock():
-    """Return the active trades lock. It is initialised in main() inside the running bot context."""
-    global _trades_lock
-    if _trades_lock is None:
-        # Fallback safety: should normally be initialised in main().
-        _trades_lock = asyncio.Lock()
+    """Return the active trades lock."""
     return _trades_lock
 
-ALLOWED_USERS_ENV = os.environ.get("ALLOWED_USERS", "")
-if ALLOWED_USERS_ENV.strip():
-    ALLOWED_USERS = {int(x.strip()) for x in ALLOWED_USERS_ENV.split(",") if x.strip().isdigit()}
-else:
-    ALLOWED_USERS = {8490817794, 1548286220}
-
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN is missing. Please set it as an environment variable.")
 
 def count_qualified_frame_lines(frame_lines):
     """Count only timeframe lines that passed FRAME_MIN_CONFIDENCE.
@@ -1064,7 +1057,7 @@ def saz_decision_intelligence(res, uid=0, persist=True, refresh=False):
     dirs = [f["direction"] for f in frames if f["direction"] != "NEUTRAL"]
     mixed_frames = len(set(dirs)) > 1
 
-    quality = 45
+    quality = BASE_QUALITY_SCORE
     regret = 100 - quality  # initial; may be adjusted by risk modifiers before final clamp
     if final in ("BUY", "SELL"):
         quality += min(max(base_conf - 50, 0), 35)
@@ -1091,8 +1084,8 @@ def saz_decision_intelligence(res, uid=0, persist=True, refresh=False):
         fd = next((f for f in frames if "Daily" in f.get("name", "") or "يومي" in f.get("name", "")), {})
         if f1.get("direction") == fd.get("direction") and f1.get("direction") in ("BUY", "SELL"):
             if f1.get("conf", 0) >= 70 and fd.get("conf", 0) >= 65:
-                quality += 8
-                regret -= 6
+                quality += DIRECTIONAL_RESCUE_BONUS
+                regret -= DIRECTIONAL_RESCUE_REGRET_REDUCTION
     except Exception:
         pass
     # strong_trend_bonus: very strong lower/higher timeframe readings deserve a small quality boost
@@ -1412,6 +1405,13 @@ def safe_saz_intelligence_block(res, uid=0, compact=False):
 # ==================== SazBot 2.1 DNA Decision Gate ====================
 # This is not a UI layer. It is the core decision filter used before any setup is shown,
 # auto-sent, overridden, or kept alive.
+# SazBot DNA tuning constants
+BASE_QUALITY_SCORE = 45
+MAX_TREND_ALIGNMENT_BONUS = 35
+MAX_MOMENTUM_BONUS = 12
+DIRECTIONAL_RESCUE_BONUS = 8
+DIRECTIONAL_RESCUE_REGRET_REDUCTION = 6
+
 SAZ_DNA_LIMITS = {
     "manual":   {"min_quality": 45, "max_regret": 82, "max_opp_cost": 78, "max_exhaustion": 84},
     "auto":     {"min_quality": 52, "max_regret": 78, "max_opp_cost": 72, "max_exhaustion": 76},
@@ -1725,6 +1725,24 @@ def get_binance_data(days=30, interval="hourly"):
         logger.warning("Binance failed: " + str(e))
         return None
 
+
+def resample_to_4h(df):
+    """Standard 4H OHLCV resampling helper."""
+    try:
+        if df is None or df.empty:
+            return df
+        if not isinstance(df.index, pd.DatetimeIndex):
+            return df
+        return df.resample("4H").agg({
+            "Open": "first",
+            "High": "max",
+            "Low": "min",
+            "Close": "last",
+            "Volume": "sum",
+        }).dropna()
+    except Exception as e:
+        logger.warning("resample_to_4h failed: " + str(e))
+        return df
 
 def get_data(asset="BTC", days=30, interval="hourly"):
     cache_key = asset + "_" + str(days) + "_" + interval
@@ -3091,6 +3109,181 @@ def confirm_keyboard(uid=0):
 
 # ==================== هاندلرز ====================
 
+
+
+def welcome_message(uid=0):
+    """Short bilingual welcome. Keyboard labels stay English; content follows user language."""
+    lang = user_languages.get(uid, "ar")
+    if lang == "ar":
+        return (
+            "🟡 SazBot 2.1 | ذكاء القرار\n\n"
+            "اقرأ السوق.\n"
+            "قيّم المخاطر.\n"
+            "وتداول فقط عندما تكون الاحتمالات في صالحك.\n\n"
+            "⚡ تنبيهات المضاربة السريعة\n"
+            "🎯 فرص تداول عالية الجودة\n"
+            "📊 قراءة وتحليل السوق\n"
+            "🛡️ قرارات مبنية على إدارة المخاطر\n\n"
+            "⚠️ لأغراض تعليمية فقط.\n"
+            "إدارة المخاطر مسؤوليتك الشخصية.\n\n"
+            "استخدم الأزرار بالأسفل للبدء."
+        )
+    return (
+        "🟡 SazBot 2.1 | Decision Intelligence\n\n"
+        "Read the market.\n"
+        "Assess the risk.\n"
+        "Trade only when the odds justify it.\n\n"
+        "⚡ Fast Scalp Alerts\n"
+        "🎯 High-Quality Trade Setups\n"
+        "📊 Market Intelligence\n"
+        "🛡️ Risk-First Decision Making\n\n"
+        "⚠️ Educational purposes only.\n"
+        "Risk management is your responsibility.\n\n"
+        "Use the keyboard below to begin."
+    )
+
+
+# ==================== Persistent Reply Keyboard ====================
+BTN_DECISION_CENTER = "🧠 Decision Center"
+BTN_MARKET_READ     = "📖 Market Read"
+BTN_PRICES          = "💰 Prices"
+BTN_FAST_SCALPS     = "⚡ Fast Scalps"
+BTN_ACTIVE_TRADES   = "📈 Active Trades"
+BTN_STATS           = "📊 Statistics"
+BTN_NEWS            = "📰 News"
+BTN_SETTINGS        = "⚙️ Settings"
+
+REPLY_BUTTONS = {
+    BTN_DECISION_CENTER,
+    BTN_MARKET_READ,
+    BTN_PRICES,
+    BTN_FAST_SCALPS,
+    BTN_ACTIVE_TRADES,
+    BTN_STATS,
+    BTN_NEWS,
+    BTN_SETTINGS,
+}
+
+def persistent_keyboard():
+    """English-only fixed keyboard shown under the message box."""
+    return ReplyKeyboardMarkup(
+        [
+            [BTN_DECISION_CENTER, BTN_MARKET_READ],
+            [BTN_PRICES, BTN_FAST_SCALPS],
+            [BTN_ACTIVE_TRADES, BTN_STATS],
+            [BTN_NEWS, BTN_SETTINGS],
+        ],
+        resize_keyboard=True,
+        persistent=True,
+        one_time_keyboard=False,
+    )
+
+async def show_prices_from_reply(update, uid):
+    try:
+        d = await run_blocking(get_prices)
+        if not d:
+            await update.message.reply_text(t(uid, "failed"), reply_markup=persistent_keyboard())
+            return
+        btc = d.get("bitcoin", {})
+        bp = float(btc.get("usd", 0) or 0)
+        bc = float(btc.get("usd_24h_change", 0) or 0)
+        if bp <= 0:
+            await update.message.reply_text(t(uid, "failed"), reply_markup=persistent_keyboard())
+            return
+        lines = [
+            "💰 Prices",
+            "",
+            f"₿ BTC/USD: ${bp:,.2f}",
+            f"{'📈' if bc > 0 else '📉'} 24h Change: {bc:+.2f}%",
+            "",
+            f"🕐 Last Update (GMT): {gmt_now()}",
+        ]
+        await update.message.reply_text("\n".join(lines), reply_markup=persistent_keyboard())
+    except Exception as e:
+        logger.error("show_prices_from_reply: " + str(e))
+        await update.message.reply_text(t(uid, "error") + str(e), reply_markup=persistent_keyboard())
+
+async def show_market_read_from_reply(update, uid):
+    await update.message.reply_text("⏳ Reading BTC market...", reply_markup=persistent_keyboard())
+    try:
+        keys_to_clear = [k for k in _cache if k.startswith("BTC")]
+        for k in keys_to_clear:
+            _cache.pop(k, None)
+        res = await run_blocking(full_analysis, "BTC", uid)
+        if not res:
+            await update.message.reply_text(t(uid, "failed"), reply_markup=persistent_keyboard())
+            return
+        await update.message.reply_text(build_analysis_msg(res, uid), reply_markup=persistent_keyboard())
+    except Exception as e:
+        logger.error("show_market_read_from_reply: " + str(e))
+        await update.message.reply_text(t(uid, "error") + str(e), reply_markup=persistent_keyboard())
+
+async def show_decision_center_from_reply(update, uid):
+    """Open the existing inline decision menu instead of duplicating trade execution logic."""
+    await update.message.reply_text(
+        ("🧠 مركز القرار\n\nاختر BTC Decision Center بالأسفل لتشغيل قرار الصفقة الكامل." if user_languages.get(uid, "ar") == "ar" else "🧠 Decision Center\n\nChoose BTC Decision Center below to run the full trade decision flow."),
+        reply_markup=main_keyboard(uid),
+    )
+    await update.message.reply_text(
+        ("الأزرار السريعة ستبقى متاحة بالأسفل." if user_languages.get(uid, "ar") == "ar" else "Quick keyboard remains available below."),
+        reply_markup=persistent_keyboard(),
+    )
+
+async def show_active_trades_from_reply(update, uid):
+    try:
+        if not active_trades:
+            await update.message.reply_text("📭 No active trades right now.", reply_markup=persistent_keyboard())
+            return
+        current_price = await run_blocking(get_btc_price)
+        lines = ["📈 Active Trades", ""]
+        for tr in active_trades:
+            tid = tr.get("id", "?")
+            direction = "SELL 🔴" if tr.get("direction") == "SELL" else "BUY 🟢"
+            status = "Pending" if tr.get("status") == "pending" else "Active"
+            entry = float(tr.get("entry", 0) or 0)
+            sl = float(tr.get("sl", 0) or 0)
+            tp1 = float(tr.get("tp1", 0) or 0)
+            lines += [
+                f"#{tid} | BTC/USD | {direction}",
+                f"Status: {status}",
+                f"Entry: ${entry:,.2f}",
+                f"TP1: ${tp1:,.2f} | SL: ${sl:,.2f}",
+            ]
+            if current_price:
+                lines.append(f"Current: ${float(current_price):,.2f}")
+            lines.append("")
+        await update.message.reply_text("\n".join(lines), reply_markup=persistent_keyboard())
+    except Exception as e:
+        logger.error("show_active_trades_from_reply: " + str(e))
+        await update.message.reply_text(t(uid, "error") + str(e), reply_markup=persistent_keyboard())
+
+async def show_stats_from_reply(update, uid):
+    try:
+        await update.message.reply_text(format_grade_edge_report(uid) + "\n" + format_reason_edge_report(uid), reply_markup=persistent_keyboard())
+    except Exception as e:
+        logger.error("show_stats_from_reply: " + str(e))
+        await update.message.reply_text(t(uid, "error") + str(e), reply_markup=persistent_keyboard())
+
+async def show_news_from_reply(update, uid):
+    try:
+        await update.message.reply_text(
+            "📰 News alerts are monitored automatically. I will notify you when a high-impact market event is near.",
+            reply_markup=persistent_keyboard(),
+        )
+    except Exception as e:
+        logger.error("show_news_from_reply: " + str(e))
+
+async def show_settings_from_reply(update, uid):
+    await update.message.reply_text(
+        "⚙️ Settings\n\nUse the options below:",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🌐 Language", callback_data="change_lang")],
+            [InlineKeyboardButton("ℹ️ About SazBot", callback_data="about")],
+        ]),
+    )
+    await update.message.reply_text("Quick keyboard remains available below.", reply_markup=persistent_keyboard())
+
+
 async def why_command(update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ALLOWED_USERS:
@@ -3194,24 +3387,54 @@ async def version_command(update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ALLOWED_USERS:
-        await update.message.reply_text(t(uid,"private_bot")); return
+        await update.message.reply_text(t(uid,"private_bot"))
+        return
     if uid not in user_languages:
         await update.message.reply_text(t(uid,"choose_language_intro"), reply_markup=lang_keyboard())
     else:
-        await update.message.reply_text(t(uid,"welcome"), reply_markup=main_keyboard(uid))
+        await update.message.reply_text(welcome_message(uid), reply_markup=persistent_keyboard())
 
 
 async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
     uid  = update.effective_user.id
-    text = update.message.text or ""
-    if uid not in ALLOWED_USERS: return
-    kb   = main_keyboard(uid) if uid in user_languages else lang_keyboard()
+    msg_text = update.message.text or ""
+    if uid not in ALLOWED_USERS:
+        return
+
+    if msg_text == BTN_DECISION_CENTER:
+        await show_decision_center_from_reply(update, uid)
+        return
+    if msg_text == BTN_MARKET_READ:
+        await show_market_read_from_reply(update, uid)
+        return
+    if msg_text == BTN_PRICES:
+        await show_prices_from_reply(update, uid)
+        return
+    if msg_text == BTN_FAST_SCALPS:
+        await update.message.reply_text(
+            "⚡ Fast Scalps are automatic. I will alert you when a C+ fast opportunity appears.",
+            reply_markup=persistent_keyboard(),
+        )
+        return
+    if msg_text == BTN_ACTIVE_TRADES:
+        await show_active_trades_from_reply(update, uid)
+        return
+    if msg_text == BTN_STATS:
+        await show_stats_from_reply(update, uid)
+        return
+    if msg_text == BTN_NEWS:
+        await show_news_from_reply(update, uid)
+        return
+    if msg_text == BTN_SETTINGS:
+        await show_settings_from_reply(update, uid)
+        return
+
     lang = user_languages.get(uid, "ar")
-    if any(g in text.lower() for g in GREETINGS):
+    if any(g in msg_text.lower() for g in GREETINGS):
         reply = random.choice(REPLIES_AR if lang == "ar" else REPLIES_EN)
     else:
         reply = random.choice(CONFUSED_AR if lang == "ar" else CONFUSED_EN)
-    await update.message.reply_text(reply, reply_markup=kb)
+    await update.message.reply_text(reply, reply_markup=persistent_keyboard())
 
 
 async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
@@ -3225,11 +3448,11 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
     if data == "lang_ar":
         user_languages[uid] = "ar"
         save_languages()
-        await query.message.reply_text(t(uid,"welcome"), reply_markup=main_keyboard(uid))
+        await query.message.reply_text(welcome_message(uid), reply_markup=persistent_keyboard())
     elif data == "lang_en":
         user_languages[uid] = "en"
         save_languages()
-        await query.message.reply_text(t(uid,"welcome"), reply_markup=main_keyboard(uid))
+        await query.message.reply_text(welcome_message(uid), reply_markup=persistent_keyboard())
     elif data == "change_lang":
         await query.message.reply_text(t(uid,"choose_lang"), reply_markup=lang_keyboard())
 
@@ -4677,12 +4900,8 @@ async def send_daily_summary(context):
 
 # ==================== Main ====================
 def main():
-    global _trades_lock
     load_runtime_state()
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-    # Initialise the lock during bot startup instead of at module import time.
-    if _trades_lock is None:
-        _trades_lock = asyncio.Lock()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("version", version_command))
     app.add_handler(CommandHandler("why", why_command))
