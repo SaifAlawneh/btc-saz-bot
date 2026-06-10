@@ -73,7 +73,7 @@ LAST_PRICE_CACHE_FILE = "last_price_cache.json"
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BUILD_ID = "SAZBOT_FINAL_STARTUP_SAFE_2026_06_10"
+BUILD_ID = "SAZBOT_FINAL_TRADE_LOGIC_FIX_2026_06_10"
 
 user_languages        = {}
 active_trades         = []
@@ -3357,16 +3357,36 @@ async def version_command(update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 
+
+async def force_show_keyboard(update, context: ContextTypes.DEFAULT_TYPE):
+    """Reliable entry point for /start, /Start, Start, ابدأ, or manual restart.
+    Always shows the welcome + persistent keyboard for allowed users.
+    """
+    uid = update.effective_user.id
+    incoming_text = (update.message.text or "") if update.message else ""
+    logger.info(f"force_show_keyboard received from uid={uid}; allowed={uid in ALLOWED_USERS}; text={incoming_text!r}")
+    if uid not in ALLOWED_USERS:
+        await update.message.reply_text(t(uid, "private_bot"))
+        return
+
+    if uid not in user_languages:
+        # Default to Arabic for this private bot, but user can still change it from Settings.
+        user_languages[uid] = "ar"
+        save_languages()
+
+    await update.message.reply_text(welcome_message(uid), reply_markup=persistent_keyboard())
+
+
 async def start(update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    logger.info(f"/start received from uid={uid}; allowed={uid in ALLOWED_USERS}")
+    logger.info(f"/start received from uid={uid}; allowed={uid in ALLOWED_USERS}; text={getattr(update.message, 'text', '')}")
     if uid not in ALLOWED_USERS:
         await update.message.reply_text(t(uid,"private_bot"))
         return
     if uid not in user_languages:
         await update.message.reply_text(t(uid,"choose_language_intro"), reply_markup=lang_keyboard())
         await update.message.reply_text(
-            "Please choose your language above. The quick keyboard is ready below.",
+            "اختر اللغة من الأعلى، وستبقى الأزرار السريعة متاحة بالأسفل.\n\nPlease choose your language above. The quick keyboard is ready below.",
             reply_markup=persistent_keyboard()
         )
     else:
@@ -3377,6 +3397,11 @@ async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
     uid  = update.effective_user.id
     msg_text = update.message.text or ""
     if uid not in ALLOWED_USERS:
+        return
+
+    START_TEXTS = {"/start", "/Start", "/START", "start", "Start", "START", "ابدأ", "إبدأ", "ابدا", "إبدا", "/ابدأ", "/إبدأ", "/ابدا"}
+    if msg_text.strip() in START_TEXTS:
+        await force_show_keyboard(update, context)
         return
 
     if msg_text == BTN_DECISION_CENTER:
@@ -3562,6 +3587,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
             trade_counter += 1
+            save_runtime_state()
             res["id"] = trade_counter
             await query.message.reply_text(build_trade_msg(res, uid))
 
@@ -3804,6 +3830,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("activate_signal_"):
         sig_id = int(data.split("_")[2])
         sig = pending_signals.pop(sig_id, None)
+        save_runtime_state()
         if sig:
             res_sig   = sig["res"]
             entry_p   = sig["entry_p"]
@@ -3848,6 +3875,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("ignore_signal_"):
         sig_id = int(data.split("_")[2])
         pending_signals.pop(sig_id, None)
+        save_runtime_state()
 
     elif data.startswith("update_entry_"):
         trade_id = int(data.split("_")[2])
@@ -4020,6 +4048,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
             trade_counter += 1
+            save_runtime_state()
             res_use["id"]     = trade_counter
             res_use["forced"] = True
 
@@ -4423,11 +4452,51 @@ def build_fast_scalp_msg(res, uid=0):
     return "\n".join(lines)
 
 
+
+def is_actionable_trade_decision(res):
+    """True only when SazBot decision supports sending an entry setup, not a wait/stay-out message."""
+    try:
+        m = res.get("decision_metrics") or saz_decision_intelligence(res, 0, persist=False, refresh=False)
+        decision = str(m.get("decision", "") or "").upper()
+        decision_text = str(m.get("decision_text", "") or "")
+        if decision in ("STAY_OUT", "WAIT", "WAIT_FOR_ENTRY", "WAIT_CLEANER"):
+            return False
+        if "انتظر" in decision_text or "ابق" in decision_text or "Wait" in decision_text or "Stay" in decision_text:
+            return False
+        return True
+    except Exception as e:
+        logger.warning("is_actionable_trade_decision failed: " + str(e))
+        return False
+
+def is_duplicate_open_or_pending_setup(asset, direction, entry, atr):
+    """Prevent sending multiple signals in nearly the same entry zone."""
+    try:
+        entry = float(entry or 0)
+        atr = float(atr or 0)
+        if entry <= 0:
+            return True
+        threshold = max(0.5 * atr, entry * 0.003)  # at least ~0.3%
+        for tr in active_trades:
+            if tr.get("asset") == asset and tr.get("direction") == direction:
+                tr_entry = float(tr.get("entry", tr.get("entry_price", 0)) or 0)
+                if tr_entry and abs(tr_entry - entry) <= threshold:
+                    return True
+        for sig in pending_signals.values():
+            sig_res = sig.get("res", {}) if isinstance(sig, dict) else {}
+            sig_dir = sig_res.get("final") or sig_res.get("direction")
+            sig_entry = float(sig.get("entry_p", sig_res.get("entry_price", 0)) or 0)
+            if sig_res.get("asset", asset) == asset and sig_dir == direction and sig_entry:
+                if abs(sig_entry - entry) <= threshold:
+                    return True
+        return False
+    except Exception as e:
+        logger.warning("is_duplicate_open_or_pending_setup failed: " + str(e))
+        return True
+
+
 async def _check_auto_signal(context):
     """Auto-signal: fires only when RSI is extended, price is near Fib, confidence passes MIN_CONFIDENCE, and 3 qualified timeframes agree."""
     n = now_ts()
-    if (n - last_signal_time.get("BTC", 0)) < SPAM_COOLDOWN:
-        return
     try:
         df_q = await run_blocking(get_data, "BTC", days=3, interval="hourly")
         if df_q is None or len(df_q) < 20:
@@ -4453,6 +4522,11 @@ async def _check_auto_signal(context):
         # Auto-signals must pass the strictest SazBot 2.1 DNA gate before being sent.
         res = apply_saz_dna_gate(res, 0, mode="auto")
         if not res or res.get("final") == "NEUTRAL" or res.get("blocked_by_saz_dna"):
+            return
+
+        # Do not send a trade signal when SazBot's own decision is WAIT/STAY OUT.
+        # Early Bias Alerts can explain waiting; trade signals must be actionable.
+        if not is_actionable_trade_decision(res):
             return
 
         fl = res.get("frame_lines", [])
@@ -4485,6 +4559,10 @@ async def _check_auto_signal(context):
         res["entry_reason"] = "timing_rescue" if timing_rescue else ("fast_scalp" if fast_scalp else "auto")
         res["fast_scalp"] = bool(fast_scalp)
 
+        cooldown = FAST_SCALP_COOLDOWN if fast_scalp else SPAM_COOLDOWN
+        if (n - last_signal_time.get("BTC", 0)) < cooldown:
+            return
+
         dir_ok = (res["final"]=="BUY" and no_buy) or (res["final"]=="SELL" and no_sell)
         ep = float(res["entry_price"])
         sig_atr = float(res.get("atr", ep * 0.015) or ep * 0.015)
@@ -4499,9 +4577,7 @@ async def _check_auto_signal(context):
         if is_recently_cancelled("BTC", res["final"], ep, sig_atr):
             return
 
-        dup = any(tr["asset"]=="BTC" and tr["direction"]==res["final"]
-                  and abs(tr["entry"] - ep) < 0.5 * sig_atr
-                  for tr in active_trades)
+        dup = is_duplicate_open_or_pending_setup("BTC", res["final"], ep, sig_atr)
 
         if not (dir_ok and not dup):
             return
@@ -4509,6 +4585,7 @@ async def _check_auto_signal(context):
         global trade_counter
         last_signal_time["BTC"] = n
         trade_counter += 1
+        save_runtime_state()
         res["id"] = trade_counter
 
         ev = await run_blocking(get_upcoming_event, 2)
@@ -4518,6 +4595,7 @@ async def _check_auto_signal(context):
             "entry_high": res.get("entry_high", ep),
             "price": res["price"], "chat_ids": [],
         }
+        save_runtime_state()
         for uid in ALLOWED_USERS:
             try:
                 sig_msg = build_fast_scalp_msg(res, uid) if res.get("fast_scalp") else build_trade_msg(res, uid, auto=True)
@@ -4527,7 +4605,7 @@ async def _check_auto_signal(context):
                     InlineKeyboardButton(t(uid,"btn_activate_setup"), callback_data=f"activate_signal_{trade_counter}"),
                     InlineKeyboardButton(t(uid,"btn_ignore"), callback_data=f"ignore_signal_{trade_counter}"),
                 ]])
-                await context.bot.send_message(chat_id=uid, text=sig_msg, reply_markup=kb)
+                await send_user_message(context.bot, uid, sig_msg, reply_markup=kb)
                 pending_signals[trade_counter]["chat_ids"].append(uid)
             except Exception as e:
                 logger.warning("silent send/action failed: " + str(e))
@@ -4610,6 +4688,7 @@ async def _expire_pending_signals(context):
 
         for sid in to_exp:
             pending_signals.pop(sid, None)
+            save_runtime_state()
     except Exception as e:
         logger.error(f"Expire signals: {e}")
 
@@ -4637,7 +4716,7 @@ async def _economic_alert_no_trades(context):
                       f"Expected impact: 🔴 High\n"
                       f"Avoid opening new trades until the event passes.")
             try:
-                await context.bot.send_message(chat_id=uid, text=nm)
+                await send_user_message(context.bot, uid, nm)
             except Exception as e:
                 logger.warning("silent send/action failed: " + str(e))
     except Exception as e:
@@ -4675,7 +4754,7 @@ async def _monitor_active_trades(context):
                 if zone_dist > MAX_DISTANCE_FROM_ZONE_PCT:
                     to_remove.append(trade)
                     remember_cancelled_setup(trade, reason="price_moved_too_far")
-                    await context.bot.send_message(chat_id=chat_id,
+                    await send_user_message(context.bot, chat_id,
                         text=(
                             f"⚠️ SazBot | {t(chat_id,'setup_cancelled_full')} #{trade_id}\n\n"
                             f"{t(chat_id,'price_moved_against')}\n\n"
@@ -4690,20 +4769,20 @@ async def _monitor_active_trades(context):
                         if fresh is None:
                             trade["status"] = "active"
                             trade["actual_entry"] = cur
-                            await context.bot.send_message(chat_id=chat_id,
+                            await send_user_message(context.bot, chat_id,
                                 text=f"🟢 SazBot | {t(chat_id,'setup_activated')} #{trade_id}\n\n{t(chat_id,'price_reached_entry')}")
                         elif fresh["final"] != direction:
                             to_remove.append(trade)
                             remember_cancelled_setup(trade, reason="bias_changed_at_entry")
                             nd = "BUY ⬆️" if fresh["final"]=="BUY" else "SELL ⬇️"
-                            await context.bot.send_message(chat_id=chat_id,
+                            await send_user_message(context.bot, chat_id,
                                 text=f"⚠️ SazBot | {t(chat_id,'setup_cancelled_full')} #{trade_id}\n\n{t(chat_id,'price_bias_changed')} {nd}.")
                         else:
                             trade.update({"status":"active","actual_entry":cur,"sl":fresh["sl"],
                                           "tp1":fresh["tp1"],"tp2":fresh["tp2"],
                                           "tp3":fresh["tp3"],"atr":fresh["atr"],
                                           "orig_sl":fresh["sl"]})
-                            await context.bot.send_message(chat_id=chat_id,
+                            await send_user_message(context.bot, chat_id,
                                 text=f"🟢 SazBot | {t(chat_id,'setup_activated')} #{trade_id}\n\n"
                                      f"{t(chat_id,'price_reached_entry')}\n\n"
                                      f"🛑 SL: ${fresh['sl']:,.2f}\n"
@@ -4715,14 +4794,14 @@ async def _monitor_active_trades(context):
                         logger.error(f"Pending arrival: {e}")
                         trade["status"] = "active"
                         trade["actual_entry"] = cur
-                        await context.bot.send_message(chat_id=chat_id,
+                        await send_user_message(context.bot, chat_id,
                             text=f"🟢 SazBot | {t(chat_id,'setup_activated')} #{trade_id}\n\n{t(chat_id,'price_reached_entry')}")
                 else:
                     # SL hit before entry
                     sl_pre = (direction=="BUY" and cur <= sl) or (direction=="SELL" and cur >= sl)
                     if sl_pre:
                         to_remove.append(trade)
-                        await context.bot.send_message(chat_id=chat_id,
+                        await send_user_message(context.bot, chat_id,
                             text=f"⚠️ SazBot | {t(chat_id,'setup_cancelled_full')} #{trade_id}\n\n"
                                  f"{t(chat_id,'invalid_before_entry')}\n\n"
                                  f"🛑 SL: ${sl:,.2f}\n💵 {t(chat_id,'current_price')}: ${cur:,.2f}")
@@ -4730,7 +4809,7 @@ async def _monitor_active_trades(context):
                         dist_pct = abs(cur - entry) / entry * 100
                         if dist_pct <= 0.5 and not trade.get("entry_alert_sent"):
                             trade["entry_alert_sent"] = True
-                            await context.bot.send_message(chat_id=chat_id,
+                            await send_user_message(context.bot, chat_id,
                                 text=f"🎯 SazBot | {t(chat_id,'entry_alert')} #{trade_id}\n\n"
                                      f"{t(chat_id,'approaching_entry')}\n\n"
                                      f"📌 {t(chat_id,'reference_entry')}: ${entry:,.2f}\n💵 {t(chat_id,'current_price')}: ${cur:,.2f}\n📏 {t(chat_id,'distance')}: {dist_pct:.2f}%")
@@ -4741,7 +4820,7 @@ async def _monitor_active_trades(context):
                                 ek = ev.get("event","")
                                 if ek != trade.get("last_news_event",""):
                                     trade["last_news_event"] = ek
-                                    await context.bot.send_message(chat_id=chat_id,
+                                    await send_user_message(context.bot, chat_id,
                                         text=f"⚠️ SazBot | {t(chat_id,'high_impact_event')} #{trade_id}\n\n"
                                              f"{ek} {t(chat_id,'event_in')} {_mins_txt(ev['mins_left'])}.\n"
                                              f"{t(chat_id,'impact_high')}")
@@ -4763,7 +4842,7 @@ async def _monitor_active_trades(context):
                                             InlineKeyboardButton(t(chat_id,"btn_update_setup"), callback_data=f"update_entry_{trade_id}"),
                                             InlineKeyboardButton(t(chat_id,"btn_ignore"), callback_data=f"ignore_entry_{trade_id}"),
                                         ]])
-                                        await context.bot.send_message(chat_id=chat_id,
+                                        await send_user_message(context.bot, chat_id,
                                             text=f"📊 SazBot | {t(chat_id,'entry_update')} #{trade_id}\n\n"
                                                  f"{t(chat_id,'conditions_changed_before_activation')}\n\n"
                                                  f"{t(chat_id,'old_reference')}: ${entry:,.2f}\n{t(chat_id,'new_reference')}: ${ne:,.2f}\n\n"
@@ -4781,7 +4860,7 @@ async def _monitor_active_trades(context):
                                     remember_cancelled_setup(trade, reason="counter_move")
                                     nd = "BUY ⬆️" if fc["final"]=="BUY" else "SELL ⬇️"
                                     moved = abs(cur-entry)/entry*100
-                                    await context.bot.send_message(chat_id=chat_id,
+                                    await send_user_message(context.bot, chat_id,
                                         text=f"⚠️ SazBot | {t(chat_id,'setup_cancelled_full')} #{trade_id}\n\n"
                                              f"{t(chat_id,'price_moved_against')} {nd}.")
                             except Exception as e:
@@ -4847,8 +4926,10 @@ async def _monitor_active_trades(context):
                         update_msg = f"📊 #{trade_id} {t(chat_id,'trailing_sl')} → ${nsl:,.2f}"
 
             if update_msg:
-                await context.bot.send_message(chat_id=chat_id,
-                    text=build_update_msg(trade, cur, update_msg, chat_id))
+                await send_user_message(context.bot, chat_id, build_update_msg(trade, cur, update_msg, chat_id))
+                async with get_trades_lock():
+                    save_trades()
+                    save_runtime_state()
             if closed:
                 to_remove.append(trade)
 
@@ -4861,6 +4942,20 @@ async def _monitor_active_trades(context):
                 if tr in active_trades: active_trades.remove(tr)
             save_trades()
             save_runtime_state()
+
+
+
+async def send_user_message(bot, chat_id, text, **kwargs):
+    """Attach the persistent keyboard to private allowed-user messages.
+    This ensures the bottom keyboard reappears after restarts or deleted chats.
+    """
+    try:
+        if chat_id in ALLOWED_USERS and "reply_markup" not in kwargs:
+            kwargs["reply_markup"] = persistent_keyboard()
+        return await bot.send_message(chat_id=chat_id, text=text, **kwargs)
+    except Exception as e:
+        logger.warning("send_user_message failed: " + str(e))
+        raise
 
 
 async def monitor_btc(context):
@@ -5113,7 +5208,7 @@ async def send_smart_alerts(context):
                                             f"{t(user_id,'impact_high')}\n"
                                             f"Avoid opening new trades until the event passes.")
                             try:
-                                await context.bot.send_message(chat_id=user_id, text=news_msg)
+                                await send_user_message(context.bot, user_id, news_msg)
                             except Exception as e:
                                 logger.warning("silent exception: " + str(e))
             except Exception as e:
@@ -5125,12 +5220,16 @@ async def send_smart_alerts(context):
                 continue
 
             b = saz_directional_bias(res)
+            has_trade_same_bias = any(tr.get("asset") == "BTC" and tr.get("direction") == b.get("bias") for tr in active_trades)
+            has_pending_same_bias = any((sig.get("res", {}) or {}).get("final") == b.get("bias") for sig in pending_signals.values())
+            if has_trade_same_bias or has_pending_same_bias:
+                continue
             if not should_send_bias_alert(user_id, b["bias"], b["confidence"], trigger_key):
                 continue
 
             msg = build_early_bias_alert(user_id, res, label, price, bias_data=b)
             try:
-                await context.bot.send_message(chat_id=user_id, text=msg)
+                await send_user_message(context.bot, user_id, msg)
             except Exception as e:
                 logger.warning("silent send/action failed: " + str(e))
     except Exception as e:
@@ -5322,7 +5421,7 @@ async def send_daily_summary(context):
         try: await context.bot.send_message(chat_id=CHANNEL_ID, text=full_msg)
         except Exception: pass
         for uid in ALLOWED_USERS:
-            try: await context.bot.send_message(chat_id=uid, text=full_msg)
+            try: await send_user_message(context.bot, uid, full_msg)
             except Exception: pass
     except Exception as e:
         logger.error(f"Daily summary: {e}")
@@ -5334,7 +5433,10 @@ def main():
     print("ALLOWED_USERS:", sorted(ALLOWED_USERS))
     load_runtime_state()
     app = ApplicationBuilder().token(BOT_TOKEN).build()
+    # Catch /start in any case. Telegram command handling can be case-sensitive,
+    # and MessageHandler below ignores commands because of ~filters.COMMAND.
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.Regex(r"^(?:start|Start|START|ابدأ|إبدأ|ابدا|إبدا)$"), force_show_keyboard), group=-1)
     app.add_handler(CommandHandler("version", version_command))
     app.add_handler(CommandHandler("why", why_command))
     app.add_handler(CommandHandler("edge", edge_command))
