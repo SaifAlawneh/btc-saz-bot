@@ -19,10 +19,13 @@ TWELVEDATA_KEY = os.environ.get("TWELVEDATA_KEY", "")
 NEWS_API_KEY   = os.environ.get("NEWS_API_KEY", "")
 FINNHUB_KEY    = os.environ.get("FINNHUB_KEY", "")
 ALLOWED_USERS_ENV = os.environ.get("ALLOWED_USERS", "")
+_DEFAULT_ALLOWED_USERS = {8490817794, 1548286220}
 if ALLOWED_USERS_ENV.strip():
-    ALLOWED_USERS = {int(x.strip()) for x in ALLOWED_USERS_ENV.split(",") if x.strip().isdigit()}
+    ALLOWED_USERS = {int(x) for x in re.findall(r"\d+", ALLOWED_USERS_ENV)}
+    if not ALLOWED_USERS:
+        ALLOWED_USERS = _DEFAULT_ALLOWED_USERS
 else:
-    ALLOWED_USERS = {8490817794, 1548286220}
+    ALLOWED_USERS = _DEFAULT_ALLOWED_USERS
 
 
 MIN_CONFIDENCE    = 68
@@ -70,7 +73,7 @@ LAST_PRICE_CACHE_FILE = "last_price_cache.json"
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BUILD_ID = "SAZBOT_FINAL_COMPLETE_MONITOR_KEYBOARD_FIXED_2026_06_10"
+BUILD_ID = "SAZBOT_FINAL_STARTUP_SAFE_2026_06_10"
 
 user_languages        = {}
 active_trades         = []
@@ -3356,14 +3359,18 @@ async def version_command(update, context: ContextTypes.DEFAULT_TYPE):
 
 async def start(update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
+    logger.info(f"/start received from uid={uid}; allowed={uid in ALLOWED_USERS}")
     if uid not in ALLOWED_USERS:
         await update.message.reply_text(t(uid,"private_bot"))
         return
     if uid not in user_languages:
         await update.message.reply_text(t(uid,"choose_language_intro"), reply_markup=lang_keyboard())
+        await update.message.reply_text(
+            "Please choose your language above. The quick keyboard is ready below.",
+            reply_markup=persistent_keyboard()
+        )
     else:
         await update.message.reply_text(welcome_message(uid), reply_markup=persistent_keyboard())
-
 
 
 async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
@@ -5323,6 +5330,8 @@ async def send_daily_summary(context):
 
 # ==================== Main ====================
 def main():
+    print("BUILD_ID:", BUILD_ID)
+    print("ALLOWED_USERS:", sorted(ALLOWED_USERS))
     load_runtime_state()
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
@@ -5331,12 +5340,21 @@ def main():
     app.add_handler(CommandHandler("edge", edge_command))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.job_queue.run_repeating(monitor_btc,          interval=60,      first=30)
-    app.job_queue.run_repeating(check_pending_trades, interval=15*60,  first=60)
-    app.job_queue.run_repeating(send_smart_alerts,    interval=45*60,  first=120)
-    app.job_queue.run_repeating(send_news,            interval=4*60*60, first=300)
-    app.job_queue.run_daily(send_daily_summary, time=__import__("datetime").time(6, 0, 0))
+
+    # Schedule background jobs only if JobQueue is available.
+    # This prevents /start from failing if python-telegram-bot[job-queue] is not installed.
+    jq = getattr(app, "job_queue", None)
+    if jq is None:
+        logger.warning("JobQueue is not available. Install python-telegram-bot[job-queue] to enable auto alerts.")
+    else:
+        jq.run_repeating(monitor_btc,          interval=60,      first=30)
+        jq.run_repeating(check_pending_trades, interval=15*60,  first=60)
+        jq.run_repeating(send_smart_alerts,    interval=45*60,  first=120)
+        jq.run_repeating(send_news,            interval=4*60*60, first=300)
+        jq.run_daily(send_daily_summary, time=__import__("datetime").time(6, 0, 0))
+
     logger.info("🟡 SazBot - Ready!")
+    print("SazBot polling started")
     app.run_polling()
 
 if __name__ == "__main__":
