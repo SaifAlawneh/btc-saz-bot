@@ -73,7 +73,7 @@ LAST_PRICE_CACHE_FILE = "last_price_cache.json"
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BUILD_ID = "SAZBOT_FINAL_LANG_COOLDOWN_FIX_2026_06_10"
+BUILD_ID = "SAZBOT_KEYBOARD_ROOT_FIX_2026_06_10"
 
 user_languages        = {}
 active_trades         = []
@@ -3156,17 +3156,27 @@ BTN_SETTINGS        = "⚙️ Settings"
 
 def persistent_keyboard():
     """English-only fixed keyboard shown under the message box."""
-    return ReplyKeyboardMarkup(
-        [
-            [BTN_DECISION_CENTER, BTN_MARKET_READ],
-            [BTN_PRICES, BTN_FAST_SCALPS],
-            [BTN_ACTIVE_TRADES, BTN_STATS],
-            [BTN_NEWS, BTN_SETTINGS],
-        ],
-        resize_keyboard=True,
-        persistent=True,
-        one_time_keyboard=False,
-    )
+    rows = [
+        [BTN_DECISION_CENTER, BTN_MARKET_READ],
+        [BTN_PRICES, BTN_FAST_SCALPS],
+        [BTN_ACTIVE_TRADES, BTN_STATS],
+        [BTN_NEWS, BTN_SETTINGS],
+    ]
+    try:
+        # Correct PTB kwarg is is_persistent (Bot API 6.3+, PTB v20+).
+        return ReplyKeyboardMarkup(
+            rows,
+            resize_keyboard=True,
+            is_persistent=True,
+            one_time_keyboard=False,
+        )
+    except TypeError:
+        # Older PTB without is_persistent: keyboard still shows, just not pinned.
+        return ReplyKeyboardMarkup(
+            rows,
+            resize_keyboard=True,
+            one_time_keyboard=False,
+        )
 
 async def show_prices_from_reply(update, uid):
     try:
