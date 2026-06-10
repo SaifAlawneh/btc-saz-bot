@@ -73,7 +73,7 @@ LAST_PRICE_CACHE_FILE = "last_price_cache.json"
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BUILD_ID = "SAZBOT_KEYBOARD_ROOT_FIX_2026_06_10"
+BUILD_ID = "SAZBOT_CLOSE_FROM_TRADES_VIEW_2026_06_10"
 
 user_languages        = {}
 active_trades         = []
@@ -3215,14 +3215,9 @@ async def show_market_read_from_reply(update, uid):
         await update.message.reply_text(t(uid, "error") + str(e), reply_markup=persistent_keyboard())
 
 async def show_decision_center_from_reply(update, uid):
-    await update.message.reply_text(
-        ("🧠 مركز القرار\n\nاختر BTC Decision Center بالأسفل لتشغيل قرار الصفقة الكامل." if user_languages.get(uid, "ar") == "ar" else "🧠 Decision Center\n\nChoose BTC Decision Center below to run the full trade decision flow."),
-        reply_markup=main_keyboard(uid),
-    )
-    await update.message.reply_text(
-        ("الأزرار السريعة ستبقى متاحة بالأسفل." if user_languages.get(uid, "ar") == "ar" else "Quick keyboard remains available below."),
-        reply_markup=persistent_keyboard(),
-    )
+    # Run the full BTC Decision Center directly - the persistent keyboard
+    # below already covers the other actions, so no intermediate menu.
+    await run_btc_decision_center(update.message, uid, "BTC")
 
 async def show_active_trades_from_reply(update, uid):
     try:
@@ -3242,7 +3237,16 @@ async def show_active_trades_from_reply(update, uid):
             if current_price:
                 lines.append(f"Current: ${float(current_price):,.2f}")
             lines.append("")
-        await update.message.reply_text("\n".join(lines), reply_markup=persistent_keyboard())
+        # Inline close button per trade. The pinned reply keyboard stays below
+        # because it is persistent, so this message can carry inline buttons.
+        close_rows = []
+        lang_ar = user_languages.get(uid, "ar") == "ar"
+        for tr in active_trades:
+            tid = tr.get("id", "?")
+            d = tr.get("direction", "")
+            label = f"❌ {'إغلاق' if lang_ar else 'Close'} #{tid} ({d})"
+            close_rows.append([InlineKeyboardButton(label, callback_data=f"close_active_{tid}")])
+        await update.message.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(close_rows))
     except Exception as e:
         logger.error("show_active_trades_from_reply: " + str(e))
         await update.message.reply_text(t(uid, "error") + str(e), reply_markup=persistent_keyboard())
@@ -3452,6 +3456,197 @@ async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
+async def run_btc_decision_center(message, uid, asset="BTC"):
+    """Full BTC Decision Center flow. Shared by the inline trade_ callback
+    and the persistent reply keyboard button (no intermediate menu)."""
+    global trade_counter
+    await message.reply_text(t(uid,"loading_trade"))
+    try:
+        current_price_check = await run_blocking(get_btc_price)
+        if current_price_check:
+            early_similar = next((
+                tr for tr in active_trades
+                if tr["asset"] == asset and
+                abs(tr["entry"] - current_price_check) < 0.5 * tr.get("atr", current_price_check * 0.015)
+            ), None)
+            if early_similar:
+                await message.reply_text(
+                    t(uid,"duplicate_setup")+"\n"
+                    +t(uid,"existing_entry_zone")+": "+format_entry_zone(early_similar["entry"], early_similar.get("atr", 0))+"\n"
+                    +t(uid,"no_new_trade_needed"))
+                return
+
+        keys_to_clear = [k for k in _cache if k.startswith(asset)]
+        for k in keys_to_clear:
+            _cache.pop(k, None)
+        res = await run_blocking(full_analysis, asset, uid)
+        if not res:
+            await message.reply_text(t(uid,"failed")); return
+        if isinstance(res, dict) and res.get("blocked_by_saz_dna"):
+            await message.reply_text(saz_dna_rejection_message(res, uid))
+            return
+        if res["final"] == "NEUTRAL":
+            fls = res.get("frame_lines", [])
+            lang = user_languages.get(uid, "ar")
+            buy_f, sell_f = count_qualified_frame_lines(fls)
+            q_count = max(buy_f, sell_f)
+            is_two_frame = q_count == 2
+
+            # Majority is only actionable for the 2/3 partial-alignment case.
+            majority = res.get("majority")
+            if not majority:
+                majority = "BUY" if buy_f > sell_f else "SELL" if sell_f > buy_f else None
+
+            def _line_dir(line):
+                if "BUY" in line:
+                    return "BUY"
+                if "SELL" in line:
+                    return "SELL"
+                return "NEUTRAL"
+
+            def _find_frame(*tokens):
+                for line in fls:
+                    if any(tok in line for tok in tokens):
+                        return line
+                return ""
+
+            h1_dir = _line_dir(_find_frame("ساعة", "1H"))
+            h4_dir = _line_dir(_find_frame("4 ساعات", "4H"))
+            d1_dir = _line_dir(_find_frame("يومي", "Daily", "1D"))
+            short_bias = h1_dir if h1_dir == h4_dir and h1_dir in ("BUY", "SELL") else majority
+            daily_against_short = short_bias in ("BUY", "SELL") and d1_dir in ("BUY", "SELL") and d1_dir != short_bias
+
+            if is_two_frame and majority:
+                parts = [
+                    t(uid,"partial_title"),
+                    "",
+                    t(uid,"partial_body"),
+                    "",
+                ]
+            else:
+                if lang == "ar":
+                    parts = [
+                        "⏳ لا توجد فرصة عالية الجودة حالياً",
+                        "",
+                    ]
+                else:
+                    parts = [
+                        "⏳ No High-Quality Setup Yet",
+                        "",
+                    ]
+
+            # Always show SazBot 2.1 decision layer in no-setup / partial setup states.
+            parts.append("")
+            parts += safe_saz_intelligence_block(res, uid, compact=False)
+            parts.append("")
+
+            if fls:
+                parts.append("📊 " + ("حالة السوق" if lang == "ar" else "Market State"))
+                parts.append("")
+                for fl in fls:
+                    parts.append(display_frame_line(uid, fl))
+                parts.append("")
+
+            show_override = is_two_frame and majority and can_show_override_option(res, uid)
+
+            if show_override:
+                parts.append("🎯 " + ("يوجد سيناريو بديل متاح، لكنه يحمل مستوى مخاطرة أعلى." if lang == "ar" else "An alternative setup is available, but it carries higher risk."))
+                kb_override = InlineKeyboardMarkup([[
+                    InlineKeyboardButton(t(uid,"btn_higher_risk"), callback_data=f"override_trade_{asset}"),
+                    InlineKeyboardButton(t(uid,"btn_cancel"), callback_data="override_cancel"),
+                ]])
+                pending_trade_replace[uid] = {"override_res": res}
+                await message.reply_text("\n".join(parts), reply_markup=kb_override)
+            else:
+                if daily_against_short:
+                    parts.append("🧭 " + ("الاتجاه اليومي ما زال يعاكس الاتجاه قصير المدى." if lang == "ar" else "The Daily trend is still against the short-term direction."))
+                    parts.append("")
+                parts.append("⏳ " + ("يفضل انتظار توافق أقوى قبل الدخول." if lang == "ar" else "Waiting for stronger market alignment before entering."))
+                if is_two_frame and majority:
+                    parts.append("")
+                    parts.append("🚫 " + ("لا توجد فرصة بديلة مناسبة الآن؛ السعر ابتعد عن منطقة الدخول أو أن المخاطرة غير مناسبة." if lang == "ar" else "No suitable alternative setup now; price moved away from the entry zone or risk is no longer suitable."))
+                pending_trade_replace.pop(uid, None)
+                await message.reply_text("\n".join(parts))
+            return
+        entry_p = res.get("entry_price", res["price"])
+        market_p = res["price"]
+
+        avg_atr = res.get("atr", entry_p * 0.015)
+        similar_recent = next((
+            tr for tr in active_trades
+            if tr["asset"] == res["asset"] and
+            tr["direction"] == res["final"] and
+            abs(tr["entry"] - entry_p) < 0.5 * avg_atr
+        ), None)
+
+        if similar_recent:
+            await message.reply_text(
+                t(uid,"duplicate_setup")+"\n"
+                +t(uid,"previous_entry_zone")+": "+format_entry_zone(similar_recent["entry"], similar_recent.get("atr", 0))+"\n"
+                +t(uid,"no_new_trade_needed"))
+            return
+
+        trade_counter += 1
+        save_runtime_state()
+        res["id"] = trade_counter
+        await message.reply_text(build_trade_msg(res, uid))
+
+        dist_to_entry = abs(entry_p - market_p) / market_p * 100
+        is_pending = dist_to_entry > 0.1
+        frame_snapshot = {
+            "buy": count_qualified_frame_lines(res.get("frame_lines", []))[0],
+            "sell": count_qualified_frame_lines(res.get("frame_lines", []))[1],
+        }
+        new_trade = {
+            "id": trade_counter, "asset": res["asset"],
+            "direction": res["final"], "entry": entry_p,
+            "sl": res["sl"], "tp1": res["tp1"], "tp2": res["tp2"], "tp3": res["tp3"],
+            "atr": res["atr"], "tp1_hit": False, "tp2_hit": False,
+            "orig_sl": res["sl"], "entry_ref": entry_p,
+            "status": "pending" if is_pending else "active",
+            "actual_entry": market_p if not is_pending else None,
+            "chat_id": message.chat_id, "open_time": gmt_now(),
+            "frame_snapshot": frame_snapshot,
+            "setup_grade": (res.get("decision_metrics", {}) or {}).get("setup_grade", ""),
+            "entry_reason": res.get("entry_reason", "manual"),
+        }
+        already_open = next((tr for tr in active_trades
+            if tr["asset"] == new_trade["asset"] and tr["direction"] == new_trade["direction"]), None)
+        opposite_open = next((tr for tr in active_trades
+            if tr["asset"] == new_trade["asset"] and tr["direction"] != new_trade["direction"]), None)
+
+        if already_open:
+            ai_sym  = "₿ BTC" if new_trade["asset"] == "BTC" else "🥇 GOLD"
+            pending_trade_replace[uid] = {"new": new_trade, "old": already_open, "res": res}
+            if user_languages.get(uid, "ar") == "ar":
+                dir_txt_exists = "شراء BUY" if new_trade["direction"] == "BUY" else "بيع SELL"
+                msg_exists = "⚠️ SazBot | توجد صفقة نشطة\n\n" + ai_sym + " — " + dir_txt_exists + "\n\nهل تريد إغلاق الصفقة الحالية وفتح السيناريو الجديد؟"
+            else:
+                dir_txt_exists = "BUY ⬆️" if new_trade["direction"] == "BUY" else "SELL ⬇️"
+                msg_exists = "⚠️ SazBot | Active Trade Exists\n\n" + ai_sym + " — " + dir_txt_exists + "\n\nClose the existing trade and open the new setup?"
+            await message.reply_text(msg_exists, reply_markup=confirm_keyboard(uid))
+        elif opposite_open:
+            old_dir  = "شراء BUY ⬆️" if opposite_open["direction"] == "BUY" else "بيع SELL ⬇️"
+            new_dir  = "بيع SELL ⬇️" if new_trade["direction"] == "SELL" else "شراء BUY ⬆️"
+            ai_sym   = "₿ BTC" if new_trade["asset"] == "BTC" else "🥇 GOLD"
+            pending_trade_replace[uid] = {"new": new_trade, "old": opposite_open, "res": res}
+            await message.reply_text(
+                t(uid,"opposite_title")+"\n\n"+ai_sym+"\n"+t(uid,"current_trade_word")+": "+old_dir+"\n"+t(uid,"new_trade_word")+": "+new_dir,
+                reply_markup=confirm_keyboard(uid))
+        else:
+            # ✅ FIX 1: lock عند التعديل على active_trades
+            async with get_trades_lock():
+                active_trades.append(new_trade)
+                if res["asset"] == "BTC":
+                    active_btc_trade["data"] = new_trade
+                save_trades()
+                save_runtime_state()
+    except Exception as e:
+        logger.error("Trade handler: " + str(e))
+        await message.reply_text(t(uid,"error") + str(e))
+
+
+
 async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
     global trade_counter
     query = update.callback_query
@@ -3482,191 +3677,7 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("trade_"):
         asset = data.split("_")[1]
-        await query.message.reply_text(t(uid,"loading_trade"))
-        try:
-            current_price_check = await run_blocking(get_btc_price)
-            if current_price_check:
-                early_similar = next((
-                    tr for tr in active_trades
-                    if tr["asset"] == asset and
-                    abs(tr["entry"] - current_price_check) < 0.5 * tr.get("atr", current_price_check * 0.015)
-                ), None)
-                if early_similar:
-                    await query.message.reply_text(
-                        t(uid,"duplicate_setup")+"\n"
-                        +t(uid,"existing_entry_zone")+": "+format_entry_zone(early_similar["entry"], early_similar.get("atr", 0))+"\n"
-                        +t(uid,"no_new_trade_needed"))
-                    return
-
-            keys_to_clear = [k for k in _cache if k.startswith(asset)]
-            for k in keys_to_clear:
-                _cache.pop(k, None)
-            res = await run_blocking(full_analysis, asset, uid)
-            if not res:
-                await query.message.reply_text(t(uid,"failed")); return
-            if isinstance(res, dict) and res.get("blocked_by_saz_dna"):
-                await query.message.reply_text(saz_dna_rejection_message(res, uid))
-                return
-            if res["final"] == "NEUTRAL":
-                fls = res.get("frame_lines", [])
-                lang = user_languages.get(uid, "ar")
-                buy_f, sell_f = count_qualified_frame_lines(fls)
-                q_count = max(buy_f, sell_f)
-                is_two_frame = q_count == 2
-
-                # Majority is only actionable for the 2/3 partial-alignment case.
-                majority = res.get("majority")
-                if not majority:
-                    majority = "BUY" if buy_f > sell_f else "SELL" if sell_f > buy_f else None
-
-                def _line_dir(line):
-                    if "BUY" in line:
-                        return "BUY"
-                    if "SELL" in line:
-                        return "SELL"
-                    return "NEUTRAL"
-
-                def _find_frame(*tokens):
-                    for line in fls:
-                        if any(tok in line for tok in tokens):
-                            return line
-                    return ""
-
-                h1_dir = _line_dir(_find_frame("ساعة", "1H"))
-                h4_dir = _line_dir(_find_frame("4 ساعات", "4H"))
-                d1_dir = _line_dir(_find_frame("يومي", "Daily", "1D"))
-                short_bias = h1_dir if h1_dir == h4_dir and h1_dir in ("BUY", "SELL") else majority
-                daily_against_short = short_bias in ("BUY", "SELL") and d1_dir in ("BUY", "SELL") and d1_dir != short_bias
-
-                if is_two_frame and majority:
-                    parts = [
-                        t(uid,"partial_title"),
-                        "",
-                        t(uid,"partial_body"),
-                        "",
-                    ]
-                else:
-                    if lang == "ar":
-                        parts = [
-                            "⏳ لا توجد فرصة عالية الجودة حالياً",
-                            "",
-                        ]
-                    else:
-                        parts = [
-                            "⏳ No High-Quality Setup Yet",
-                            "",
-                        ]
-
-                # Always show SazBot 2.1 decision layer in no-setup / partial setup states.
-                parts.append("")
-                parts += safe_saz_intelligence_block(res, uid, compact=False)
-                parts.append("")
-
-                if fls:
-                    parts.append("📊 " + ("حالة السوق" if lang == "ar" else "Market State"))
-                    parts.append("")
-                    for fl in fls:
-                        parts.append(display_frame_line(uid, fl))
-                    parts.append("")
-
-                show_override = is_two_frame and majority and can_show_override_option(res, uid)
-
-                if show_override:
-                    parts.append("🎯 " + ("يوجد سيناريو بديل متاح، لكنه يحمل مستوى مخاطرة أعلى." if lang == "ar" else "An alternative setup is available, but it carries higher risk."))
-                    kb_override = InlineKeyboardMarkup([[
-                        InlineKeyboardButton(t(uid,"btn_higher_risk"), callback_data=f"override_trade_{asset}"),
-                        InlineKeyboardButton(t(uid,"btn_cancel"), callback_data="override_cancel"),
-                    ]])
-                    pending_trade_replace[uid] = {"override_res": res}
-                    await query.message.reply_text("\n".join(parts), reply_markup=kb_override)
-                else:
-                    if daily_against_short:
-                        parts.append("🧭 " + ("الاتجاه اليومي ما زال يعاكس الاتجاه قصير المدى." if lang == "ar" else "The Daily trend is still against the short-term direction."))
-                        parts.append("")
-                    parts.append("⏳ " + ("يفضل انتظار توافق أقوى قبل الدخول." if lang == "ar" else "Waiting for stronger market alignment before entering."))
-                    if is_two_frame and majority:
-                        parts.append("")
-                        parts.append("🚫 " + ("لا توجد فرصة بديلة مناسبة الآن؛ السعر ابتعد عن منطقة الدخول أو أن المخاطرة غير مناسبة." if lang == "ar" else "No suitable alternative setup now; price moved away from the entry zone or risk is no longer suitable."))
-                    pending_trade_replace.pop(uid, None)
-                    await query.message.reply_text("\n".join(parts))
-                return
-            entry_p = res.get("entry_price", res["price"])
-            market_p = res["price"]
-
-            avg_atr = res.get("atr", entry_p * 0.015)
-            similar_recent = next((
-                tr for tr in active_trades
-                if tr["asset"] == res["asset"] and
-                tr["direction"] == res["final"] and
-                abs(tr["entry"] - entry_p) < 0.5 * avg_atr
-            ), None)
-
-            if similar_recent:
-                await query.message.reply_text(
-                    t(uid,"duplicate_setup")+"\n"
-                    +t(uid,"previous_entry_zone")+": "+format_entry_zone(similar_recent["entry"], similar_recent.get("atr", 0))+"\n"
-                    +t(uid,"no_new_trade_needed"))
-                return
-
-            trade_counter += 1
-            save_runtime_state()
-            res["id"] = trade_counter
-            await query.message.reply_text(build_trade_msg(res, uid))
-
-            dist_to_entry = abs(entry_p - market_p) / market_p * 100
-            is_pending = dist_to_entry > 0.1
-            frame_snapshot = {
-                "buy": count_qualified_frame_lines(res.get("frame_lines", []))[0],
-                "sell": count_qualified_frame_lines(res.get("frame_lines", []))[1],
-            }
-            new_trade = {
-                "id": trade_counter, "asset": res["asset"],
-                "direction": res["final"], "entry": entry_p,
-                "sl": res["sl"], "tp1": res["tp1"], "tp2": res["tp2"], "tp3": res["tp3"],
-                "atr": res["atr"], "tp1_hit": False, "tp2_hit": False,
-                "orig_sl": res["sl"], "entry_ref": entry_p,
-                "status": "pending" if is_pending else "active",
-                "actual_entry": market_p if not is_pending else None,
-                "chat_id": query.message.chat_id, "open_time": gmt_now(),
-                "frame_snapshot": frame_snapshot,
-                "setup_grade": (res.get("decision_metrics", {}) or {}).get("setup_grade", ""),
-                "entry_reason": res.get("entry_reason", "manual"),
-            }
-            already_open = next((tr for tr in active_trades
-                if tr["asset"] == new_trade["asset"] and tr["direction"] == new_trade["direction"]), None)
-            opposite_open = next((tr for tr in active_trades
-                if tr["asset"] == new_trade["asset"] and tr["direction"] != new_trade["direction"]), None)
-
-            if already_open:
-                ai_sym  = "₿ BTC" if new_trade["asset"] == "BTC" else "🥇 GOLD"
-                pending_trade_replace[uid] = {"new": new_trade, "old": already_open, "res": res}
-                if user_languages.get(uid, "ar") == "ar":
-                    dir_txt_exists = "شراء BUY" if new_trade["direction"] == "BUY" else "بيع SELL"
-                    msg_exists = "⚠️ SazBot | توجد صفقة نشطة\n\n" + ai_sym + " — " + dir_txt_exists + "\n\nهل تريد إغلاق الصفقة الحالية وفتح السيناريو الجديد؟"
-                else:
-                    dir_txt_exists = "BUY ⬆️" if new_trade["direction"] == "BUY" else "SELL ⬇️"
-                    msg_exists = "⚠️ SazBot | Active Trade Exists\n\n" + ai_sym + " — " + dir_txt_exists + "\n\nClose the existing trade and open the new setup?"
-                await query.message.reply_text(msg_exists, reply_markup=confirm_keyboard(uid))
-            elif opposite_open:
-                old_dir  = "شراء BUY ⬆️" if opposite_open["direction"] == "BUY" else "بيع SELL ⬇️"
-                new_dir  = "بيع SELL ⬇️" if new_trade["direction"] == "SELL" else "شراء BUY ⬆️"
-                ai_sym   = "₿ BTC" if new_trade["asset"] == "BTC" else "🥇 GOLD"
-                pending_trade_replace[uid] = {"new": new_trade, "old": opposite_open, "res": res}
-                await query.message.reply_text(
-                    t(uid,"opposite_title")+"\n\n"+ai_sym+"\n"+t(uid,"current_trade_word")+": "+old_dir+"\n"+t(uid,"new_trade_word")+": "+new_dir,
-                    reply_markup=confirm_keyboard(uid))
-            else:
-                # ✅ FIX 1: lock عند التعديل على active_trades
-                async with get_trades_lock():
-                    active_trades.append(new_trade)
-                    if res["asset"] == "BTC":
-                        active_btc_trade["data"] = new_trade
-                    save_trades()
-                    save_runtime_state()
-        except Exception as e:
-            logger.error("Trade handler: " + str(e))
-            await query.message.reply_text(t(uid,"error") + str(e))
-
+        await run_btc_decision_center(query.message, uid, asset)
     elif data == "confirm_replace_yes":
         pending = pending_trade_replace.pop(uid, None)
         if pending:
@@ -3954,7 +3965,21 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 active_trades.remove(trade)
                 save_trades()
                 save_runtime_state()
+            # Remove the now-stale close buttons from the list message.
+            try:
+                await query.message.edit_reply_markup(reply_markup=None)
+            except Exception as e:
+                logger.warning("clear close buttons failed: " + str(e))
             await query.message.reply_text(t(uid,"trade_closed")+" #"+str(trade_id))
+        else:
+            # Trade already closed (SL/TP hit or closed elsewhere): never stay silent.
+            try:
+                await query.message.edit_reply_markup(reply_markup=None)
+            except Exception as e:
+                logger.warning("clear close buttons failed: " + str(e))
+            await query.message.reply_text(
+                ("ℹ️ هذه الصفقة مغلقة مسبقاً #" if user_languages.get(uid, "ar") == "ar" else "ℹ️ This trade is already closed #") + str(trade_id)
+            )
 
     elif data in ("override_cancel", "cancel_request", "noop_cancel"):
         pending_trade_replace.pop(uid, None)
