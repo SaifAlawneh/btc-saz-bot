@@ -73,7 +73,7 @@ LAST_PRICE_CACHE_FILE = "last_price_cache.json"
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BUILD_ID = "SAZBOT_DYNAMIC_MARKET_READ_2026_06_10"
+BUILD_ID = "SAZBOT_DYNAMIC_MARKET_READ_EXPIRY_NEUTRAL_PRICE_FIXED_2026_06_10"
 
 user_languages        = {}
 active_trades         = []
@@ -1804,7 +1804,7 @@ def resample_to_4h(df):
             return df
         if not isinstance(df.index, pd.DatetimeIndex):
             return df
-        return df.resample("4H").agg({
+        return df.resample("4h").agg({
             "Open": "first",
             "High": "max",
             "Low": "min",
@@ -1942,30 +1942,20 @@ def load_last_price_cache(max_age_minutes=30):
 
 
 def get_btc_price():
-    if TWELVEDATA_KEY:
-        try:
-            r = requests.get("https://api.twelvedata.com/price",
-                params={"symbol": "BTC/USD", "apikey": TWELVEDATA_KEY}, timeout=10)
-            data = r.json()
-            if "price" in data:
-                return float(data["price"])
-        except: pass
+    """Return BTC/USD price using the same provider priority as get_prices()."""
     try:
-        r = requests.get("https://api.binance.com/api/v3/ticker/price",
-            params={"symbol": "BTCUSDT"}, timeout=10)
-        if r.status_code == 200:
-            return float(r.json()["price"])
-    except: pass
-    try:
-        import time; time.sleep(1)
-        r = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd", timeout=10)
-        if r.status_code == 200:
-            return float(r.json()["bitcoin"]["usd"])
-    except: pass
+        d = get_prices()
+        if d:
+            price = float(d.get("bitcoin", {}).get("usd", 0) or 0)
+            if price > 0:
+                return price
+    except Exception as e:
+        logger.warning("get_btc_price via get_prices failed: " + str(e))
     cached = load_last_price_cache()
     if cached:
         return float(cached["bitcoin"]["usd"])
     return None
+
 def get_prices():
     """
     Fetch BTC price with robust fallbacks.
@@ -2480,6 +2470,43 @@ def get_upcoming_event(hours=2):
 
 
 # ==================== Full Analysis ====================
+
+def _neutral_result(asset="BTC", price=0.0, **extra):
+    """Consistent NEUTRAL analysis result so UI keys do not go missing."""
+    price = float(price or 0)
+    base = {
+        "final": "NEUTRAL",
+        "majority": None,
+        "asset": asset,
+        "price": price,
+        "entry_price": price,
+        "entry_low": price,
+        "entry_high": price,
+        "tp1": 0,
+        "tp2": 0,
+        "tp3": 0,
+        "sl": 0,
+        "rr": 0,
+        "atr": 0,
+        "risk_pct": 50,
+        "risk_label": "",
+        "risk_msg": "",
+        "frame_lines": [],
+        "confluence_txt": "",
+        "base_conf": 0,
+        "support": price,
+        "resistance": price,
+        "fib_levels": {},
+        "fib_ext": {},
+        "weekly_trend": "NEUTRAL",
+        "monthly_bias": "NEUTRAL",
+        "overall_risk": "🟡 Medium",
+        "risk_warnings": [],
+    }
+    base.update(extra)
+    return base
+
+
 def full_analysis(asset="BTC", uid=0, relaxed=False):
     try:
         df_1h = get_data(asset, days=30,  interval="hourly")
@@ -2529,7 +2556,7 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
             fl2.append(icon+" "+icons2.get(k,"")+": "+r.get("strength", r["direction"])+" ("+str(r["conf"])+"%)"+status_note)
         return {"final":"NEUTRAL","majority":majority,"asset":asset,
                 "confluence_txt":conf_txt,"base_conf":frames_conf,
-                "price":main2["price"],"tp1":0,"tp2":0,"tp3":0,"sl":0,"rr":0,"atr":main2["atr"],
+                "price":main2["price"],"entry_price":main2["price"],"entry_low":main2["price"],"entry_high":main2["price"],"tp1":0,"tp2":0,"tp3":0,"sl":0,"rr":0,"atr":main2["atr"],
                 "risk_pct":50,"risk_label":"","risk_msg":"",
                 "frame_lines":fl2,"rsi":main2["rsi"],"support":main2["support"],"resistance":main2["resistance"],
                 "macd_bull":main2["macd_bull"],"ema_bull":main2["ema_bull"],
@@ -2538,8 +2565,7 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
                 "nearest_fib":nf2,"fib_key":fk2,"swing_h":sh2,"swing_l":sl2,
                 "weekly_trend":"NEUTRAL","regime":"UNKNOWN","regime_strength":0,"monthly_bias":"NEUTRAL",
                 "divergence":"NONE","session":session,"bull_obs":[],"bear_obs":[],"buy_liq":[],"sell_liq":[],
-                "entry_low":main2["price"],"entry_high":main2["price"],
-                "entry_price":main2["price"],"nearest_fib_val":nf2}
+                "nearest_fib_val":nf2}
 
     if final == "NEUTRAL":
         main2 = results.get("1h") or list(results.values())[0]
@@ -2554,7 +2580,7 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
             icon = "🟢" if r["direction"]=="BUY" else "🔴" if r["direction"]=="SELL" else "➡️"
             fl2.append(icon+" "+icons2.get(k,"")+": "+r.get("strength", r["direction"])+" ("+str(r["conf"])+"%)"+status_note)
         return {"final":"NEUTRAL","asset":asset,"confluence_txt":t(uid,"no_confluence"),"base_conf":0,"majority":majority,
-                "price":main2["price"],"tp1":0,"tp2":0,"tp3":0,"sl":0,"rr":0,"atr":main2["atr"],
+                "price":main2["price"],"entry_price":main2["price"],"entry_low":main2["price"],"entry_high":main2["price"],"tp1":0,"tp2":0,"tp3":0,"sl":0,"rr":0,"atr":main2["atr"],
                 "risk_pct":50,"risk_label":t(uid,"risk_med"),"risk_msg":t(uid,"risk_med_msg"),
                 "frame_lines":fl2,"rsi":main2["rsi"],"support":main2["support"],"resistance":main2["resistance"],
                 "macd_bull":main2["macd_bull"],"ema_bull":main2["ema_bull"],
@@ -2563,7 +2589,6 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
                 "nearest_fib":nf2,"fib_key":fk2,"swing_h":sh2,"swing_l":sl2,
                 "weekly_trend":"NEUTRAL","regime":"UNKNOWN","regime_strength":0,"monthly_bias":"NEUTRAL",
                 "divergence":"NONE","session":session,"bull_obs":[],"bear_obs":[],"buy_liq":[],"sell_liq":[],
-                "entry_low":main2["price"],"entry_high":main2["price"],
                 "leverage_ar":"","leverage_en":"","tf_ar":"","tf_en":"","hold_ar":"","hold_en":""}
 
     main  = results.get("1h") or list(results.values())[0]
@@ -3119,64 +3144,6 @@ def build_analysis_msg(res, uid=0):
     ]
     return "\n".join(lines)
 
-
-def _market_read_summary(res, uid=0):
-    """Practical market-read summary for neutral/mixed conditions."""
-    lang = user_languages.get(uid, "ar")
-    frame_lines = res.get("frame_lines", []) or []
-
-    def _dir_from_line(line):
-        if "BUY" in line:
-            return "BUY"
-        if "SELL" in line:
-            return "SELL"
-        return "NEUTRAL"
-
-    def _find_line(*tokens):
-        for line in frame_lines:
-            if any(tok in line for tok in tokens):
-                return line
-        return ""
-
-    h1 = _dir_from_line(_find_line("ساعة", "1H"))
-    h4 = _dir_from_line(_find_line("4 ساعات", "4H"))
-    d1 = _dir_from_line(_find_line("يومي", "Daily", "1D"))
-
-    if h1 == h4 and h1 in ("BUY", "SELL") and d1 in ("BUY", "SELL") and d1 != h1:
-        if lang == "ar":
-            short_txt = "إيجابي" if h1 == "BUY" else "سلبي"
-            return [
-                "  🧭 الخلاصة",
-                "",
-                f"  الاتجاه قصير المدى {short_txt}،",
-                "  لكن الاتجاه اليومي ما زال غير داعم بشكل كامل.",
-                "",
-                "  ⏳ يفضل انتظار توافق أقوى قبل الدخول.",
-            ]
-        else:
-            short_txt = "positive" if h1 == "BUY" else "negative"
-            return [
-                "  🧭 Summary",
-                "",
-                f"  Short-term momentum is {short_txt},",
-                "  but the Daily trend is not fully supportive yet.",
-                "",
-                "  ⏳ Waiting for stronger alignment is preferred.",
-            ]
-
-    if lang == "ar":
-        return [
-            "  🧭 الخلاصة",
-            "",
-            "  السوق في منطقة تردد حالياً.",
-            "  ⏳ يفضل انتظار إشارة أوضح قبل الدخول.",
-        ]
-    return [
-        "  🧭 Summary",
-        "",
-        "  The market is currently indecisive.",
-        "  ⏳ Waiting for a clearer setup is preferred.",
-    ]
 
 
 # ==================== لوحات المفاتيح ====================
@@ -4750,7 +4717,9 @@ async def _check_auto_signal(context):
         if not (three or strong_partial or timing_rescue or fast_scalp):
             return
 
-        res["entry_reason"] = "timing_rescue" if timing_rescue else ("fast_scalp" if fast_scalp else "auto")
+        signal_type = "fast_scalp" if fast_scalp else ("timing_rescue" if timing_rescue else ("strong_partial" if strong_partial else "full_confluence"))
+        res["signal_type"] = signal_type
+        res["entry_reason"] = signal_type if signal_type in ("fast_scalp", "timing_rescue") else "auto"
         res["fast_scalp"] = bool(fast_scalp)
 
         cooldown = FAST_SCALP_COOLDOWN if fast_scalp else SPAM_COOLDOWN
@@ -4788,6 +4757,8 @@ async def _check_auto_signal(context):
             "entry_low": res.get("entry_low", ep),
             "entry_high": res.get("entry_high", ep),
             "price": res["price"], "chat_ids": [],
+            "signal_type": signal_type,
+            "direction": res["final"],
         }
         save_runtime_state()
         for uid in ALLOWED_USERS:
@@ -4805,6 +4776,54 @@ async def _check_auto_signal(context):
                 logger.warning("silent send/action failed: " + str(e))
     except Exception as e:
         logger.error(f"Auto-signal: {e}")
+
+
+
+def pending_signal_still_supported(sig, fresh):
+    """Validate a pending signal using the same logic that allowed it to be created.
+    This avoids expiring fast scalp / timing-rescue / strong-partial signals just because they are not 3/3.
+    """
+    try:
+        if not fresh:
+            return False
+        sig_res = sig.get("res", {}) if isinstance(sig, dict) else {}
+        sig_dir = sig.get("direction") or sig_res.get("final")
+        signal_type = sig.get("signal_type") or sig_res.get("signal_type") or sig_res.get("entry_reason", "full_confluence")
+        fresh_final = fresh.get("final", "NEUTRAL")
+        if sig_dir not in ("BUY", "SELL") or fresh_final != sig_dir:
+            return False
+
+        fresh_lines = fresh.get("frame_lines", [])
+        fresh_buy, fresh_sell = count_qualified_frame_lines(fresh_lines)
+        support = fresh_buy if sig_dir == "BUY" else fresh_sell
+        oppose = fresh_sell if sig_dir == "BUY" else fresh_buy
+
+        frame_txt = " ".join(fresh_lines)
+        one_h_ok = (
+            (sig_dir == "BUY" and ("1H: BUY" in frame_txt or "ساعة: BUY" in frame_txt)) or
+            (sig_dir == "SELL" and ("1H: SELL" in frame_txt or "ساعة: SELL" in frame_txt))
+        )
+        daily_ok = (
+            (sig_dir == "BUY" and ("Daily: BUY" in frame_txt or "يومي: BUY" in frame_txt)) or
+            (sig_dir == "SELL" and ("Daily: SELL" in frame_txt or "يومي: SELL" in frame_txt))
+        )
+
+        if signal_type == "full_confluence":
+            return support == 3 and oppose == 0
+        if signal_type == "strong_partial":
+            return support >= 2 and oppose <= 1
+        if signal_type == "timing_rescue":
+            return one_h_ok and daily_ok
+        if signal_type == "fast_scalp":
+            # Fast scalps are short-lived; 1H remaining in the same direction is enough,
+            # provided the fresh decision is not opposite/neutral.
+            return one_h_ok
+
+        # Backward-compatible default for older pending signals.
+        return support >= 2 and oppose <= 1
+    except Exception as e:
+        logger.warning("pending_signal_still_supported failed: " + str(e))
+        return False
 
 
 async def _expire_pending_signals(context):
@@ -4837,28 +4856,21 @@ async def _expire_pending_signals(context):
             entry_low = float(sig.get("entry_low", sig_res.get("entry_low", sig_entry)) or sig_entry)
             entry_high = float(sig.get("entry_high", sig_res.get("entry_high", sig_entry)) or sig_entry)
 
+            # Hard expiry must be evaluated before fresh-support checks.
+            if age > SIGNAL_EXPIRY:
+                expired = True
+                reason_key = "signal_expired_time"
+
             # Expire by distance from Smart Entry Zone, not from the market price at signal creation.
-            if cur and is_price_too_far_from_entry_zone(cur, entry_low, entry_high, MAX_DISTANCE_FROM_ZONE_PCT):
+            elif cur and is_price_too_far_from_entry_zone(cur, entry_low, entry_high, MAX_DISTANCE_FROM_ZONE_PCT):
                 expired = True
                 reason_key = "signal_expired_price"
 
-            # Expire if the fresh decision is no longer supportive of the original direction.
+            # Expire only if the fresh market no longer supports this signal type.
             elif fresh:
-                fresh_final = fresh.get("final", "NEUTRAL")
-                fresh_lines = fresh.get("frame_lines", [])
-                fresh_buy, fresh_sell = count_qualified_frame_lines(fresh_lines)
-                supportive = (
-                    sig_dir == "BUY" and fresh_final == "BUY" and fresh_buy == 3 and fresh_sell == 0
-                ) or (
-                    sig_dir == "SELL" and fresh_final == "SELL" and fresh_sell == 3 and fresh_buy == 0
-                )
-                if not supportive:
+                if not pending_signal_still_supported(sig, fresh):
                     expired = True
                     reason_key = "signal_expired_timeframes"
-
-            elif age > SIGNAL_EXPIRY:
-                expired = True
-                reason_key = "signal_expired_time"
 
             if expired:
                 to_exp.append(sid)
