@@ -73,7 +73,7 @@ LAST_PRICE_CACHE_FILE = "last_price_cache.json"
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BUILD_ID = "SAZBOT_CLOSE_FROM_TRADES_VIEW_2026_06_10"
+BUILD_ID = "SAZBOT_DYNAMIC_MARKET_READ_2026_06_10"
 
 user_languages        = {}
 active_trades         = []
@@ -1330,6 +1330,61 @@ def saz_context_label(grade, decision, uid=0):
         return saz_grade_label(grade, uid)
 
 
+_FRAME_NAMES = {
+    "ar": {"1h": "الساعة", "4h": "4 ساعات", "1d": "اليومي"},
+    "en": {"1h": "1H", "4h": "4H", "1d": "Daily"},
+}
+
+def _frame_split_from_lines(frame_lines):
+    """Parse user-facing frame lines into per-frame directions + buy/sell groups."""
+    dirs = {}
+    for line in frame_lines or []:
+        d = "BUY" if "BUY" in line else "SELL" if "SELL" in line else "NEUTRAL"
+        if "4" in line:
+            dirs["4h"] = d
+        elif "يومي" in line or "Daily" in line or "1D" in line:
+            dirs["1d"] = d
+        elif "ساعة" in line or "1H" in line:
+            dirs["1h"] = d
+    buys = [k for k in ("1h", "4h", "1d") if dirs.get(k) == "BUY"]
+    sells = [k for k in ("1h", "4h", "1d") if dirs.get(k) == "SELL"]
+    return dirs, buys, sells
+
+def decision_reasons_line(res, m, lang):
+    """Truthful, market-derived explanation for WAIT/STAY_OUT decisions.
+    Built only from conditions that are actually true right now — no fixed filler.
+    """
+    try:
+        reasons = []
+        quality = int(float(m.get("quality", 0) or 0))
+        regret = int(float(m.get("regret", 0) or 0))
+        exhaustion = int(float(m.get("crowd_exhaustion", 0) or 0))
+        regime = str((res or {}).get("regime", "") or "")
+        dirs, buys, sells = _frame_split_from_lines((res or {}).get("frame_lines", []))
+        names = _FRAME_NAMES["ar" if lang == "ar" else "en"]
+        ar = lang == "ar"
+        if buys and sells:
+            b = "/".join(names[k] for k in buys)
+            s = "/".join(names[k] for k in sells)
+            reasons.append(f"تعارض الأطر ({b} صاعد مقابل {s} هابط)" if ar else f"timeframe conflict ({b} bullish vs {s} bearish)")
+        if quality and quality < 55:
+            reasons.append(f"جودة السوق منخفضة ({quality}/100)" if ar else f"low market quality ({quality}/100)")
+        if regret > 68:
+            reasons.append(f"احتمال الندم مرتفع ({regret}%)" if ar else f"high regret risk ({regret}%)")
+        if exhaustion >= 85:
+            reasons.append(f"إنهاك في الزخم ({exhaustion}%)" if ar else f"momentum exhaustion ({exhaustion}%)")
+        if regime == "VOLATILE":
+            reasons.append("تقلب مرتفع حالياً" if ar else "high-volatility regime")
+        elif regime == "RANGING" and not (buys and sells):
+            reasons.append("سوق عرضي بلا اتجاه مؤهل" if ar else "ranging market with no qualified trend")
+        if not reasons:
+            return ""
+        head = "📌 سبب القرار: " if ar else "📌 Why: "
+        return head + " • ".join(reasons)
+    except Exception as e:
+        logger.warning("decision_reasons_line failed: " + str(e))
+        return ""
+
 def saz_intelligence_block(res, uid=0, compact=False):
     """Clean user-facing decision summary.
     Uses stored decision_metrics when available to avoid inconsistent re-calculation.
@@ -1352,8 +1407,10 @@ def saz_intelligence_block(res, uid=0, compact=False):
             f"🎯 القرار: {m.get('decision_text', '')}",
         ]
         if not compact:
-            if decision == "STAY_OUT":
-                lines.append("لا توجد نقطة دخول مناسبة الآن. الفكرة قد تكون تحت المراقبة، لكن التنفيذ غير مبرر حتى يقترب السعر من منطقة دخول أفضل أو يتحسن التوافق.")
+            if decision in ("STAY_OUT", "WAIT"):
+                rl = decision_reasons_line(res, m, "ar")
+                if rl:
+                    lines.append(rl)
             elif grade == "C":
                 lines.append("سيناريو مضاربة سريع فقط. استخدم حجم أصغر والتزم بمنطقة الدخول.")
             elif grade == "B":
@@ -1370,8 +1427,10 @@ def saz_intelligence_block(res, uid=0, compact=False):
             f"🎯 Decision: {m.get('decision_text', '')}",
         ]
         if not compact:
-            if decision == "STAY_OUT":
-                lines.append("There is no suitable entry now. The idea may be worth watching, but execution is not justified until price returns to a better entry zone or alignment improves.")
+            if decision in ("STAY_OUT", "WAIT"):
+                rl = decision_reasons_line(res, m, "en")
+                if rl:
+                    lines.append(rl)
             elif grade == "C":
                 lines.append("Fast scalp scenario only. Use smaller size and strict entry discipline.")
             elif grade == "B":
@@ -1576,13 +1635,17 @@ def cap_override_decision_metrics(res, original_res=None, uid=0):
         return res
 
 
-def can_show_override_option(res, uid=0):
+def can_show_override_option(res, uid=0, with_reason=False):
     """Return True only if the available setup can actually be displayed.
     This mirrors the override execution checks, including recalculated smart entry distance.
+    When with_reason=True, returns (allowed, reason_code, info) so the UI can
+    explain the real blocker with actual market numbers instead of generic text.
     """
+    def _ret(ok, code="", info=None):
+        return (ok, code, info or {}) if with_reason else ok
     try:
         if not res or res.get("majority") not in ("BUY", "SELL"):
-            return False
+            return _ret(False, "no_majority")
 
         test = dict(res)
         best_dir = res.get("majority")
@@ -1593,7 +1656,7 @@ def can_show_override_option(res, uid=0):
         price = float(test.get("price", 0) or 0)
         atr = float(test.get("atr", price * 0.015) or price * 0.015)
         if not price or not atr:
-            return False
+            return _ret(False, "no_price")
 
         # Recalculate the same smart entry zone that override_trade will use.
         fib_l = test.get("fib_levels", {}) or {}
@@ -1617,14 +1680,16 @@ def can_show_override_option(res, uid=0):
         too_far_buy = best_dir == "BUY" and price > entry_high * (1 + OVERRIDE_MAX_DISTANCE_FROM_ZONE_PCT / 100)
         too_far_sell = best_dir == "SELL" and price < entry_low * (1 - OVERRIDE_MAX_DISTANCE_FROM_ZONE_PCT / 100)
         if too_far_buy or too_far_sell:
-            return False
+            return _ret(False, "too_far", {"price": price, "entry_low": entry_low, "entry_high": entry_high, "direction": best_dir})
 
         # DNA must approve the same higher-risk path.
         allowed, _m, _reason = saz_dna_assessment(test, uid, mode="override")
-        return bool(allowed)
+        if not allowed:
+            return _ret(False, "dna", {"dna_code": _reason, "metrics": _m})
+        return _ret(True, "allowed")
     except Exception as e:
         logger.warning("can_show_override_option failed: " + str(e))
-        return False
+        return _ret(False, "error")
 
 
 
@@ -2916,18 +2981,23 @@ def compact_momentum_lines(res, uid=0):
     ]
 
 def market_direction_label(res, uid=0):
-    """Readable current direction for market read, without implying a trade."""
+    """Readable current direction for market read, without implying a trade.
+    Includes the actual frame split so the label never looks arbitrary."""
     lang = user_languages.get(uid, "ar")
     m = res.get("decision_metrics") or {}
     final = res.get("final")
     regime = m.get("regime_text", "")
-    fls = " ".join(res.get("frame_lines", []))
-    sell_bias = fls.count("SELL")
-    buy_bias = fls.count("BUY")
-    if final == "SELL" or sell_bias > buy_bias:
-        return "هابط بحذر" if lang == "ar" else "Cautiously bearish"
-    if final == "BUY" or buy_bias > sell_bias:
-        return "صاعد بحذر" if lang == "ar" else "Cautiously bullish"
+    _dirs, _buys, _sells = _frame_split_from_lines(res.get("frame_lines", []))
+    total = len([k for k in ("1h", "4h", "1d") if _dirs.get(k)]) or 3
+
+    def _q(n):
+        # e.g. "(2/3 أطر)" — shows exactly how strong the lean is.
+        return (f" ({n}/{total} أطر)" if lang == "ar" else f" ({n}/{total} frames)") if n else ""
+
+    if final == "SELL" or len(_sells) > len(_buys):
+        return ("هابط بحذر" if lang == "ar" else "Cautiously bearish") + _q(len(_sells))
+    if final == "BUY" or len(_buys) > len(_sells):
+        return ("صاعد بحذر" if lang == "ar" else "Cautiously bullish") + _q(len(_buys))
     if "هابط" in regime or "bear" in regime.lower():
         return "هابط بحذر" if lang == "ar" else "Cautiously bearish"
     if "صاعد" in regime or "bull" in regime.lower():
@@ -2985,30 +3055,62 @@ def build_analysis_msg(res, uid=0):
     lines += compact_momentum_lines(res, uid)
     lines.append("")
 
-    if lang == "ar":
-        if decision == "STAY_OUT":
-            lines += [
-                "🎯 الخلاصة",
-                "لا توجد نقطة دخول مناسبة حالياً.",
-                "انتظر عودة السعر إلى منطقة دخول أفضل أو تحسن التوافق بين الفريمات.",
-            ]
+    # ── Conclusion: derived from the actual decision, frame bias, and real
+    # S/R levels. The reasons themselves already appear in the assessment
+    # block, so this section gives the actionable layer: what confirms the
+    # scenario and what invalidates it — with real numbers.
+    ar = lang == "ar"
+    sup = float(res.get("support", 0) or 0)
+    resi = float(res.get("resistance", 0) or 0)
+    _dirs, _buys, _sells = _frame_split_from_lines(res.get("frame_lines", []))
+    bias = "SELL" if len(_sells) > len(_buys) else "BUY" if len(_buys) > len(_sells) else None
+    grade = m.get("setup_grade", "")
+
+    lines.append("🎯 " + ("الخلاصة" if ar else "Conclusion"))
+    if decision == "TRADEABLE":
+        d_txt = ("بيع" if res.get("final") == "SELL" else "شراء") if ar else ("short" if res.get("final") == "SELL" else "long")
+        if ar:
+            lines.append(f"سيناريو {d_txt} قابل للتنفيذ ضمن منطقة الدخول — التصنيف {grade}." + (" حجم أصغر لأن هذا سيناريو مضاربة." if grade == "C" else ""))
         else:
-            lines += [
-                "🎯 الخلاصة",
-                "يوجد سيناريو قابل للمتابعة، لكن التنفيذ يعتمد على الالتزام بمنطقة الدخول وإدارة المخاطر.",
-            ]
+            lines.append(f"A {d_txt} scenario is executable within the entry zone — grade {grade}." + (" Use smaller size; this is a scalp-grade setup." if grade == "C" else ""))
+    elif bias and sup and resi:
+        if bias == "SELL":
+            if ar:
+                lines += [
+                    "الميل العام هابط لكن شروط الدخول غير مكتملة.",
+                    "📍 مستويات المراقبة:",
+                    f"• كسر الدعم ${sup:,.0f} يقوّي السيناريو الهابط",
+                    f"• تجاوز المقاومة ${resi:,.0f} يلغيه ويرجّح التحول صعوداً",
+                ]
+            else:
+                lines += [
+                    "The overall lean is bearish but entry conditions are incomplete.",
+                    "📍 Levels to watch:",
+                    f"• A break below support ${sup:,.0f} strengthens the bearish scenario",
+                    f"• A move above resistance ${resi:,.0f} invalidates it and favors a bullish shift",
+                ]
+        else:
+            if ar:
+                lines += [
+                    "الميل العام صاعد لكن شروط الدخول غير مكتملة.",
+                    "📍 مستويات المراقبة:",
+                    f"• تجاوز المقاومة ${resi:,.0f} يقوّي السيناريو الصاعد",
+                    f"• كسر الدعم ${sup:,.0f} يلغيه ويرجّح التحول هبوطاً",
+                ]
+            else:
+                lines += [
+                    "The overall lean is bullish but entry conditions are incomplete.",
+                    "📍 Levels to watch:",
+                    f"• A move above resistance ${resi:,.0f} strengthens the bullish scenario",
+                    f"• A break below support ${sup:,.0f} invalidates it and favors a bearish shift",
+                ]
+    elif sup and resi:
+        if ar:
+            lines.append(f"لا يوجد ميل واضح حالياً — السعر محصور بين الدعم ${sup:,.0f} والمقاومة ${resi:,.0f}، والكسر الواضح لأحدهما هو ما يحدد الاتجاه.")
+        else:
+            lines.append(f"No clear lean right now — price is boxed between support ${sup:,.0f} and resistance ${resi:,.0f}; a clean break of either side defines the direction.")
     else:
-        if decision == "STAY_OUT":
-            lines += [
-                "🎯 Conclusion",
-                "No suitable entry setup right now.",
-                "Wait for price to return to a better entry zone or for timeframe alignment to improve.",
-            ]
-        else:
-            lines += [
-                "🎯 Conclusion",
-                "There is a setup to monitor, but execution depends on entry discipline and risk management.",
-            ]
+        lines.append("لا يوجد ميل واضح حالياً." if ar else "No clear lean right now.")
 
     lines += [
         "",
@@ -3516,41 +3618,49 @@ async def run_btc_decision_center(message, uid, asset="BTC"):
             short_bias = h1_dir if h1_dir == h4_dir and h1_dir in ("BUY", "SELL") else majority
             daily_against_short = short_bias in ("BUY", "SELL") and d1_dir in ("BUY", "SELL") and d1_dir != short_bias
 
-            if is_two_frame and majority:
-                parts = [
-                    t(uid,"partial_title"),
-                    "",
-                    t(uid,"partial_body"),
-                    "",
-                ]
-            else:
-                if lang == "ar":
-                    parts = [
-                        "⏳ لا توجد فرصة عالية الجودة حالياً",
-                        "",
-                    ]
-                else:
-                    parts = [
-                        "⏳ No High-Quality Setup Yet",
-                        "",
-                    ]
+            ar = lang == "ar"
+            names = _FRAME_NAMES["ar" if ar else "en"]
+            _dirs, _buys, _sells = _frame_split_from_lines(fls)
+            conflict = bool(_buys) and bool(_sells)
 
-            # Always show SazBot 2.1 decision layer in no-setup / partial setup states.
-            parts.append("")
+            # Header derived from the actual frame state — never a fixed phrase.
+            if conflict:
+                b = "/".join(names[k] for k in _buys)
+                s = "/".join(names[k] for k in _sells)
+                header = (f"⚠️ تعارض بين الأطر الزمنية\n{b} صاعد بينما {s} هابط — لا يوجد اتجاه موحّد للتداول."
+                          if ar else
+                          f"⚠️ Timeframe Conflict\n{b} bullish while {s} bearish — no unified tradeable direction.")
+            elif is_two_frame and majority:
+                missing = [k for k in ("1h", "4h", "1d") if _dirs.get(k, "NEUTRAL") not in ("BUY", "SELL")]
+                miss_txt = "/".join(names[k] for k in missing) if missing else ""
+                dir_txt = ("صاعد" if majority == "BUY" else "هابط") if ar else majority
+                header = (f"⏳ توافق جزئي (2/3) نحو {dir_txt}" + (f"\nينقص تأكيد {miss_txt} لاكتمال التوافق." if miss_txt else "")
+                          if ar else
+                          f"⏳ Partial Alignment (2/3) toward {dir_txt}" + (f"\n{miss_txt} confirmation is still missing." if miss_txt else ""))
+            else:
+                header = ("⏳ لا يوجد إطار زمني يتجاوز عتبة الثقة حالياً" if ar
+                          else "⏳ No timeframe currently clears the confidence threshold")
+
+            parts = [header, ""]
+
+            # SazBot 2.1 decision layer (already fully data-driven).
             parts += safe_saz_intelligence_block(res, uid, compact=False)
             parts.append("")
 
             if fls:
-                parts.append("📊 " + ("حالة السوق" if lang == "ar" else "Market State"))
+                parts.append("📊 " + ("حالة السوق" if ar else "Market State"))
                 parts.append("")
                 for fl in fls:
                     parts.append(display_frame_line(uid, fl))
                 parts.append("")
 
-            show_override = is_two_frame and majority and can_show_override_option(res, uid)
+            if is_two_frame and majority:
+                show_override, ov_code, ov_info = can_show_override_option(res, uid, with_reason=True)
+            else:
+                show_override, ov_code, ov_info = False, "no_majority", {}
 
             if show_override:
-                parts.append("🎯 " + ("يوجد سيناريو بديل متاح، لكنه يحمل مستوى مخاطرة أعلى." if lang == "ar" else "An alternative setup is available, but it carries higher risk."))
+                parts.append("🎯 " + ("يوجد سيناريو بديل متاح، لكنه يحمل مستوى مخاطرة أعلى." if ar else "An alternative setup is available, but it carries higher risk."))
                 kb_override = InlineKeyboardMarkup([[
                     InlineKeyboardButton(t(uid,"btn_higher_risk"), callback_data=f"override_trade_{asset}"),
                     InlineKeyboardButton(t(uid,"btn_cancel"), callback_data="override_cancel"),
@@ -3558,13 +3668,40 @@ async def run_btc_decision_center(message, uid, asset="BTC"):
                 pending_trade_replace[uid] = {"override_res": res}
                 await message.reply_text("\n".join(parts), reply_markup=kb_override)
             else:
-                if daily_against_short:
-                    parts.append("🧭 " + ("الاتجاه اليومي ما زال يعاكس الاتجاه قصير المدى." if lang == "ar" else "The Daily trend is still against the short-term direction."))
-                    parts.append("")
-                parts.append("⏳ " + ("يفضل انتظار توافق أقوى قبل الدخول." if lang == "ar" else "Waiting for stronger market alignment before entering."))
-                if is_two_frame and majority:
-                    parts.append("")
-                    parts.append("🚫 " + ("لا توجد فرصة بديلة مناسبة الآن؛ السعر ابتعد عن منطقة الدخول أو أن المخاطرة غير مناسبة." if lang == "ar" else "No suitable alternative setup now; price moved away from the entry zone or risk is no longer suitable."))
+                # One concrete closing line based on the real blocker — no stacked
+                # generic wait statements.
+                if is_two_frame and majority and ov_code == "too_far":
+                    p = float(ov_info.get("price", 0) or 0)
+                    lo = float(ov_info.get("entry_low", 0) or 0)
+                    hi = float(ov_info.get("entry_high", 0) or 0)
+                    parts.append(("🚫 السيناريو البديل غير متاح: السعر الحالي "
+                                  f"${p:,.0f} خارج نطاق الدخول المنطقي (${lo:,.0f} — ${hi:,.0f}).")
+                                 if ar else
+                                 (f"🚫 Alternative setup unavailable: current price ${p:,.0f} "
+                                  f"is outside the logical entry zone (${lo:,.0f} — ${hi:,.0f})."))
+                elif is_two_frame and majority and ov_code == "dna":
+                    dna_map_ar = {
+                        "regret_high": "احتمال الندم أعلى من الحد المسموح",
+                        "opportunity_cost_high": "تكلفة الفرصة البديلة مرتفعة",
+                        "exhaustion_high": "إنهاك واضح في الزخم",
+                        "grade_reject": "تصنيف الفرصة دون الحد الأدنى",
+                        "override_reject": "تصنيف الفرصة دون الحد الأدنى",
+                    }
+                    dna_map_en = {
+                        "regret_high": "regret risk above the allowed limit",
+                        "opportunity_cost_high": "opportunity cost too high",
+                        "exhaustion_high": "clear momentum exhaustion",
+                        "grade_reject": "setup grade below minimum",
+                        "override_reject": "setup grade below minimum",
+                    }
+                    code = str(ov_info.get("dna_code", "") or "")
+                    why = (dna_map_ar if ar else dna_map_en).get(code, "")
+                    parts.append(("🚫 السيناريو البديل مرفوض من بوابة المخاطر" + (f": {why}." if why else "."))
+                                 if ar else
+                                 ("🚫 Alternative setup rejected by the risk gate" + (f": {why}." if why else ".")))
+                # When there is simply no majority, the header already says it all.
+                parts.append("")
+                parts.append("🔔 " + ("ستصلك التنبيهات تلقائياً عند تحسن الشروط." if ar else "You will be alerted automatically when conditions improve."))
                 pending_trade_replace.pop(uid, None)
                 await message.reply_text("\n".join(parts))
             return
