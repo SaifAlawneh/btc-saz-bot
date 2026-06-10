@@ -73,7 +73,7 @@ LAST_PRICE_CACHE_FILE = "last_price_cache.json"
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BUILD_ID = "SAZBOT_FINAL_TRADE_LOGIC_FIX_2026_06_10"
+BUILD_ID = "SAZBOT_FINAL_LANG_COOLDOWN_FIX_2026_06_10"
 
 user_languages        = {}
 active_trades         = []
@@ -555,8 +555,11 @@ def load_languages():
         return {}
 
 def save_languages():
-    with open(LANGUAGES_FILE, "w") as f:
-        json.dump({str(k): v for k, v in user_languages.items()}, f)
+    try:
+        with open(LANGUAGES_FILE, "w") as f:
+            json.dump({str(k): v for k, v in user_languages.items()}, f)
+    except Exception as e:
+        logger.warning("save_languages failed: " + str(e))
 
 def load_trades():
     try:
@@ -3445,16 +3448,25 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
     uid   = query.from_user.id
     data  = query.data
     await query.answer()
-    if uid not in ALLOWED_USERS: return
+    if uid not in ALLOWED_USERS:
+        # Never fail silently: tell the user the bot is private.
+        try:
+            await query.message.reply_text(t(uid, "private_bot"))
+        except Exception as e:
+            logger.warning("private_bot reply failed: " + str(e))
+        logger.info(f"Callback from non-allowed uid={uid} data={data}")
+        return
 
-    if data == "lang_ar":
-        user_languages[uid] = "ar"
+    if data in ("lang_ar", "lang_en"):
+        user_languages[uid] = "ar" if data == "lang_ar" else "en"
         save_languages()
-        await query.message.reply_text(welcome_message(uid), reply_markup=persistent_keyboard())
-    elif data == "lang_en":
-        user_languages[uid] = "en"
-        save_languages()
-        await query.message.reply_text(welcome_message(uid), reply_markup=persistent_keyboard())
+        logger.info(f"Language set for uid={uid}: {user_languages[uid]}")
+        try:
+            await query.message.reply_text(welcome_message(uid), reply_markup=persistent_keyboard())
+        except Exception as e:
+            logger.error("welcome after lang selection failed: " + str(e))
+            # Minimal fallback so the user is never left with silence.
+            await query.message.reply_text("✅", reply_markup=persistent_keyboard())
     elif data == "change_lang":
         await query.message.reply_text(t(uid,"choose_lang"), reply_markup=lang_keyboard())
 
@@ -4497,6 +4509,11 @@ def is_duplicate_open_or_pending_setup(asset, direction, entry, atr):
 async def _check_auto_signal(context):
     """Auto-signal: fires only when RSI is extended, price is near Fib, confidence passes MIN_CONFIDENCE, and 3 qualified timeframes agree."""
     n = now_ts()
+    # Cheap pre-check: skip the full analysis entirely while we are inside the
+    # shortest possible cooldown. The precise (fast-scalp aware) check still
+    # runs later, after the signal type is known.
+    if (n - last_signal_time.get("BTC", 0)) < min(SPAM_COOLDOWN, FAST_SCALP_COOLDOWN):
+        return
     try:
         df_q = await run_blocking(get_data, "BTC", days=3, interval="hourly")
         if df_q is None or len(df_q) < 20:
@@ -4524,11 +4541,6 @@ async def _check_auto_signal(context):
         if not res or res.get("final") == "NEUTRAL" or res.get("blocked_by_saz_dna"):
             return
 
-        # Do not send a trade signal when SazBot's own decision is WAIT/STAY OUT.
-        # Early Bias Alerts can explain waiting; trade signals must be actionable.
-        if not is_actionable_trade_decision(res):
-            return
-
         fl = res.get("frame_lines", [])
         buy_f, sell_f = count_qualified_frame_lines(fl)
 
@@ -4552,6 +4564,16 @@ async def _check_auto_signal(context):
         )
 
         fast_scalp = is_fast_scalp_candidate(res, timing_rescue=timing_rescue)
+
+        # Do not send a trade signal when SazBot's own decision is WAIT/STAY OUT.
+        # Early Bias Alerts can explain waiting; trade signals must be actionable.
+        # Exception: the Fast Scalp lane is the designed ranging-market valve —
+        # it has its own quality/regret gate plus the DNA auto gate, so it stays
+        # alive even when the swing-level decision says WAIT. This prevents the
+        # bot from going completely silent in ranging conditions.
+        if not fast_scalp and not is_actionable_trade_decision(res):
+            logger.info("Auto-signal blocked by WAIT/STAY_OUT decision gate (non-scalp).")
+            return
 
         if not (three or strong_partial or timing_rescue or fast_scalp):
             return
