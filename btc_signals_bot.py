@@ -73,7 +73,34 @@ LAST_PRICE_CACHE_FILE = "last_price_cache.json"
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BUILD_ID = "SAZBOT_DYNAMIC_MARKET_READ_EXPIRY_NEUTRAL_PRICE_FIXED_2026_06_10"
+MAX_TRAP_SIGNALS_PER_DAY = int(os.environ.get("MAX_TRAP_SIGNALS_PER_DAY", "2"))
+_trap_signal_day_counts = {}
+
+def _today_key_gmt():
+    try:
+        return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    except Exception:
+        return datetime.utcnow().strftime("%Y-%m-%d")
+
+def trap_daily_count():
+    return int(_trap_signal_day_counts.get(_today_key_gmt(), 0) or 0)
+
+def can_issue_contrarian_trap():
+    return trap_daily_count() < MAX_TRAP_SIGNALS_PER_DAY
+
+def register_contrarian_trap_signal():
+    try:
+        key = _today_key_gmt()
+        _trap_signal_day_counts[key] = int(_trap_signal_day_counts.get(key, 0) or 0) + 1
+        for k in list(_trap_signal_day_counts.keys()):
+            if k != key:
+                _trap_signal_day_counts.pop(k, None)
+    except Exception as e:
+        logger.warning("register_contrarian_trap_signal failed: " + str(e))
+
+
+
+BUILD_ID = "SAZBOT_V3_CROWD_REGRET_ENGINE_FIXED2_2026_06_11"
 
 user_languages        = {}
 active_trades         = []
@@ -1031,6 +1058,134 @@ def event_risk_adjustment(uid=0):
         return 0, 0, False, ""
 
 
+
+def crowd_positioning_engine(res, frames=None):
+    """Behavioural crowd proxy. Not a gate; only adjusts quality/regret mildly."""
+    try:
+        frames = frames or _frame_snapshot(res)
+        final = res.get("final", "NEUTRAL")
+        price = float(res.get("price", 0) or 0)
+        rsi = float(res.get("rsi", 50) or 50)
+        regime = res.get("regime", "UNKNOWN")
+        weekly = res.get("weekly_trend", "NEUTRAL")
+        monthly = res.get("monthly_bias", "NEUTRAL")
+        entry_low = float(res.get("entry_low", res.get("entry_price", price)) or price or 0)
+        entry_high = float(res.get("entry_high", res.get("entry_price", price)) or price or 0)
+        dist = distance_from_entry_zone_pct(price, entry_low, entry_high) if price and entry_low and entry_high else 0
+
+        buy_score = sell_score = 0.0
+        for f in frames:
+            d = f.get("direction", "NEUTRAL")
+            c = float(f.get("conf", 0) or 0)
+            name = f.get("name", "")
+            if "Daily" in name or "يومي" in name:
+                w = 0.42
+            elif "4H" in name or "4 ساعات" in name:
+                w = 0.33
+            elif "1H" in name or "ساعة" in name:
+                w = 0.25
+            else:
+                w = 0.10
+            if d == "BUY":
+                buy_score += c * w
+            elif d == "SELL":
+                sell_score += c * w
+
+        if weekly == "BULL": buy_score += 8
+        elif weekly == "BEAR": sell_score += 8
+        if monthly == "BULL": buy_score += 6
+        elif monthly == "BEAR": sell_score += 6
+        if res.get("ema_bull"): buy_score += 5
+        if res.get("ema_bear"): sell_score += 5
+        if res.get("macd_bull"): buy_score += 3
+        elif res.get("macd_bear"): sell_score += 3
+
+        total = buy_score + sell_score
+        if total <= 0:
+            crowd_side, consensus = "NEUTRAL", 0
+        elif buy_score >= sell_score:
+            crowd_side, consensus = "BUY", int(max(0, min(100, buy_score / total * 100)))
+        else:
+            crowd_side, consensus = "SELL", int(max(0, min(100, sell_score / total * 100)))
+
+        saturation = "HIGH" if consensus >= 78 else "MEDIUM" if consensus >= 65 else "LOW"
+        punishment = 20
+        if consensus >= 75: punishment += 18
+        if consensus >= 88: punishment += 12
+        if dist > 0.8: punishment += min(int(dist * 8), 18)
+        if final == "BUY" and rsi >= 68: punishment += 12
+        if final == "SELL" and rsi <= 32: punishment += 12
+        if regime in ("RANGING", "VOLATILE"): punishment += 8
+        if crowd_side == final and saturation == "HIGH": punishment += 10
+        if res.get("contrarian_trap"): punishment = max(15, punishment - 10)
+        punishment = int(max(0, min(100, punishment)))
+
+        return {"crowd_side": crowd_side, "crowd_consensus": consensus, "crowd_saturation": saturation, "punishment_risk": punishment}
+    except Exception as e:
+        logger.warning("crowd_positioning_engine failed: " + str(e))
+        return {"crowd_side": "NEUTRAL", "crowd_consensus": 0, "crowd_saturation": "LOW", "punishment_risk": 0}
+
+def setup_similarity_score(a, b):
+    """Compare two setups; used to suppress repetitive auto signals."""
+    try:
+        if not a or not b or a.get("final") != b.get("final"):
+            return 0
+        a_entry = float(a.get("entry_price", a.get("entry", 0)) or 0)
+        b_entry = float(b.get("entry_price", b.get("entry", 0)) or 0)
+        a_sl = float(a.get("sl", 0) or 0)
+        b_sl = float(b.get("sl", 0) or 0)
+        if a_entry <= 0 or b_entry <= 0:
+            return 0
+        entry_sim = max(0, 100 - abs(a_entry - b_entry) / max(a_entry, b_entry) * 10000)
+        sl_sim = max(0, 100 - abs(a_sl - b_sl) / max(a_sl, b_sl) * 10000) if a_sl and b_sl else 100
+
+        a_low = float(a.get("entry_low", a_entry) or a_entry)
+        a_high = float(a.get("entry_high", a_entry) or a_entry)
+        b_low = float(b.get("entry_low", b_entry) or b_entry)
+        b_high = float(b.get("entry_high", b_entry) or b_entry)
+        if a_low > a_high: a_low, a_high = a_high, a_low
+        if b_low > b_high: b_low, b_high = b_high, b_low
+        overlap = max(0, min(a_high, b_high) - max(a_low, b_low))
+        base = max(min(a_high-a_low, b_high-b_low), 1e-9)
+        zone_sim = max(0, min(100, overlap / base * 100))
+
+        return int(max(0, min(100, 0.45*entry_sim + 0.25*sl_sim + 0.30*zone_sim)))
+    except Exception as e:
+        logger.warning("setup_similarity_score failed: " + str(e))
+        return 0
+
+def is_recent_similar_signal(res, lookback_seconds=7200, threshold=85):
+    """Avoid repeating nearly identical auto signals."""
+    try:
+        now = now_ts()
+        candidate = {
+            "final": res.get("final"),
+            "entry_price": res.get("entry_price"),
+            "entry_low": res.get("entry_low"),
+            "entry_high": res.get("entry_high"),
+            "sl": res.get("sl"),
+        }
+        for sig in pending_signals.values():
+            sig_res = sig.get("res", {}) if isinstance(sig, dict) else {}
+            age = now - float(sig.get("timestamp", now))
+            if age <= lookback_seconds and setup_similarity_score(candidate, sig_res) >= threshold:
+                return True
+        for tr in active_trades:
+            tr_res = {
+                "final": tr.get("direction"),
+                "entry_price": tr.get("entry", tr.get("entry_price")),
+                "entry_low": tr.get("entry_low"),
+                "entry_high": tr.get("entry_high"),
+                "sl": tr.get("sl"),
+            }
+            if setup_similarity_score(candidate, tr_res) >= threshold:
+                return True
+        return False
+    except Exception as e:
+        logger.warning("is_recent_similar_signal failed: " + str(e))
+        return False
+
+
 def saz_decision_intelligence(res, uid=0, persist=True, refresh=False):
     """SazBot 2.1: decision intelligence based on live analysis, market memory, and behavioural risk.
     It does not promise outcomes; it ranks whether the current opportunity deserves attention.
@@ -1057,6 +1212,11 @@ def saz_decision_intelligence(res, uid=0, persist=True, refresh=False):
 
     dist = distance_from_entry_zone_pct(price, entry_low, entry_high) if price and entry_low and entry_high else 0
     atr_pct = (atr / price * 100) if price and atr else 0
+    crowd = crowd_positioning_engine(res, frames)
+    crowd_consensus = int(crowd.get("crowd_consensus", 0) or 0)
+    crowd_side = crowd.get("crowd_side", "NEUTRAL")
+    crowd_saturation = crowd.get("crowd_saturation", "LOW")
+    punishment_risk = int(crowd.get("punishment_risk", 0) or 0)
 
     counter_weekly = (final == "BUY" and weekly == "BEAR") or (final == "SELL" and weekly == "BULL")
     counter_monthly = (final == "BUY" and monthly == "BEAR") or (final == "SELL" and monthly == "BULL")
@@ -1166,6 +1326,24 @@ def saz_decision_intelligence(res, uid=0, persist=True, refresh=False):
     if counter_weekly or counter_monthly or mixed_frames:
         opportunity_cost += 10
     opportunity_cost = _clamp(opportunity_cost)
+    crowd_penalty = 0
+    if crowd_side == final and crowd_consensus >= 85:
+        crowd_penalty += 4
+    if punishment_risk >= 75:
+        crowd_penalty += 4
+    elif punishment_risk >= 65:
+        crowd_penalty += 2
+    if crowd_penalty:
+        quality -= crowd_penalty
+        regret += crowd_penalty
+
+    if res.get("contrarian_trap"):
+        # Counter-trap setups are inherently higher risk.
+        # No quality boost and no opportunity-cost discount.
+        quality = min(quality, 82)
+        regret += 6
+        crowd_exhaustion = min(100, crowd_exhaustion + 6)
+
     # Event risk is part of the DNA, not only a notification.
     ev_q_penalty, ev_regret_add, ev_auto_block, event_risk_label = event_risk_adjustment(uid)
     if ev_q_penalty:
@@ -1273,6 +1451,11 @@ def saz_decision_intelligence(res, uid=0, persist=True, refresh=False):
         "conviction": conviction,
         "crowd_exhaustion": crowd_exhaustion,
         "crowd_exhaustion_text": exhaustion_txt,
+        "crowd_side": crowd_side,
+        "crowd_consensus": crowd_consensus,
+        "crowd_saturation": crowd_saturation,
+        "punishment_risk": punishment_risk,
+        "crowd_penalty": crowd_penalty if "crowd_penalty" in locals() else 0,
         "opportunity_cost": opportunity_cost,
         "opportunity_cost_text": opp_cost_txt,
         "narrative_shift_score": narrative_shift_score,
@@ -1804,7 +1987,7 @@ def resample_to_4h(df):
             return df
         if not isinstance(df.index, pd.DatetimeIndex):
             return df
-        return df.resample("4h").agg({
+        return df.resample("4H").agg({
             "Open": "first",
             "High": "max",
             "Low": "min",
@@ -1876,9 +2059,10 @@ def get_data(asset="BTC", days=30, interval="hourly"):
         r = requests.get("https://api.coingecko.com/api/v3/coins/bitcoin/market_chart",
             params={"vs_currency": "usd", "days": days}, timeout=20)
         if r.status_code == 429:
-            time.sleep(60)
-            r = requests.get("https://api.coingecko.com/api/v3/coins/bitcoin/market_chart",
-                params={"vs_currency": "usd", "days": days}, timeout=20)
+            # ✅ FIX: no blocking 60s sleep — monitor runs every 60s and threads would pile up.
+            # Return None and let the next cycle (or cached data) handle it.
+            logger.warning("CoinGecko rate-limited (429), skipping this cycle")
+            return None
         data = r.json()
         if "prices" not in data:
             return None
@@ -1942,20 +2126,30 @@ def load_last_price_cache(max_age_minutes=30):
 
 
 def get_btc_price():
-    """Return BTC/USD price using the same provider priority as get_prices()."""
+    if TWELVEDATA_KEY:
+        try:
+            r = requests.get("https://api.twelvedata.com/price",
+                params={"symbol": "BTC/USD", "apikey": TWELVEDATA_KEY}, timeout=10)
+            data = r.json()
+            if "price" in data:
+                return float(data["price"])
+        except: pass
     try:
-        d = get_prices()
-        if d:
-            price = float(d.get("bitcoin", {}).get("usd", 0) or 0)
-            if price > 0:
-                return price
-    except Exception as e:
-        logger.warning("get_btc_price via get_prices failed: " + str(e))
+        r = requests.get("https://api.binance.com/api/v3/ticker/price",
+            params={"symbol": "BTCUSDT"}, timeout=10)
+        if r.status_code == 200:
+            return float(r.json()["price"])
+    except: pass
+    try:
+        import time; time.sleep(1)
+        r = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd", timeout=10)
+        if r.status_code == 200:
+            return float(r.json()["bitcoin"]["usd"])
+    except: pass
     cached = load_last_price_cache()
     if cached:
         return float(cached["bitcoin"]["usd"])
     return None
-
 def get_prices():
     """
     Fetch BTC price with robust fallbacks.
@@ -2471,43 +2665,132 @@ def get_upcoming_event(hours=2):
 
 # ==================== Full Analysis ====================
 
-def _neutral_result(asset="BTC", price=0.0, **extra):
-    """Consistent NEUTRAL analysis result so UI keys do not go missing."""
-    price = float(price or 0)
-    base = {
-        "final": "NEUTRAL",
-        "majority": None,
-        "asset": asset,
-        "price": price,
-        "entry_price": price,
-        "entry_low": price,
-        "entry_high": price,
-        "tp1": 0,
-        "tp2": 0,
-        "tp3": 0,
-        "sl": 0,
-        "rr": 0,
-        "atr": 0,
-        "risk_pct": 50,
-        "risk_label": "",
-        "risk_msg": "",
-        "frame_lines": [],
-        "confluence_txt": "",
-        "base_conf": 0,
-        "support": price,
-        "resistance": price,
-        "fib_levels": {},
-        "fib_ext": {},
-        "weekly_trend": "NEUTRAL",
-        "monthly_bias": "NEUTRAL",
-        "overall_risk": "🟡 Medium",
-        "risk_warnings": [],
-    }
-    base.update(extra)
-    return base
+def _nearest_level_below(price, levels):
+    try:
+        vals = [float(x) for x in (levels or []) if float(x) < price]
+        return max(vals) if vals else None
+    except Exception:
+        return None
+
+def _nearest_level_above(price, levels):
+    try:
+        vals = [float(x) for x in (levels or []) if float(x) > price]
+        return min(vals) if vals else None
+    except Exception:
+        return None
+
+def detect_contrarian_trap_setup(price, final, rsi, support, resistance, sell_liq, buy_liq, atr, regime="UNKNOWN", weekly_trend="NEUTRAL", monthly_bias="NEUTRAL", frame_lines=None):
+    """Calculated counter-trap setup with strong-trend veto and daily cap."""
+    try:
+        price = float(price or 0)
+        atr = float(atr or 0)
+        rsi = float(rsi or 50)
+        frame_txt = " ".join(frame_lines or [])
+        if price <= 0 or atr <= 0 or final not in ("BUY", "SELL"):
+            return None
+        if not can_issue_contrarian_trap():
+            return None
+
+        atr_pct = atr / price * 100
+        if atr_pct <= 0:
+            return None
+
+        strong_sell_frames = (
+            ("Strong SELL" in frame_txt or "SELL (8" in frame_txt or "SELL (9" in frame_txt) and
+            weekly_trend == "BEAR" and monthly_bias == "BEAR"
+        )
+        strong_buy_frames = (
+            ("Strong BUY" in frame_txt or "BUY (8" in frame_txt or "BUY (9" in frame_txt) and
+            weekly_trend == "BULL" and monthly_bias == "BULL"
+        )
+
+        if final == "SELL":
+            liq = _nearest_level_below(price, sell_liq)
+            if not liq:
+                liq = float(support or 0) if support and support < price else None
+            if not liq:
+                return None
+            dist_liq = (price - liq) / price * 100
+            late_trend = dist_liq <= max(0.65, atr_pct * 0.80)
+            stretched = rsi <= 38
+            extreme_stretched = rsi <= 32
+            very_close_liq = dist_liq <= 0.28
+            if strong_sell_frames and not (extreme_stretched and very_close_liq):
+                return None
+            trap_score = 30
+            if late_trend: trap_score += 22
+            if stretched: trap_score += min((42 - rsi) * 2.0, 24)
+            if regime in ("RANGING", "VOLATILE"): trap_score += 6
+            if very_close_liq: trap_score += 10
+            if strong_sell_frames: trap_score -= 12
+            trap_score = int(max(0, min(trap_score, 100)))
+            if trap_score < (78 if strong_sell_frames else 70):
+                return None
+            entry = round(liq + max(0.15 * atr, price * 0.0007), 2)
+            sl = round(liq - max(0.65 * atr, price * 0.0025), 2)
+            tp1 = round(entry + 0.85 * atr, 2)
+            tp2 = round(entry + 1.70 * atr, 2)
+            tp3 = round(min(float(resistance or entry + 2.6 * atr), entry + 2.8 * atr), 2)
+            if not (sl < entry < tp1 < tp2 < tp3):
+                tp3 = round(entry + 2.5 * atr, 2)
+            rr = round(abs(tp2 - entry) / abs(entry - sl), 2) if abs(entry - sl) > 0 else 0
+            if rr < 1.25:
+                return None
+            return {
+                "active": True, "direction": "BUY", "original_bias": "SELL",
+                "trap_score": trap_score, "liquidity_level": liq,
+                "entry": entry, "sl": sl, "tp1": tp1, "tp2": tp2, "tp3": tp3, "rr": rr,
+                "reason_ar": "صفقة عكسية محسوبة بعد اقتراب السعر من سيولة بيع واضحة مع احتمال اصطياد الشورتات المتأخرة",
+                "reason_en": "Calculated counter-long near sell-side liquidity where late shorts may be trapped",
+            }
+
+        if final == "BUY":
+            liq = _nearest_level_above(price, buy_liq)
+            if not liq:
+                liq = float(resistance or 0) if resistance and resistance > price else None
+            if not liq:
+                return None
+            dist_liq = (liq - price) / price * 100
+            late_trend = dist_liq <= max(0.65, atr_pct * 0.80)
+            stretched = rsi >= 62
+            extreme_stretched = rsi >= 68
+            very_close_liq = dist_liq <= 0.28
+            if strong_buy_frames and not (extreme_stretched and very_close_liq):
+                return None
+            trap_score = 30
+            if late_trend: trap_score += 22
+            if stretched: trap_score += min((rsi - 58) * 2.0, 24)
+            if regime in ("RANGING", "VOLATILE"): trap_score += 6
+            if very_close_liq: trap_score += 10
+            if strong_buy_frames: trap_score -= 12
+            trap_score = int(max(0, min(trap_score, 100)))
+            if trap_score < (78 if strong_buy_frames else 70):
+                return None
+            entry = round(liq - max(0.15 * atr, price * 0.0007), 2)
+            sl = round(liq + max(0.65 * atr, price * 0.0025), 2)
+            tp1 = round(entry - 0.85 * atr, 2)
+            tp2 = round(entry - 1.70 * atr, 2)
+            tp3 = round(max(float(support or entry - 2.6 * atr), entry - 2.8 * atr), 2)
+            if not (tp3 < tp2 < tp1 < entry < sl):
+                tp3 = round(entry - 2.5 * atr, 2)
+            rr = round(abs(tp2 - entry) / abs(sl - entry), 2) if abs(sl - entry) > 0 else 0
+            if rr < 1.25:
+                return None
+            return {
+                "active": True, "direction": "SELL", "original_bias": "BUY",
+                "trap_score": trap_score, "liquidity_level": liq,
+                "entry": entry, "sl": sl, "tp1": tp1, "tp2": tp2, "tp3": tp3, "rr": rr,
+                "reason_ar": "صفقة عكسية محسوبة بعد اقتراب السعر من سيولة شراء واضحة مع احتمال اصطياد المشترين المتأخرين",
+                "reason_en": "Calculated counter-short near buy-side liquidity where late longs may be trapped",
+            }
+        return None
+    except Exception as e:
+        logger.warning("detect_contrarian_trap_setup failed: " + str(e))
+        return None
 
 
 def full_analysis(asset="BTC", uid=0, relaxed=False):
+    contrarian_trap = None
     try:
         df_1h = get_data(asset, days=30,  interval="hourly")
         df_4h = get_data(asset, days=60,  interval="4h")
@@ -2556,7 +2839,7 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
             fl2.append(icon+" "+icons2.get(k,"")+": "+r.get("strength", r["direction"])+" ("+str(r["conf"])+"%)"+status_note)
         return {"final":"NEUTRAL","majority":majority,"asset":asset,
                 "confluence_txt":conf_txt,"base_conf":frames_conf,
-                "price":main2["price"],"entry_price":main2["price"],"entry_low":main2["price"],"entry_high":main2["price"],"tp1":0,"tp2":0,"tp3":0,"sl":0,"rr":0,"atr":main2["atr"],
+                "price":main2["price"],"tp1":0,"tp2":0,"tp3":0,"sl":0,"rr":0,"atr":main2["atr"],
                 "risk_pct":50,"risk_label":"","risk_msg":"",
                 "frame_lines":fl2,"rsi":main2["rsi"],"support":main2["support"],"resistance":main2["resistance"],
                 "macd_bull":main2["macd_bull"],"ema_bull":main2["ema_bull"],
@@ -2565,7 +2848,8 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
                 "nearest_fib":nf2,"fib_key":fk2,"swing_h":sh2,"swing_l":sl2,
                 "weekly_trend":"NEUTRAL","regime":"UNKNOWN","regime_strength":0,"monthly_bias":"NEUTRAL",
                 "divergence":"NONE","session":session,"bull_obs":[],"bear_obs":[],"buy_liq":[],"sell_liq":[],
-                "nearest_fib_val":nf2}
+                "entry_low":main2["price"],"entry_high":main2["price"],
+                "entry_price":main2["price"],"nearest_fib_val":nf2}
 
     if final == "NEUTRAL":
         main2 = results.get("1h") or list(results.values())[0]
@@ -2580,7 +2864,7 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
             icon = "🟢" if r["direction"]=="BUY" else "🔴" if r["direction"]=="SELL" else "➡️"
             fl2.append(icon+" "+icons2.get(k,"")+": "+r.get("strength", r["direction"])+" ("+str(r["conf"])+"%)"+status_note)
         return {"final":"NEUTRAL","asset":asset,"confluence_txt":t(uid,"no_confluence"),"base_conf":0,"majority":majority,
-                "price":main2["price"],"entry_price":main2["price"],"entry_low":main2["price"],"entry_high":main2["price"],"tp1":0,"tp2":0,"tp3":0,"sl":0,"rr":0,"atr":main2["atr"],
+                "price":main2["price"],"tp1":0,"tp2":0,"tp3":0,"sl":0,"rr":0,"atr":main2["atr"],
                 "risk_pct":50,"risk_label":t(uid,"risk_med"),"risk_msg":t(uid,"risk_med_msg"),
                 "frame_lines":fl2,"rsi":main2["rsi"],"support":main2["support"],"resistance":main2["resistance"],
                 "macd_bull":main2["macd_bull"],"ema_bull":main2["ema_bull"],
@@ -2589,6 +2873,7 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
                 "nearest_fib":nf2,"fib_key":fk2,"swing_h":sh2,"swing_l":sl2,
                 "weekly_trend":"NEUTRAL","regime":"UNKNOWN","regime_strength":0,"monthly_bias":"NEUTRAL",
                 "divergence":"NONE","session":session,"bull_obs":[],"bear_obs":[],"buy_liq":[],"sell_liq":[],
+                "entry_low":main2["price"],"entry_high":main2["price"],
                 "leverage_ar":"","leverage_en":"","tf_ar":"","tf_en":"","hold_ar":"","hold_en":""}
 
     main  = results.get("1h") or list(results.values())[0]
@@ -2668,7 +2953,9 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
     except: pass
 
     try:
-        if final == "SELL" and buy_liq:
+        if contrarian_trap:
+            pass
+        elif final == "SELL" and buy_liq:
             liq_above = [lv for lv in buy_liq if lv > entry_price]
             if liq_above:
                 liq_sl = round(min(liq_above) * 1.002, 2)
@@ -2696,6 +2983,37 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
     except Exception as e:
         logger.warning("Weekly: " + str(e))
 
+    # Contrarian Trap Intelligence:
+    # Runs only after weekly/monthly context is known, so strong-trend veto works.
+    contrarian_trap = detect_contrarian_trap_setup(
+        price=price,
+        final=final,
+        rsi=main.get("rsi", 50),
+        support=support,
+        resistance=resistance,
+        sell_liq=sell_liq,
+        buy_liq=buy_liq,
+        atr=atr,
+        regime=regime,
+        weekly_trend=weekly_trend,
+        monthly_bias=monthly_bias,
+        frame_lines=frame_lines,
+    )
+    if contrarian_trap:
+        final = contrarian_trap["direction"]
+        entry_price = contrarian_trap["entry"]
+        entry_reason = contrarian_trap["reason_ar"] if user_languages.get(uid, "ar") == "ar" else contrarian_trap["reason_en"]
+        entry_zone_buffer = max(atr * ENTRY_ZONE_ATR_FACTOR, price * 0.0005)
+        entry_low = round(entry_price - entry_zone_buffer, 2)
+        entry_high = round(entry_price + entry_zone_buffer, 2)
+        sl = contrarian_trap["sl"]
+        tp1 = contrarian_trap["tp1"]
+        tp2 = contrarian_trap["tp2"]
+        tp3 = contrarian_trap["tp3"]
+        rr = contrarian_trap["rr"]
+        # No confidence boost. Counter-traps must pass by real context.
+        base_conf = min(base_conf, 82)
+
     ep = entry_price
     if is_recently_cancelled(asset, final, entry_price, atr):
         # Same direction/zone was cancelled recently; do not re-offer it during cooldown.
@@ -2709,12 +3027,13 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
                 "monthly_bias":monthly_bias,"divergence":divergence,"session":session,"bull_obs":bull_obs,"bear_obs":bear_obs,
                 "buy_liq":buy_liq,"sell_liq":sell_liq,"entry_low":entry_low,"entry_high":entry_high,"entry_price":entry_price}
 
-    if final == "BUY":
-        if not (sl < ep < tp1 < tp2 < tp3):
-            sl=round(ep-atr,2); tp1=round(ep+atr,2); tp2=round(ep+2*atr,2); tp3=round(ep+2.5*atr,2)
-    else:
-        if not (tp3 < tp2 < tp1 < ep < sl):
-            sl=round(ep+atr,2); tp1=round(ep-atr,2); tp2=round(ep-2*atr,2); tp3=round(ep-2.5*atr,2)
+    if not contrarian_trap:
+        if final == "BUY":
+            if not (sl < ep < tp1 < tp2 < tp3):
+                sl=round(ep-atr,2); tp1=round(ep+atr,2); tp2=round(ep+2*atr,2); tp3=round(ep+2.5*atr,2)
+        else:
+            if not (tp3 < tp2 < tp1 < ep < sl):
+                sl=round(ep+atr,2); tp1=round(ep-atr,2); tp2=round(ep-2*atr,2); tp3=round(ep-2.5*atr,2)
 
     rr = round(abs(tp2 - ep) / abs(sl - ep), 2) if abs(sl - ep) > 0 else 0
     if rr < 1.0:
@@ -2742,10 +3061,14 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
                        (final=="SELL" and weekly_trend=="BULL")
     if is_counter_trend:
         risk_warnings.append(t(uid, "risk_warn_counter_weekly"))
-        if final == "BUY":
-            tp3 = round(tp2 + abs(tp2-tp1)*0.5, 2)
-        else:
-            tp3 = round(tp2 - abs(tp1-tp2)*0.5, 2)
+        if not contrarian_trap:
+            if final == "BUY":
+                tp3 = round(tp2 + abs(tp2-tp1)*0.5, 2)
+            else:
+                tp3 = round(tp2 - abs(tp1-tp2)*0.5, 2)
+
+    if contrarian_trap:
+        risk_warnings.append("🧠 إعداد عكسي محسوب — صفقة سيولة عكسية عالية الانتقائية" if user_languages.get(uid, "ar") == "ar" else "🧠 Contrarian Trap Setup — selective counter-liquidity trade")
 
     warn_count = len(risk_warnings)
     if warn_count == 0:   overall_risk = t(uid, "risk_low")
@@ -2760,6 +3083,10 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
         "session": session, "session_score": session_score,
         "bull_obs": bull_obs, "bear_obs": bear_obs,
         "buy_liq": buy_liq, "sell_liq": sell_liq,
+        "contrarian_trap": bool(contrarian_trap),
+        "contrarian_trap_score": contrarian_trap.get("trap_score", 0) if contrarian_trap else 0,
+        "original_bias": contrarian_trap.get("original_bias", final) if contrarian_trap else final,
+        "trap_liquidity_level": contrarian_trap.get("liquidity_level", 0) if contrarian_trap else 0,
         "confluence_txt": conf_txt, "base_conf": base_conf,
         "price": price, "entry_price": entry_price, "entry_low": entry_low, "entry_high": entry_high, "entry_reason": entry_reason, "tp1": tp1, "tp2": tp2, "tp3": tp3,
         "sl": sl, "rr": rr, "atr": atr,
@@ -2885,6 +3212,39 @@ def build_trade_msg(res, uid=0, auto=False):
         "",
     ]
     lines += safe_saz_intelligence_block(res, uid, compact=True)
+    _m = res.get("decision_metrics") or saz_decision_intelligence(res, uid, persist=False, refresh=False)
+    if int(_m.get("crowd_consensus", 0) or 0) >= 65:
+        if user_languages.get(uid, "ar") == "ar":
+            lines += [
+                "",
+                f"👥 تمركز الجمهور: {_m.get('crowd_side','NEUTRAL')} {int(_m.get('crowd_consensus',0))}%",
+                f"⚠️ ازدحام الفكرة: {_m.get('crowd_saturation','LOW')}",
+                f"🎯 خطر معاقبة الأغلبية: {int(_m.get('punishment_risk',0))}/100",
+            ]
+        else:
+            lines += [
+                "",
+                f"👥 Crowd Positioning: {_m.get('crowd_side','NEUTRAL')} {int(_m.get('crowd_consensus',0))}%",
+                f"⚠️ Crowd Saturation: {_m.get('crowd_saturation','LOW')}",
+                f"🎯 Punishment Risk: {int(_m.get('punishment_risk',0))}/100",
+            ]
+    if res.get("contrarian_trap"):
+        if user_languages.get(uid, "ar") == "ar":
+            lines += [
+                "",
+                "🧠 إعداد عكسي محسوب | Liquidity Trap",
+                f"⚠️ الترند الظاهر: {res.get('original_bias','')}",
+                f"🎯 درجة الفخ: {int(res.get('contrarian_trap_score',0))}/100",
+                f"💧 مستوى السيولة: ${float(res.get('trap_liquidity_level',0)):,.2f}",
+            ]
+        else:
+            lines += [
+                "",
+                "🧠 Calculated Counter-Trap Setup",
+                f"⚠️ Visible trend: {res.get('original_bias','')}",
+                f"🎯 Trap Score: {int(res.get('contrarian_trap_score',0))}/100",
+                f"💧 Liquidity Level: ${float(res.get('trap_liquidity_level',0)):,.2f}",
+            ]
     lines += [
         "",
         f"🎯 {t(uid,'entry_zone')}",
@@ -3144,6 +3504,64 @@ def build_analysis_msg(res, uid=0):
     ]
     return "\n".join(lines)
 
+
+def _market_read_summary(res, uid=0):
+    """Practical market-read summary for neutral/mixed conditions."""
+    lang = user_languages.get(uid, "ar")
+    frame_lines = res.get("frame_lines", []) or []
+
+    def _dir_from_line(line):
+        if "BUY" in line:
+            return "BUY"
+        if "SELL" in line:
+            return "SELL"
+        return "NEUTRAL"
+
+    def _find_line(*tokens):
+        for line in frame_lines:
+            if any(tok in line for tok in tokens):
+                return line
+        return ""
+
+    h1 = _dir_from_line(_find_line("ساعة", "1H"))
+    h4 = _dir_from_line(_find_line("4 ساعات", "4H"))
+    d1 = _dir_from_line(_find_line("يومي", "Daily", "1D"))
+
+    if h1 == h4 and h1 in ("BUY", "SELL") and d1 in ("BUY", "SELL") and d1 != h1:
+        if lang == "ar":
+            short_txt = "إيجابي" if h1 == "BUY" else "سلبي"
+            return [
+                "  🧭 الخلاصة",
+                "",
+                f"  الاتجاه قصير المدى {short_txt}،",
+                "  لكن الاتجاه اليومي ما زال غير داعم بشكل كامل.",
+                "",
+                "  ⏳ يفضل انتظار توافق أقوى قبل الدخول.",
+            ]
+        else:
+            short_txt = "positive" if h1 == "BUY" else "negative"
+            return [
+                "  🧭 Summary",
+                "",
+                f"  Short-term momentum is {short_txt},",
+                "  but the Daily trend is not fully supportive yet.",
+                "",
+                "  ⏳ Waiting for stronger alignment is preferred.",
+            ]
+
+    if lang == "ar":
+        return [
+            "  🧭 الخلاصة",
+            "",
+            "  السوق في منطقة تردد حالياً.",
+            "  ⏳ يفضل انتظار إشارة أوضح قبل الدخول.",
+        ]
+    return [
+        "  🧭 Summary",
+        "",
+        "  The market is currently indecisive.",
+        "  ⏳ Waiting for a clearer setup is preferred.",
+    ]
 
 
 # ==================== لوحات المفاتيح ====================
@@ -3421,25 +3839,15 @@ async def version_command(update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ALLOWED_USERS:
         return
-    lang = user_languages.get(uid, "ar")
-    if lang == "ar":
-        msg = (
-            f"🧩 SazBot System\n\n"
-            f"Build ID: {BUILD_ID}\n"
-            f"DNA Gate: Enabled\n"
-            f"Early Bias: Enabled\n"
-            f"Override Guard: Enabled\n"
-            f"Decision Metrics: Consistent"
-        )
-    else:
-        msg = (
-            f"🧩 SazBot System\n\n"
-            f"Build ID: {BUILD_ID}\n"
-            f"DNA Gate: Enabled\n"
-            f"Early Bias: Enabled\n"
-            f"Override Guard: Enabled\n"
-            f"Decision Metrics: Consistent"
-        )
+    # ✅ FIX: AR/EN messages were identical — dead branch removed.
+    msg = (
+        f"🧩 SazBot System\n\n"
+        f"Build ID: {BUILD_ID}\n"
+        f"DNA Gate: Enabled\n"
+        f"Early Bias: Enabled\n"
+        f"Override Guard: Enabled\n"
+        f"Decision Metrics: Consistent"
+    )
     await update.message.reply_text(msg)
 
 
@@ -3966,9 +4374,13 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("activate_signal_"):
         sig_id = int(data.split("_")[2])
-        sig = pending_signals.pop(sig_id, None)
-        save_runtime_state()
+        sig = pending_signals.get(sig_id)
+        if sig and uid not in sig.get("chat_ids", list(ALLOWED_USERS)):
+            await query.message.reply_text(t(uid, "private_bot"))
+            return
         if sig:
+            pending_signals.pop(sig_id, None)
+            save_runtime_state()
             res_sig   = sig["res"]
             entry_p   = sig["entry_p"]
             chat_ids_s = sig.get("chat_ids", [uid])
@@ -3987,6 +4399,9 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 "atr": res_sig["atr"], "tp1_hit": False, "tp2_hit": False,
                 "orig_sl": res_sig["sl"], "entry_ref": entry_p,
                 "status": "pending" if is_pending else "active",
+                "manual_activation": True,
+                "entry_low": sig.get("entry_low", res_sig.get("entry_low", entry_p)),
+                "entry_high": sig.get("entry_high", res_sig.get("entry_high", entry_p)),
                 "actual_entry": res_sig.get("price") if not is_pending else None,
                 "chat_id": chat_id_s, "open_time": gmt_now(),
                 "frame_snapshot": sig_frame_snapshot,
@@ -4423,6 +4838,13 @@ async def check_pending_trades(context):
         try:
             # ── 1. Stale pending: auto-cancel after PENDING_MAX_AGE hours ──
             if status == "pending":
+                if not trade.get("manual_activation"):
+                    async with get_trades_lock():
+                        if trade in active_trades:
+                            active_trades.remove(trade)
+                        save_trades()
+                        save_runtime_state()
+                    continue
                 try:
                     open_dt = datetime.strptime(
                         trade.get("open_time", ""), "%d/%m/%Y  %H:%M"
@@ -4645,6 +5067,86 @@ def is_duplicate_open_or_pending_setup(asset, direction, entry, atr):
         return True
 
 
+
+def entry_zone_overlap_ratio(a_low, a_high, b_low, b_high):
+    try:
+        a_low, a_high, b_low, b_high = map(float, [a_low, a_high, b_low, b_high])
+        if a_low > a_high:
+            a_low, a_high = a_high, a_low
+        if b_low > b_high:
+            b_low, b_high = b_high, b_low
+        overlap = max(0.0, min(a_high, b_high) - max(a_low, b_low))
+        smallest = max(min(a_high - a_low, b_high - b_low), 1e-9)
+        return overlap / smallest
+    except Exception as e:
+        logger.warning("entry_zone_overlap_ratio failed: " + str(e))
+        return 0.0
+
+def is_duplicate_zone_setup(asset, direction, entry_low, entry_high, min_overlap=0.60):
+    """Block duplicate active/pending setups with overlapping entry zones."""
+    try:
+        for tr in active_trades:
+            if tr.get("asset") != asset or tr.get("direction") != direction:
+                continue
+            tr_entry = float(tr.get("entry", tr.get("entry_price", 0)) or 0)
+            tr_atr = float(tr.get("atr", 0) or 0)
+            tr_low = float(tr.get("entry_low", 0) or 0)
+            tr_high = float(tr.get("entry_high", 0) or 0)
+            if (not tr_low or not tr_high) and tr_entry:
+                tr_low, tr_high = entry_zone_from_trade(tr_entry, tr_atr)
+            if tr_low and tr_high and entry_zone_overlap_ratio(entry_low, entry_high, tr_low, tr_high) >= min_overlap:
+                return True
+
+        for sig in pending_signals.values():
+            sig_res = sig.get("res", {}) if isinstance(sig, dict) else {}
+            sig_dir = sig.get("direction") or sig_res.get("final")
+            if sig_res.get("asset", asset) != asset or sig_dir != direction:
+                continue
+            sig_low = float(sig.get("entry_low", sig_res.get("entry_low", 0)) or 0)
+            sig_high = float(sig.get("entry_high", sig_res.get("entry_high", 0)) or 0)
+            if sig_low and sig_high and entry_zone_overlap_ratio(entry_low, entry_high, sig_low, sig_high) >= min_overlap:
+                return True
+        return False
+    except Exception as e:
+        logger.warning("is_duplicate_zone_setup failed: " + str(e))
+        return True
+
+def cleanup_runtime_state_on_startup():
+    """Remove stale pending/active items after Railway restarts."""
+    global active_trades, pending_signals
+    try:
+        n = now_ts()
+        kept_trades = []
+        for tr in active_trades:
+            try:
+                status = tr.get("status", "active")
+                open_ts = tr.get("open_ts") or tr.get("timestamp")
+                if not open_ts and tr.get("open_time"):
+                    try:
+                        open_ts = datetime.strptime(tr.get("open_time"), "%d/%m/%Y  %H:%M").replace(tzinfo=timezone.utc).timestamp()
+                    except Exception:
+                        open_ts = n
+                age_h = (n - float(open_ts or n)) / 3600
+                if status == "pending" and (not tr.get("manual_activation") or age_h > PENDING_MAX_AGE):
+                    continue
+                if age_h > 72:
+                    continue
+                kept_trades.append(tr)
+            except Exception:
+                kept_trades.append(tr)
+        active_trades = kept_trades
+
+        for sid, sig in list(pending_signals.items()):
+            age = n - float(sig.get("timestamp", n))
+            if age > SIGNAL_EXPIRY:
+                pending_signals.pop(sid, None)
+
+        save_trades()
+        save_runtime_state()
+    except Exception as e:
+        logger.warning("cleanup_runtime_state_on_startup failed: " + str(e))
+
+
 async def _check_auto_signal(context):
     """Auto-signal: fires only when RSI is extended, price is near Fib, confidence passes MIN_CONFIDENCE, and 3 qualified timeframes agree."""
     n = now_ts()
@@ -4717,9 +5219,12 @@ async def _check_auto_signal(context):
         if not (three or strong_partial or timing_rescue or fast_scalp):
             return
 
+        if is_recent_similar_signal(res):
+            return
+
         signal_type = "fast_scalp" if fast_scalp else ("timing_rescue" if timing_rescue else ("strong_partial" if strong_partial else "full_confluence"))
         res["signal_type"] = signal_type
-        res["entry_reason"] = signal_type if signal_type in ("fast_scalp", "timing_rescue") else "auto"
+        res["entry_reason"] = signal_type
         res["fast_scalp"] = bool(fast_scalp)
 
         cooldown = FAST_SCALP_COOLDOWN if fast_scalp else SPAM_COOLDOWN
@@ -4739,8 +5244,7 @@ async def _check_auto_signal(context):
         # Do not re-offer a recently cancelled setup in the same zone/direction.
         if is_recently_cancelled("BTC", res["final"], ep, sig_atr):
             return
-
-        dup = is_duplicate_open_or_pending_setup("BTC", res["final"], ep, sig_atr)
+        dup = is_duplicate_zone_setup("BTC", res["final"], entry_low, entry_high)
 
         if not (dir_ok and not dup):
             return
@@ -4758,9 +5262,11 @@ async def _check_auto_signal(context):
             "entry_high": res.get("entry_high", ep),
             "price": res["price"], "chat_ids": [],
             "signal_type": signal_type,
-            "direction": res["final"],
+            "direction": res["final"]
         }
         save_runtime_state()
+        if res.get("contrarian_trap"):
+            register_contrarian_trap_signal()
         for uid in ALLOWED_USERS:
             try:
                 sig_msg = build_fast_scalp_msg(res, uid) if res.get("fast_scalp") else build_trade_msg(res, uid, auto=True)
@@ -4779,53 +5285,26 @@ async def _check_auto_signal(context):
 
 
 
-def pending_signal_still_supported(sig, fresh):
-    """Validate a pending signal using the same logic that allowed it to be created.
-    This avoids expiring fast scalp / timing-rescue / strong-partial signals just because they are not 3/3.
-    """
+
+def pending_signal_still_supported(sig,fresh):
     try:
-        if not fresh:
-            return False
-        sig_res = sig.get("res", {}) if isinstance(sig, dict) else {}
-        sig_dir = sig.get("direction") or sig_res.get("final")
-        signal_type = sig.get("signal_type") or sig_res.get("signal_type") or sig_res.get("entry_reason", "full_confluence")
-        fresh_final = fresh.get("final", "NEUTRAL")
-        if sig_dir not in ("BUY", "SELL") or fresh_final != sig_dir:
-            return False
-
-        fresh_lines = fresh.get("frame_lines", [])
-        fresh_buy, fresh_sell = count_qualified_frame_lines(fresh_lines)
-        support = fresh_buy if sig_dir == "BUY" else fresh_sell
-        oppose = fresh_sell if sig_dir == "BUY" else fresh_buy
-
-        frame_txt = " ".join(fresh_lines)
-        one_h_ok = (
-            (sig_dir == "BUY" and ("1H: BUY" in frame_txt or "ساعة: BUY" in frame_txt)) or
-            (sig_dir == "SELL" and ("1H: SELL" in frame_txt or "ساعة: SELL" in frame_txt))
-        )
-        daily_ok = (
-            (sig_dir == "BUY" and ("Daily: BUY" in frame_txt or "يومي: BUY" in frame_txt)) or
-            (sig_dir == "SELL" and ("Daily: SELL" in frame_txt or "يومي: SELL" in frame_txt))
-        )
-
-        if signal_type == "full_confluence":
-            return support == 3 and oppose == 0
-        if signal_type == "strong_partial":
-            return support >= 2 and oppose <= 1
-        if signal_type == "timing_rescue":
-            return one_h_ok and daily_ok
-        if signal_type == "fast_scalp":
-            # Fast scalps are short-lived; 1H remaining in the same direction is enough,
-            # provided the fresh decision is not opposite/neutral.
-            return one_h_ok
-
-        # Backward-compatible default for older pending signals.
-        return support >= 2 and oppose <= 1
-    except Exception as e:
-        logger.warning("pending_signal_still_supported failed: " + str(e))
+        sig_dir=sig.get("direction") or (sig.get("res",{}) or {}).get("final")
+        st=sig.get("signal_type") or (sig.get("res",{}) or {}).get("signal_type","full_confluence")
+        if fresh.get("final")!=sig_dir: return False
+        fl=fresh.get("frame_lines",[])
+        b,s=count_qualified_frame_lines(fl)
+        txt=" ".join(fl)
+        if st=="full_confluence":
+            return (b==3 and s==0) if sig_dir=="BUY" else (s==3 and b==0)
+        if st=="strong_partial":
+            return (b>=2 and s<=1) if sig_dir=="BUY" else (s>=2 and b<=1)
+        if st=="timing_rescue":
+            return (("1H: BUY" in txt or "ساعة: BUY" in txt) and ("Daily: BUY" in txt or "يومي: BUY" in txt)) if sig_dir=="BUY" else (("1H: SELL" in txt or "ساعة: SELL" in txt) and ("Daily: SELL" in txt or "يومي: SELL" in txt))
+        if st=="fast_scalp":
+            return (("1H: BUY" in txt or "ساعة: BUY" in txt)) if sig_dir=="BUY" else (("1H: SELL" in txt or "ساعة: SELL" in txt))
+        return True
+    except Exception:
         return False
-
-
 async def _expire_pending_signals(context):
     """Expire pending signals only after a short grace period, using Smart Entry Zone distance and timeframe validation."""
     if not pending_signals:
@@ -4856,21 +5335,15 @@ async def _expire_pending_signals(context):
             entry_low = float(sig.get("entry_low", sig_res.get("entry_low", sig_entry)) or sig_entry)
             entry_high = float(sig.get("entry_high", sig_res.get("entry_high", sig_entry)) or sig_entry)
 
-            # Hard expiry must be evaluated before fresh-support checks.
             if age > SIGNAL_EXPIRY:
                 expired = True
                 reason_key = "signal_expired_time"
-
-            # Expire by distance from Smart Entry Zone, not from the market price at signal creation.
             elif cur and is_price_too_far_from_entry_zone(cur, entry_low, entry_high, MAX_DISTANCE_FROM_ZONE_PCT):
                 expired = True
                 reason_key = "signal_expired_price"
-
-            # Expire only if the fresh market no longer supports this signal type.
-            elif fresh:
-                if not pending_signal_still_supported(sig, fresh):
-                    expired = True
-                    reason_key = "signal_expired_timeframes"
+            elif fresh and not pending_signal_still_supported(sig, fresh):
+                expired = True
+                reason_key = "signal_expired_timeframes"
 
             if expired:
                 to_exp.append(sid)
@@ -4892,8 +5365,10 @@ async def _expire_pending_signals(context):
                     except Exception as e:
                         logger.warning("silent exception: " + str(e))
 
-        for sid in to_exp:
-            pending_signals.pop(sid, None)
+        if to_exp:
+            for sid in to_exp:
+                pending_signals.pop(sid, None)
+            # ✅ FIX: save once after all removals, not once per signal.
             save_runtime_state()
     except Exception as e:
         logger.error(f"Expire signals: {e}")
@@ -4952,6 +5427,11 @@ async def _monitor_active_trades(context):
 
             # ── Pending: wait for price to reach entry ──
             if trade.get("status") == "pending":
+                # Safety: pending trades must exist only after a user explicitly pressed Activate.
+                if not trade.get("manual_activation"):
+                    to_remove.append(trade)
+                    logger.warning(f"Removed non-manual pending trade #{trade_id}")
+                    continue
                 low_z, high_z = entry_zone_from_trade(entry, atr)
                 if direction == "BUY":
                     zone_dist = ((cur - high_z) / entry * 100) if cur > high_z else ((low_z - cur) / entry * 100 if cur < low_z else 0)
@@ -4968,7 +5448,8 @@ async def _monitor_active_trades(context):
                             f"💵 {t(chat_id,'current_price')}: ${cur:,.2f}"
                         ))
                     continue
-                arrived = (direction=="BUY"  and low_z <= cur <= high_z) or (direction=="SELL" and low_z <= cur <= high_z)
+                # ✅ FIX: condition was duplicated for BUY/SELL — same zone check for both.
+                arrived = low_z <= cur <= high_z
                 if arrived:
                     try:
                         fresh = await run_blocking(full_analysis, trade["asset"], 0)
@@ -5172,10 +5653,18 @@ async def monitor_btc(context):
     3. Economic event alert (no open trades)
     4. SL/TP monitoring on active trades
     """
-    await _check_auto_signal(context)
-    await _expire_pending_signals(context)
-    await _economic_alert_no_trades(context)
-    await _monitor_active_trades(context)
+    # ✅ FIX: each sub-task isolated — a failure in one never blocks the others
+    # (especially SL/TP monitoring, which must always run).
+    for task_name, task in (
+        ("auto_signal",      _check_auto_signal),
+        ("expire_pending",   _expire_pending_signals),
+        ("economic_alert",   _economic_alert_no_trades),
+        ("monitor_trades",   _monitor_active_trades),
+    ):
+        try:
+            await task(context)
+        except Exception as e:
+            logger.error(f"monitor_btc[{task_name}]: {e}")
 
 
 
@@ -5243,10 +5732,15 @@ def saz_directional_bias(res):
             confidence = 50
 
         # DNA quality limits enthusiasm.
+        punishment = float(metrics.get("punishment_risk", 0) or 0)
+        if punishment >= 75:
+            confidence = int(confidence * 0.90)
+        elif punishment >= 65:
+            confidence = int(confidence * 0.95)
         if quality < 45 or risk > 82:
             bias = "NEUTRAL"
             confidence = min(confidence, 55)
-        return {"bias": bias, "confidence": confidence, "quality": quality, "risk": risk}
+        return {"bias": bias, "confidence": confidence, "quality": quality, "risk": risk, "punishment_risk": punishment}
     except Exception as e:
         logger.warning("saz_directional_bias failed: " + str(e))
         return {"bias": "NEUTRAL", "confidence": 0, "quality": 0, "risk": 100}
@@ -5426,9 +5920,9 @@ async def send_smart_alerts(context):
                 continue
 
             b = saz_directional_bias(res)
-            has_trade_same_bias = any(tr.get("asset") == "BTC" and tr.get("direction") == b.get("bias") for tr in active_trades)
-            has_pending_same_bias = any((sig.get("res", {}) or {}).get("final") == b.get("bias") for sig in pending_signals.values())
-            if has_trade_same_bias or has_pending_same_bias:
+            has_active_same_bias = any(tr.get("asset") == "BTC" and tr.get("direction") == b.get("bias") for tr in active_trades)
+            has_pending_same_bias = any((sig.get("direction") or (sig.get("res", {}) or {}).get("final")) == b.get("bias") for sig in pending_signals.values())
+            if has_active_same_bias or has_pending_same_bias:
                 continue
             if not should_send_bias_alert(user_id, b["bias"], b["confidence"], trigger_key):
                 continue
@@ -5638,6 +6132,7 @@ def main():
     print("BUILD_ID:", BUILD_ID)
     print("ALLOWED_USERS:", sorted(ALLOWED_USERS))
     load_runtime_state()
+    cleanup_runtime_state_on_startup()
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     # Catch /start in any case. Telegram command handling can be case-sensitive,
     # and MessageHandler below ignores commands because of ~filters.COMMAND.
