@@ -1,6 +1,7 @@
 import os
 import logging
 import asyncio
+import time
 import requests
 from datetime import datetime, timezone, timedelta
 import pandas as pd
@@ -100,7 +101,7 @@ def register_contrarian_trap_signal():
 
 
 
-BUILD_ID = "SAZBOT_V3_CROWD_REBALANCED_2026_06_11"
+BUILD_ID = "SAZBOT_V3_UNBLOCKED_2026_06_11"
 
 user_languages        = {}
 active_trades         = []
@@ -1059,6 +1060,52 @@ def event_risk_adjustment(uid=0):
 
 
 
+
+_real_crowd_cache = {"ts":0,"data":{}}
+
+def get_real_crowd_data(symbol="BTCUSDT"):
+    """Binance futures crowd metrics with cache."""
+    try:
+        now=time.time()
+        if now - float(_real_crowd_cache.get("ts",0)) < 300:
+            return _real_crowd_cache.get("data",{})
+        data={}
+        try:
+            r=requests.get("https://fapi.binance.com/futures/data/globalLongShortAccountRatio",
+                           params={"symbol":symbol,"period":"1h","limit":1},timeout=10)
+            js=r.json()
+            if js:
+                data["global_long_short_ratio"]=float(js[-1].get("longShortRatio",1))
+        except Exception: pass
+        try:
+            r=requests.get("https://fapi.binance.com/futures/data/topLongShortPositionRatio",
+                           params={"symbol":symbol,"period":"1h","limit":1},timeout=10)
+            js=r.json()
+            if js:
+                data["top_trader_ratio"]=float(js[-1].get("longShortRatio",1))
+        except Exception: pass
+        try:
+            r=requests.get("https://fapi.binance.com/futures/data/openInterestHist",
+                           params={"symbol":symbol,"period":"1h","limit":2},timeout=10)
+            js=r.json()
+            if len(js)>=2:
+                a=float(js[-2].get("sumOpenInterest",0))
+                b=float(js[-1].get("sumOpenInterest",0))
+                if a>0:
+                    data["oi_change_pct"]=((b-a)/a)*100
+        except Exception: pass
+        try:
+            r=requests.get("https://fapi.binance.com/fapi/v1/premiumIndex",
+                           params={"symbol":symbol},timeout=10)
+            js=r.json()
+            data["funding_rate"]=float(js.get("lastFundingRate",0))*100
+        except Exception: pass
+        _real_crowd_cache["ts"]=now
+        _real_crowd_cache["data"]=data
+        return data
+    except Exception:
+        return {}
+
 def crowd_positioning_engine(res, frames=None):
     """Behavioural crowd proxy. Not a gate; only adjusts quality/regret mildly."""
     try:
@@ -1128,7 +1175,40 @@ def crowd_positioning_engine(res, frames=None):
         if res.get("contrarian_trap"): punishment = max(10, punishment - 10)
         punishment = int(max(0, min(100, punishment)))
 
-        return {"crowd_side": crowd_side, "crowd_consensus": consensus, "crowd_saturation": saturation, "punishment_risk": punishment}
+        # ✅ No network here: read crowd data attached by full_analysis (or last cache).
+        real = res.get("real_crowd") or _real_crowd_cache.get("data", {}) or {}
+        glsr = float(real.get("global_long_short_ratio", 1) or 1)
+        top = float(real.get("top_trader_ratio", 1) or 1)
+        funding = float(real.get("funding_rate", 0) or 0)
+        oi = float(real.get("oi_change_pct", 0) or 0)
+
+        # ✅ DIRECTION-AWARE: crowd stacked on OUR side = crowded trade (punish);
+        # crowd stacked AGAINST us = we fade the crowd (tailwind, relieve).
+        real_crowd_side = "BUY" if glsr > 1.6 else "SELL" if glsr < 0.65 else None
+        if real_crowd_side:
+            crowd_side = real_crowd_side
+            consensus = min(100, consensus + 8)
+            if real_crowd_side == final:
+                punishment += 12
+            elif final in ("BUY", "SELL"):
+                punishment -= 8
+
+        # ✅ Funding sign respected: positive = longs overpaying (crowded long),
+        # negative = shorts overpaying (crowded short).
+        if funding > 0.03:
+            if final == "BUY": punishment += 8
+            elif final == "SELL": punishment -= 4
+        elif funding < -0.03:
+            if final == "SELL": punishment += 8
+            elif final == "BUY": punishment -= 4
+
+        # Fast leverage build-up is a risk either way.
+        if abs(oi) > 5:
+            punishment += 5
+        punishment = int(max(0, min(100, punishment)))
+
+        return {"crowd_side": crowd_side, "crowd_consensus": consensus, "crowd_saturation": saturation, "punishment_risk": punishment,
+                "global_long_short_ratio": glsr, "top_trader_ratio": top, "funding_rate": funding, "oi_change_pct": oi}
     except Exception as e:
         logger.warning("crowd_positioning_engine failed: " + str(e))
         return {"crowd_side": "NEUTRAL", "crowd_consensus": 0, "crowd_saturation": "LOW", "punishment_risk": 0}
@@ -1327,10 +1407,15 @@ def saz_decision_intelligence(res, uid=0, persist=True, refresh=False):
     narrative_shift_score = _clamp(narrative_shift_score)
 
     opportunity_cost = 35
+    # ✅ FIX (history feedback trap): old high-quality readings in persisted
+    # memory were adding +25/+20, pushing opp_cost to 80 >= STAY_OUT threshold
+    # (78) for every NEW setup that scored below the bot's own glory days —
+    # a self-reinforcing silence. Softened so history alone can never force
+    # STAY_OUT (35+15+10+10 = 70 < 78); it still ranks setups down.
     if quality < recent_avg_quality - 5:
-        opportunity_cost += 25
+        opportunity_cost += 15
     if recent_strong >= 2 and quality < 75:
-        opportunity_cost += 20
+        opportunity_cost += 10
     if counter_weekly or counter_monthly or mixed_frames:
         opportunity_cost += 10
     opportunity_cost = _clamp(opportunity_cost)
@@ -3117,6 +3202,13 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
         "hold_ar": "2 — 8 ساعات", "hold_en": "2 — 8 Hours",
     }
     # Calculate once per analysis result and reuse everywhere.
+    try:
+        # ✅ Fetch real crowd data HERE (full_analysis runs in a worker thread) —
+        # display paths read it from res, never hitting the network on the event loop.
+        result["real_crowd"] = get_real_crowd_data("BTCUSDT")
+    except Exception as e:
+        logger.warning("real crowd fetch failed: " + str(e))
+        result["real_crowd"] = {}
     try:
         saz_decision_intelligence(result, uid, persist=True, refresh=True)
         lev_ar, lev_en = recommended_leverage_by_regime(result)
@@ -5045,10 +5137,19 @@ def is_actionable_trade_decision(res):
         m = res.get("decision_metrics") or saz_decision_intelligence(res, 0, persist=False, refresh=False)
         decision = str(m.get("decision", "") or "").upper()
         decision_text = str(m.get("decision_text", "") or "")
-        if decision in ("STAY_OUT", "WAIT", "WAIT_FOR_ENTRY", "WAIT_CLEANER"):
+        grade = str(m.get("setup_grade", "") or "").upper()
+        # ✅ FIX (gate contradiction): the DNA auto gate deliberately allows
+        # controlled C setups, but this layer demanded TRADEABLE (quality>=62
+        # AND regret<=55), silently re-imposing a stricter bar and making the
+        # DNA valve dead code. STAY_OUT still blocks absolutely; WAIT now
+        # defers to the DNA grade — A/B setups the gate approved may act.
+        if decision == "STAY_OUT" or "ابق" in decision_text or "Stay" in decision_text:
             return False
-        if "انتظر" in decision_text or "ابق" in decision_text or "Wait" in decision_text or "Stay" in decision_text:
-            return False
+        if decision in ("WAIT", "WAIT_FOR_ENTRY", "WAIT_CLEANER") or "انتظر" in decision_text or "Wait" in decision_text:
+            allowed = grade in ("A", "B")
+            if not allowed:
+                logger.info(f"auto-signal blocked: decision=WAIT grade={grade or 'N/A'}")
+            return allowed
         return True
     except Exception as e:
         logger.warning("is_actionable_trade_decision failed: " + str(e))
@@ -5193,6 +5294,7 @@ async def _check_auto_signal(context):
         # Auto-signals must pass the strictest SazBot 2.1 DNA gate before being sent.
         res = apply_saz_dna_gate(res, 0, mode="auto")
         if not res or res.get("final") == "NEUTRAL" or res.get("blocked_by_saz_dna"):
+            logger.info(f"auto-signal blocked by DNA gate: reason={(res or {}).get('saz_dna_reason', 'neutralized')}")
             return
 
         fl = res.get("frame_lines", [])
@@ -5230,9 +5332,11 @@ async def _check_auto_signal(context):
             return
 
         if not (three or strong_partial or timing_rescue or fast_scalp):
+            logger.info(f"auto-signal blocked: alignment fail (buy_f={buy_f}, sell_f={sell_f}, final={res['final']})")
             return
 
         if is_recent_similar_signal(res):
+            logger.info("auto-signal blocked: similar recent/active setup")
             return
 
         signal_type = "fast_scalp" if fast_scalp else ("timing_rescue" if timing_rescue else ("strong_partial" if strong_partial else "full_confluence"))
@@ -5252,14 +5356,17 @@ async def _check_auto_signal(context):
 
         # Do not send a new signal if price is already too far away from the Smart Entry Zone.
         if is_price_too_far_from_entry_zone(res.get("price", price_q), entry_low, entry_high, max_distance_for_setup_grade(res)):
+            logger.info("auto-signal blocked: price too far from entry zone")
             return
 
         # Do not re-offer a recently cancelled setup in the same zone/direction.
         if is_recently_cancelled("BTC", res["final"], ep, sig_atr):
+            logger.info("auto-signal blocked: recently cancelled zone")
             return
         dup = is_duplicate_zone_setup("BTC", res["final"], entry_low, entry_high)
 
         if not (dir_ok and not dup):
+            logger.info(f"auto-signal blocked: dir_ok={dir_ok} (open BUY={not no_buy}, open SELL={not no_sell}), duplicate_zone={dup}")
             return
 
         global trade_counter
