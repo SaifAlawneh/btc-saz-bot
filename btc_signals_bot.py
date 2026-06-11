@@ -101,7 +101,7 @@ def register_contrarian_trap_signal():
 
 
 
-BUILD_ID = "SAZBOT_V3_UNBLOCKED_2026_06_11"
+BUILD_ID = "SAZBOT_V3_BINANCE_PRIMARY_2026_06_11"
 
 user_languages        = {}
 active_trades         = []
@@ -634,7 +634,14 @@ cancelled_setups.extend(load_cancelled_setups())
 def get_cached(key):
     if key in _cache:
         data, ts = _cache[key]
-        if (datetime.now(timezone.utc).timestamp() - ts) < CACHE_TTL:
+        # ✅ SMART TTL: higher timeframes change slowly — refetching them every
+        # 15 min was pure waste. 1H: 15 min, 4H: 1 hour, 1D/1W: 3 hours.
+        ttl = CACHE_TTL
+        if key.endswith("_4h"):
+            ttl = 3600
+        elif key.endswith("_daily") or key.endswith("_1d") or key.endswith("_weekly") or key.endswith("_1w"):
+            ttl = 10800
+        if (datetime.now(timezone.utc).timestamp() - ts) < ttl:
             return data
     return None
 
@@ -2071,7 +2078,7 @@ def get_binance_data(days=30, interval="hourly"):
                 "Volume": float(k[5]),
             })
         df = pd.DataFrame(rows).set_index("timestamp").dropna()
-        logger.info("Binance fallback OK: BTCUSDT " + binance_interval)
+        logger.info("Binance OK (primary): BTCUSDT " + binance_interval)
         return df
     except Exception as e:
         logger.warning("Binance failed: " + str(e))
@@ -2101,6 +2108,14 @@ def get_data(asset="BTC", days=30, interval="hourly"):
     cached = get_cached(cache_key)
     if cached is not None:
         return cached
+
+    # ✅ PRIORITY FLIP: Binance is free, unlimited, and confirmed working from
+    # Railway — it is now the PRIMARY source. Twelve Data (800 credits/day)
+    # becomes the emergency fallback instead of burning out by midday.
+    df_binance = get_binance_data(days=days, interval=interval)
+    if df_binance is not None and len(df_binance) >= 20:
+        set_cache(cache_key, df_binance)
+        return df_binance
 
     if TWELVEDATA_KEY:
         try:
@@ -2133,11 +2148,6 @@ def get_data(asset="BTC", days=30, interval="hourly"):
                 logger.warning("Twelve Data: " + str(data.get("message", "")))
         except Exception as e:
             logger.warning("Twelve Data failed: " + str(e))
-
-    df_binance = get_binance_data(days=days, interval=interval)
-    if df_binance is not None and len(df_binance) >= 20:
-        set_cache(cache_key, df_binance)
-        return df_binance
 
     # ✅ FIX 3: 4H resample فقط لو الـ interval فعلاً 4h
     if interval == "4h":
