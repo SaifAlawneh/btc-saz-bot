@@ -100,7 +100,7 @@ def register_contrarian_trap_signal():
 
 
 
-BUILD_ID = "SAZBOT_V3_CROWD_REGRET_ENGINE_FIXED2_2026_06_11"
+BUILD_ID = "SAZBOT_V3_CROWD_REBALANCED_2026_06_11"
 
 user_languages        = {}
 active_trades         = []
@@ -1109,15 +1109,23 @@ def crowd_positioning_engine(res, frames=None):
             crowd_side, consensus = "SELL", int(max(0, min(100, sell_score / total * 100)))
 
         saturation = "HIGH" if consensus >= 78 else "MEDIUM" if consensus >= 65 else "LOW"
-        punishment = 20
-        if consensus >= 75: punishment += 18
-        if consensus >= 88: punishment += 12
-        if dist > 0.8: punishment += min(int(dist * 8), 18)
-        if final == "BUY" and rsi >= 68: punishment += 12
-        if final == "SELL" and rsi <= 32: punishment += 12
-        if regime in ("RANGING", "VOLATILE"): punishment += 8
-        if crowd_side == final and saturation == "HIGH": punishment += 10
-        if res.get("contrarian_trap"): punishment = max(15, punishment - 10)
+        # ✅ REBALANCED: consensus here is derived from our OWN frames, so high
+        # consensus is a precondition of every valid confluence signal — it must
+        # not be punished by itself. Punish CHASING (stretched RSI / far from
+        # entry zone), and let consensus only amplify those, never act alone.
+        punishment = 10
+        chasing = False
+        if dist > 0.8:
+            punishment += min(int(dist * 8), 18); chasing = True
+        if final == "BUY" and rsi >= 68:
+            punishment += 14; chasing = True
+        if final == "SELL" and rsi <= 32:
+            punishment += 14; chasing = True
+        if chasing and consensus >= 88:
+            punishment += 14  # everyone sees it AND it already ran — late entry risk
+        if regime in ("RANGING", "VOLATILE"):
+            punishment += 6
+        if res.get("contrarian_trap"): punishment = max(10, punishment - 10)
         punishment = int(max(0, min(100, punishment)))
 
         return {"crowd_side": crowd_side, "crowd_consensus": consensus, "crowd_saturation": saturation, "punishment_risk": punishment}
@@ -1327,15 +1335,20 @@ def saz_decision_intelligence(res, uid=0, persist=True, refresh=False):
         opportunity_cost += 10
     opportunity_cost = _clamp(opportunity_cost)
     crowd_penalty = 0
-    if crowd_side == final and crowd_consensus >= 85:
-        crowd_penalty += 4
+    # ✅ REBALANCED: consensus alone never penalises (it equals our confluence).
+    # Penalise only genuine punishment risk (chasing-driven), and softly:
+    # quality max -3, regret max +5 — adjusts ranking without strangling the gate.
     if punishment_risk >= 75:
-        crowd_penalty += 4
-    elif punishment_risk >= 65:
-        crowd_penalty += 2
+        crowd_penalty = 3
+    elif punishment_risk >= 60:
+        crowd_penalty = 2
     if crowd_penalty:
         quality -= crowd_penalty
-        regret += crowd_penalty
+        regret += crowd_penalty + 2
+        try:
+            logger.info(f"crowd_penalty applied: -{crowd_penalty}q/+{crowd_penalty+2}r (punishment={punishment_risk}, consensus={crowd_consensus})")
+        except Exception:
+            pass
 
     if res.get("contrarian_trap"):
         # Counter-trap setups are inherently higher risk.
@@ -5733,9 +5746,9 @@ def saz_directional_bias(res):
 
         # DNA quality limits enthusiasm.
         punishment = float(metrics.get("punishment_risk", 0) or 0)
-        if punishment >= 75:
-            confidence = int(confidence * 0.90)
-        elif punishment >= 65:
+        # ✅ REBALANCED: shave only at extreme chasing risk, and mildly —
+        # the scalp pipeline has its own quality/regret gate already.
+        if punishment >= 80:
             confidence = int(confidence * 0.95)
         if quality < 45 or risk > 82:
             bias = "NEUTRAL"
