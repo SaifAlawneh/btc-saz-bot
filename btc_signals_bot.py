@@ -101,13 +101,14 @@ def register_contrarian_trap_signal():
 
 
 
-BUILD_ID = "SAZBOT_V3_BINANCE_PRIMARY_2026_06_11"
+BUILD_ID = "SAZBOT_V3_VISIBILITY_2026_06_12"
 
 user_languages        = {}
 active_trades         = []
 active_btc_trade      = {}
 pending_trade_replace = {}
 last_signal_time      = {}
+_prefilter_log        = {"ts": 0}
 pending_signals       = {}
 trade_counter         = 0
 _cache                = {}
@@ -5293,6 +5294,13 @@ async def _check_auto_signal(context):
         near_fib_q = any(abs(price_q - v) / price_q * 100 < 0.7 for v in fib_q.values())
         rsi_extended_q = (rsi_q < 40 or rsi_q > 60)
         if not (near_fib_q or rsi_extended_q):
+            # ✅ VISIBILITY: throttled heartbeat (every 30 min) so prolonged silence
+            # is measurable instead of a blind spot — shows the actual numbers
+            # keeping the pre-filter closed.
+            if now_ts() - _prefilter_log.get("ts", 0) > 1800:
+                _prefilter_log["ts"] = now_ts()
+                min_fib_dist = min(abs(price_q - v) / price_q * 100 for v in fib_q.values()) if fib_q else -1
+                logger.info(f"prefilter idle: rsi={rsi_q:.1f} (needs <40 or >60), nearest_fib={min_fib_dist:.2f}% (needs <0.7%), price={price_q:.0f}")
             return
 
         no_buy  = not any(tr["asset"]=="BTC" and tr["direction"]=="BUY"  for tr in active_trades)
