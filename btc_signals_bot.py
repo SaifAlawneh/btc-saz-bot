@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+from telegram.error import Conflict
 import ta
 import random
 import json
@@ -5099,6 +5100,49 @@ async def check_pending_trades(context):
 
 # ==================== مراقبة BTC ====================
 
+
+
+def summarize_auto_block(res, stage="analysis"):
+    """Return a compact diagnostic line explaining why an auto signal was not sent."""
+    try:
+        if not res:
+            return f"{stage}: result=NO_RESULT"
+
+        final = res.get("final", "NO_FINAL")
+        price = res.get("price", "N/A")
+        fl = res.get("frame_lines") or []
+        buy_f, sell_f = count_qualified_frame_lines(fl)
+
+        # Keep frame lines compact but visible in Railway logs.
+        frames_compact = " | ".join(str(x).replace("\n", " ") for x in fl[:8]) or "no_frame_lines"
+
+        metrics = res.get("decision_metrics")
+        if not metrics:
+            try:
+                metrics = saz_decision_intelligence(res, 0, persist=False, refresh=False)
+            except Exception:
+                metrics = {}
+
+        quality = metrics.get("quality", "N/A")
+        regret = metrics.get("regret", "N/A")
+        opp_cost = metrics.get("opportunity_cost", "N/A")
+        decision = metrics.get("decision", "N/A")
+        grade = metrics.get("setup_grade") or (saz_setup_grade(metrics) if metrics else "N/A")
+
+        dna_reason = res.get("saz_dna_reason", "N/A")
+        blocked_dna = res.get("blocked_by_saz_dna", False)
+
+        return (
+            f"{stage}: final={final}, price={price}, "
+            f"qualified_frames BUY={buy_f}/SELL={sell_f}, min_frames={MIN_ALIGNMENT_FRAMES}, "
+            f"min_conf={MIN_CONFIDENCE}, frame_min_conf={FRAME_MIN_CONFIDENCE}, "
+            f"decision={decision}, grade={grade}, quality={quality}, regret={regret}, "
+            f"opportunity_cost={opp_cost}, min_decision={MIN_DECISION_SCORE}, "
+            f"dna_blocked={blocked_dna}, dna_reason={dna_reason}, frames=[{frames_compact}]"
+        )
+    except Exception as e:
+        return f"{stage}: summarize_auto_block failed: {e}"
+
 def is_fast_scalp_candidate(res, timing_rescue=False):
     """C-grade fast opportunity: not elite, but actionable for short scalp alerts."""
     try:
@@ -5378,12 +5422,12 @@ async def _check_auto_signal(context):
 
         res = await run_blocking(full_analysis, "BTC", 0)
         if not res or res.get("final") == "NEUTRAL":
-            logger.info(f"auto-signal blocked: full_analysis returned {(res or {}).get('final', 'NO_RESULT')}")
+            logger.info("auto-signal blocked after full_analysis | " + summarize_auto_block(res, "full_analysis"))
             return
         # Auto-signals must pass the strictest SazBot 2.1 DNA gate before being sent.
         res = apply_saz_dna_gate(res, 0, mode="auto")
         if not res or res.get("final") == "NEUTRAL" or res.get("blocked_by_saz_dna"):
-            logger.info(f"auto-signal blocked by DNA gate: reason={(res or {}).get('saz_dna_reason', 'neutralized')}")
+            logger.info("auto-signal blocked by DNA gate | " + summarize_auto_block(res, "dna_gate"))
             return
 
         fl = res.get("frame_lines", [])
@@ -5417,15 +5461,15 @@ async def _check_auto_signal(context):
         # alive even when the swing-level decision says WAIT. This prevents the
         # bot from going completely silent in ranging conditions.
         if not fast_scalp and not is_actionable_trade_decision(res):
-            logger.info("Auto-signal blocked by WAIT/STAY_OUT decision gate (non-scalp).")
+            logger.info("auto-signal blocked by WAIT/STAY_OUT decision gate | " + summarize_auto_block(res, "decision_gate"))
             return
 
         if not (three or strong_partial or timing_rescue or fast_scalp):
-            logger.info(f"auto-signal blocked: alignment fail (buy_f={buy_f}, sell_f={sell_f}, min_frames={MIN_ALIGNMENT_FRAMES}, final={res['final']})")
+            logger.info("auto-signal blocked: alignment fail | " + summarize_auto_block(res, "alignment_gate"))
             return
 
         if is_recent_similar_signal(res):
-            logger.info("auto-signal blocked: similar recent/active setup")
+            logger.info("auto-signal blocked: similar recent/active setup | " + summarize_auto_block(res, "similar_signal_gate"))
             return
 
         signal_type = "fast_scalp" if fast_scalp else ("timing_rescue" if timing_rescue else ("strong_partial" if strong_partial else "full_confluence"))
@@ -5446,17 +5490,24 @@ async def _check_auto_signal(context):
 
         # Do not send a new signal if price is already too far away from the Smart Entry Zone.
         if is_price_too_far_from_entry_zone(res.get("price", price_q), entry_low, entry_high, max_distance_for_setup_grade(res)):
-            logger.info("auto-signal blocked: price too far from entry zone")
+            logger.info(
+                "auto-signal blocked: price too far from entry zone | "
+                f"price={res.get('price', price_q)}, entry_low={entry_low}, entry_high={entry_high}, "
+                f"max_allowed={max_distance_for_setup_grade(res)} | " + summarize_auto_block(res, "entry_distance_gate")
+            )
             return
 
         # Do not re-offer a recently cancelled setup in the same zone/direction.
         if is_recently_cancelled("BTC", res["final"], ep, sig_atr):
-            logger.info("auto-signal blocked: recently cancelled zone")
+            logger.info("auto-signal blocked: recently cancelled zone | " + summarize_auto_block(res, "cancelled_zone_gate"))
             return
         dup = is_duplicate_zone_setup("BTC", res["final"], entry_low, entry_high)
 
         if not (dir_ok and not dup):
-            logger.info(f"auto-signal blocked: dir_ok={dir_ok} (open BUY={not no_buy}, open SELL={not no_sell}), duplicate_zone={dup}")
+            logger.info(
+                f"auto-signal blocked: dir_ok={dir_ok} (open BUY={not no_buy}, open SELL={not no_sell}), duplicate_zone={dup} | "
+                + summarize_auto_block(res, "open_or_duplicate_gate")
+            )
             return
 
         global trade_counter
@@ -6361,6 +6412,18 @@ def _acquire_local_instance_lock():
         logger.warning(f"Could not acquire local instance lock: {e}")
         return None
 
+
+async def telegram_error_handler(update, context):
+    """Prevent noisy stack traces and make 409 diagnosis clearer in Railway logs."""
+    try:
+        err = context.error
+        if isinstance(err, Conflict):
+            logger.warning("Telegram 409 Conflict detected: another old deployment/process briefly polled the same BOT_TOKEN. If this appears only once at startup then disappears, it is usually Railway handover overlap; if repeated, another bot instance is still running.")
+        else:
+            logger.error(f"Telegram application error: {err}")
+    except Exception as e:
+        logger.error(f"telegram_error_handler failed: {e}")
+
 # ==================== Main ====================
 def main():
     print("BUILD_ID:", BUILD_ID)
@@ -6381,6 +6444,7 @@ def main():
     app.add_handler(CommandHandler("edge", edge_command))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_error_handler(telegram_error_handler)
 
     # Schedule background jobs only if JobQueue is available.
     # This prevents /start from failing if python-telegram-bot[job-queue] is not installed.
