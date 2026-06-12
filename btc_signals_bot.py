@@ -30,18 +30,49 @@ else:
     ALLOWED_USERS = _DEFAULT_ALLOWED_USERS
 
 
-MIN_CONFIDENCE    = 68
+def env_int(name, default, min_value=None, max_value=None):
+    try:
+        value = int(float(os.environ.get(name, default)))
+        if min_value is not None:
+            value = max(min_value, value)
+        if max_value is not None:
+            value = min(max_value, value)
+        return value
+    except Exception:
+        return default
+
+def env_float(name, default, min_value=None, max_value=None):
+    try:
+        value = float(os.environ.get(name, default))
+        if min_value is not None:
+            value = max(min_value, value)
+        if max_value is not None:
+            value = min(max_value, value)
+        return value
+    except Exception:
+        return default
+
+def env_bool(name, default=False):
+    raw = os.environ.get(name, str(default)).strip().lower()
+    return raw in ("1", "true", "yes", "y", "on")
+
+
+MIN_CONFIDENCE    = env_int("MIN_SIGNAL_CONFIDENCE", 68, 45, 90)
 AUTO_SIGNAL_MODE  = os.environ.get("AUTO_SIGNAL_MODE", "balanced").lower()  # conservative | balanced | active
-FAST_SCALP_ENABLED = os.environ.get("FAST_SCALP_ENABLED", "true").lower() == "true"
-FAST_SCALP_MIN_QUALITY = int(os.environ.get("FAST_SCALP_MIN_QUALITY", "55"))
-FAST_SCALP_MAX_REGRET = int(os.environ.get("FAST_SCALP_MAX_REGRET", "72"))
-FAST_SCALP_COOLDOWN = int(os.environ.get("FAST_SCALP_COOLDOWN", "1800"))
-FRAME_MIN_CONFIDENCE = 60  # Minimum confidence required for a timeframe to be counted in confluence
+FAST_SCALP_ENABLED = env_bool("FAST_SCALP_ENABLED", True)
+FAST_SCALP_MIN_QUALITY = env_int("FAST_SCALP_MIN_QUALITY", 55, 40, 90)
+FAST_SCALP_MAX_REGRET = env_int("FAST_SCALP_MAX_REGRET", 72, 40, 95)
+FAST_SCALP_COOLDOWN = env_int("FAST_SCALP_COOLDOWN", 1800, 60, 86400)
+MIN_ALIGNMENT_FRAMES = env_int("MIN_ALIGNMENT_FRAMES", 2, 1, 3)
+MIN_DECISION_SCORE = env_int("MIN_DECISION_SCORE", 55, 40, 85)
+FRAME_MIN_CONFIDENCE = env_int("FRAME_MIN_CONFIDENCE", 60, 40, 90)  # Minimum confidence required for a timeframe to be counted in confluence
+EARLY_BIAS_ALERTS = env_bool("EARLY_BIAS_ALERTS", True)
+SIMILAR_SIGNAL_COOLDOWN_MINUTES = env_int("SIMILAR_SIGNAL_COOLDOWN_MINUTES", 120, 10, 1440)
 ENTRY_ZONE_ATR_FACTOR = 0.25  # Entry zone width on each side of smart entry, based on ATR
 PRICE_EXPIRY_PCT  = 1.0   # Pending signal expires if BTC moves this % away from signal price
 SIGNAL_EXPIRY     = 60 * 60  # Pending signal expires after 1 hour
 PENDING_SIGNAL_MIN_AGE_BEFORE_EXPIRY = 5 * 60  # Do not expire a fresh signal in the same monitoring cycle
-SPAM_COOLDOWN     = 1800
+SPAM_COOLDOWN     = env_int("SPAM_COOLDOWN_SECONDS", 1800, 60, 86400)
 
 # Auto-signal visibility/tuning.
 # conservative = fewer trades, balanced = normal, active = less silence.
@@ -50,7 +81,10 @@ AUTO_SIGNAL_PROFILES = {
     "balanced":     {"rsi_low": 43, "rsi_high": 57, "fib_pct": 1.00, "prefilter_log_sec": 600},
     "active":       {"rsi_low": 45, "rsi_high": 55, "fib_pct": 1.20, "prefilter_log_sec": 300},
 }
-AUTO_PROFILE = AUTO_SIGNAL_PROFILES.get(AUTO_SIGNAL_MODE, AUTO_SIGNAL_PROFILES["balanced"])
+AUTO_PROFILE = dict(AUTO_SIGNAL_PROFILES.get(AUTO_SIGNAL_MODE, AUTO_SIGNAL_PROFILES["balanced"]))
+AUTO_PROFILE["rsi_low"] = env_float("RSI_LOWER", AUTO_PROFILE["rsi_low"], 20, 55)
+AUTO_PROFILE["rsi_high"] = env_float("RSI_UPPER", AUTO_PROFILE["rsi_high"], 45, 80)
+AUTO_PROFILE["fib_pct"] = env_float("FIB_PROXIMITY_PERCENT", AUTO_PROFILE["fib_pct"], 0.1, 5.0)
 CACHE_TTL         = 900
 PENDING_MAX_AGE   = 48      # hours: stale pending auto-cancels after this
 
@@ -62,13 +96,13 @@ def pending_max_age_for_regime(regime="UNKNOWN"):
         return 24 * 60 * 60
     return PENDING_MAX_AGE * 60 * 60
 OVERRIDE_MIN_QUALIFIED_FRAMES = 2  # Higher-risk override still requires 2 qualified frames in the same direction
-OVERRIDE_MAX_DISTANCE_FROM_ZONE_PCT = 1.0  # Block override if price is too far beyond the entry zone
+OVERRIDE_MAX_DISTANCE_FROM_ZONE_PCT = env_float("OVERRIDE_MAX_DISTANCE_FROM_ENTRY", 1.0, 0.3, 8.0)  # Block override if price is too far beyond the entry zone
 # Decision-engine upgrades
-MAX_DISTANCE_FROM_ZONE_PCT = 1.5  # Pending setup expires when price moves too far away from the smart entry zone
-SETUP_COOLDOWN_HOURS = 6          # Do not re-offer the same cancelled setup during this window
-DAILY_STRONG_CONF = 70            # Strong daily trend blocks counter-trend overrides
-OVERRIDE_MIN_AVG_CONF = 65        # Higher-risk scenario needs enough average confidence
-FRAME_THRESHOLDS = {"1h": 60, "4h": 60, "1d": 65}
+MAX_DISTANCE_FROM_ZONE_PCT = env_float("MAX_DISTANCE_FROM_ENTRY", 1.5, 0.3, 8.0)  # Pending setup expires when price moves too far away from the smart entry zone
+SETUP_COOLDOWN_HOURS = env_int("SETUP_COOLDOWN_HOURS", 6, 1, 72)          # Do not re-offer the same cancelled setup during this window
+DAILY_STRONG_CONF = env_int("DAILY_STRONG_CONF", 70, 55, 90)            # Strong daily trend blocks counter-trend overrides
+OVERRIDE_MIN_AVG_CONF = env_int("OVERRIDE_MIN_AVG_CONF", 65, 45, 85)        # Higher-risk scenario needs enough average confidence
+FRAME_THRESHOLDS = {"1h": FRAME_MIN_CONFIDENCE, "4h": FRAME_MIN_CONFIDENCE, "1d": max(FRAME_MIN_CONFIDENCE, 65)}
 FRAME_WEIGHTS = {"1h": 0.20, "4h": 0.30, "1d": 0.50}
 WEIGHTED_DIRECT_THRESHOLD = 0.80
 WEIGHTED_PARTIAL_THRESHOLD = 0.50
@@ -1260,7 +1294,9 @@ def setup_similarity_score(a, b):
         logger.warning("setup_similarity_score failed: " + str(e))
         return 0
 
-def is_recent_similar_signal(res, lookback_seconds=7200, threshold=85):
+def is_recent_similar_signal(res, lookback_seconds=None, threshold=85):
+    if lookback_seconds is None:
+        lookback_seconds = SIMILAR_SIGNAL_COOLDOWN_MINUTES * 60
     """Avoid repeating nearly identical auto signals."""
     try:
         now = now_ts()
@@ -1500,7 +1536,7 @@ def saz_decision_intelligence(res, uid=0, persist=True, refresh=False):
     else:
         opportunity = "LOW"
 
-    if quality < 55 or regret > 68 or opportunity_cost >= 78 or crowd_exhaustion >= 85 or (final == "NEUTRAL" and mixed_frames):
+    if quality < MIN_DECISION_SCORE or regret > 68 or opportunity_cost >= 78 or crowd_exhaustion >= 85 or (final == "NEUTRAL" and mixed_frames):
         decision = "STAY_OUT"
     elif opportunity == "LOW":
         decision = "WAIT"
@@ -1778,7 +1814,7 @@ DIRECTIONAL_RESCUE_REGRET_REDUCTION = 6
 
 SAZ_DNA_LIMITS = {
     "manual":   {"min_quality": 45, "max_regret": 82, "max_opp_cost": 78, "max_exhaustion": 84},
-    "auto":     {"min_quality": 52, "max_regret": 78, "max_opp_cost": 72, "max_exhaustion": 76},
+    "auto":     {"min_quality": MIN_DECISION_SCORE, "max_regret": 78, "max_opp_cost": 72, "max_exhaustion": 76},
     "override": {"min_quality": 50, "max_regret": 78, "max_opp_cost": 75, "max_exhaustion": 78},
     "health":   {"min_quality": 50, "max_regret": 76, "max_opp_cost": 82, "max_exhaustion": 88},
 }
@@ -5359,8 +5395,8 @@ async def _check_auto_signal(context):
         # For BTC, do not kill every setup just because one timeframe is temporarily opposite.
         # Full alignment is best; strong directional agreement can still be tradable if DNA approves.
         strong_partial = (
-            (res["final"] == "BUY" and buy_f >= 2 and sell_f <= 1) or
-            (res["final"] == "SELL" and sell_f >= 2 and buy_f <= 1)
+            (res["final"] == "BUY" and buy_f >= MIN_ALIGNMENT_FRAMES and sell_f <= (3 - MIN_ALIGNMENT_FRAMES)) or
+            (res["final"] == "SELL" and sell_f >= MIN_ALIGNMENT_FRAMES and buy_f <= (3 - MIN_ALIGNMENT_FRAMES))
         )
 
         # Timing rescue: 1H + Daily alignment can be a valid BTC scalp/swing even when 4H is lagging.
@@ -5385,7 +5421,7 @@ async def _check_auto_signal(context):
             return
 
         if not (three or strong_partial or timing_rescue or fast_scalp):
-            logger.info(f"auto-signal blocked: alignment fail (buy_f={buy_f}, sell_f={sell_f}, final={res['final']})")
+            logger.info(f"auto-signal blocked: alignment fail (buy_f={buy_f}, sell_f={sell_f}, min_frames={MIN_ALIGNMENT_FRAMES}, final={res['final']})")
             return
 
         if is_recent_similar_signal(res):
@@ -6011,6 +6047,9 @@ async def send_smart_alerts(context):
     """Smart alerts now act as Early Bias Alerts.
     They describe what changed, SazBot's preferred direction if any, and whether a real trade signal is ready.
     """
+    if not EARLY_BIAS_ALERTS:
+        logger.info("smart alerts skipped: EARLY_BIAS_ALERTS=false")
+        return
     try:
         df = await run_blocking(get_data, "BTC", days=7, interval="hourly")
         if df is None or len(df) < 30:
@@ -6355,7 +6394,12 @@ def main():
         jq.run_repeating(send_news,            interval=4*60*60, first=300)
         jq.run_daily(send_daily_summary, time=__import__("datetime").time(6, 0, 0))
 
-    logger.info(f"🟡 SazBot - Ready! auto_mode={AUTO_SIGNAL_MODE}, profile={AUTO_PROFILE}")
+    logger.info(
+        f"🟡 SazBot - Ready! auto_mode={AUTO_SIGNAL_MODE}, profile={AUTO_PROFILE}, "
+        f"min_conf={MIN_CONFIDENCE}, min_frames={MIN_ALIGNMENT_FRAMES}, "
+        f"min_decision={MIN_DECISION_SCORE}, max_entry_dist={MAX_DISTANCE_FROM_ZONE_PCT}, "
+        f"similar_cooldown_min={SIMILAR_SIGNAL_COOLDOWN_MINUTES}, early_bias={EARLY_BIAS_ALERTS}"
+    )
     print("SazBot polling started")
     # drop_pending_updates helps after restarts. A 409 Conflict still means another
     # deployment/process is polling the same Telegram token and must be stopped.
