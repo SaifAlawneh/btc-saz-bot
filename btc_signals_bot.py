@@ -101,7 +101,7 @@ def register_contrarian_trap_signal():
 
 
 
-BUILD_ID = "SAZBOT_V3_VISIBILITY_2026_06_12"
+BUILD_ID = "SAZBOT_V3_ASIAN_FIX_2026_06_12"
 
 user_languages        = {}
 active_trades         = []
@@ -2931,7 +2931,13 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
     conf_txt = t(uid, conf_key)
 
     if session == "ASIAN" and max(buy_c, sel_c) < 2:
-        return None
+        # ✅ FIX: this silent None masqueraded as "data unavailable" in manual
+        # handlers and killed ALL auto signals (incl. fast scalps) through the
+        # entire Asian session. Manual requests (uid != 0) now bypass it — the
+        # user explicitly asked. Auto keeps the filter, but logged.
+        if uid == 0:
+            logger.info(f"asian session filter: frames not aligned (buy={buy_c}, sell={sel_c})")
+            return None
 
     # Two-frame: return NEUTRAL with majority so button_handler shows override button
     if final == "NEUTRAL" and majority:
