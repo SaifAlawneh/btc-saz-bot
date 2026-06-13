@@ -64,6 +64,10 @@ FAST_SCALP_ENABLED = env_bool("FAST_SCALP_ENABLED", True)
 FAST_SCALP_MIN_QUALITY = env_int("FAST_SCALP_MIN_QUALITY", 55, 40, 90)
 FAST_SCALP_MAX_REGRET = env_int("FAST_SCALP_MAX_REGRET", 72, 40, 95)
 FAST_SCALP_COOLDOWN = env_int("FAST_SCALP_COOLDOWN", 1800, 60, 86400)
+ASIAN_FAST_SCALP_ENABLED = env_bool("ASIAN_FAST_SCALP_ENABLED", True)
+FAST_SCALP_ALLOW_SINGLE_FRAME = env_bool("FAST_SCALP_ALLOW_SINGLE_FRAME", True)
+FAST_SCALP_MIN_SINGLE_CONF = env_int("FAST_SCALP_MIN_SINGLE_CONF", 55, 45, 90)
+ASIAN_FAST_SCALP_MIN_QUALITY = env_int("ASIAN_FAST_SCALP_MIN_QUALITY", 45, 40, 75)
 MIN_ALIGNMENT_FRAMES = env_int("MIN_ALIGNMENT_FRAMES", 2, 1, 3)
 MIN_DECISION_SCORE = env_int("MIN_DECISION_SCORE", 55, 40, 85)
 FRAME_MIN_CONFIDENCE = env_int("FRAME_MIN_CONFIDENCE", 60, 40, 90)  # Minimum confidence required for a timeframe to be counted in confluence
@@ -73,6 +77,7 @@ ENTRY_ZONE_ATR_FACTOR = 0.25  # Entry zone width on each side of smart entry, ba
 PRICE_EXPIRY_PCT  = 1.0   # Pending signal expires if BTC moves this % away from signal price
 SIGNAL_EXPIRY     = 60 * 60  # Pending signal expires after 1 hour
 PENDING_SIGNAL_MIN_AGE_BEFORE_EXPIRY = 5 * 60  # Do not expire a fresh signal in the same monitoring cycle
+PENDING_SUPPORT_ANALYSIS_TTL = env_int("PENDING_SUPPORT_ANALYSIS_TTL", 180, 30, 1800)  # Throttle full_analysis calls used only for expiry validation
 SPAM_COOLDOWN     = env_int("SPAM_COOLDOWN_SECONDS", 1800, 60, 86400)
 
 # Auto-signal visibility/tuning.
@@ -146,7 +151,7 @@ def register_contrarian_trap_signal():
 
 
 
-BUILD_ID = "SAZBOT_V3_ASIAN_FIX_2026_06_12"
+BUILD_ID = "SAZBOT_V3_SCALP_RISK_2026_06_13"
 
 user_languages        = {}
 active_trades         = []
@@ -411,12 +416,69 @@ def get_trades_lock():
 
 
 def count_qualified_frame_lines(frame_lines):
-    """Count only timeframe lines that passed FRAME_MIN_CONFIDENCE.
-    This avoids treating low-confidence frames as fully aligned just because the direction text matches.
+    """Legacy fallback: count qualified frame lines from display text.
+    New logic should prefer frame_state via count_qualified_frames(res) so future
+    wording/translation changes do not break signal validation silently.
     """
     buy = sum(1 for f in frame_lines if "BUY" in f and "✅" in f)
     sell = sum(1 for f in frame_lines if "SELL" in f and "✅" in f)
     return buy, sell
+
+def build_frame_state(results):
+    """Return display-independent timeframe state from analyze_frame outputs.
+    This is the source of truth for timing_rescue / fast_scalp / expiry checks.
+    """
+    state = {}
+    for label, r in (results or {}).items():
+        try:
+            direction = str(r.get("direction", "NEUTRAL") or "NEUTRAL").upper()
+            conf = int(float(r.get("conf", 0) or 0))
+            state[label] = {
+                "direction": direction,
+                "conf": conf,
+                "qualified": bool(direction != "NEUTRAL" and conf >= frame_threshold(label)),
+                "threshold": frame_threshold(label),
+                "strength": r.get("strength", direction),
+            }
+        except Exception:
+            continue
+    return state
+
+def count_qualified_frames(res_or_lines):
+    """Count qualified BUY/SELL frames from logical state, falling back to old text parsing."""
+    try:
+        if isinstance(res_or_lines, dict):
+            fs = res_or_lines.get("frame_state") or {}
+            if fs:
+                buy = sum(1 for v in fs.values() if v.get("direction") == "BUY" and v.get("qualified"))
+                sell = sum(1 for v in fs.values() if v.get("direction") == "SELL" and v.get("qualified"))
+                return buy, sell
+            return count_qualified_frame_lines(res_or_lines.get("frame_lines", []) or [])
+        return count_qualified_frame_lines(res_or_lines or [])
+    except Exception:
+        return (0, 0)
+
+def frame_has_direction(res, frame, direction, qualified_only=False):
+    """Display-independent frame direction check used by timing rescue and fast scalp."""
+    direction = str(direction or "").upper()
+    try:
+        fs = (res or {}).get("frame_state") or {}
+        if fs and frame in fs:
+            v = fs.get(frame) or {}
+            if v.get("direction") != direction:
+                return False
+            return bool(v.get("qualified")) if qualified_only else True
+        # Fallback only for legacy saved signals that predate frame_state.
+        txt = " ".join((res or {}).get("frame_lines", []) or [])
+        if frame == "1h":
+            return (f"1H: {direction}" in txt) or (f"ساعة: {direction}" in txt)
+        if frame == "4h":
+            return (f"4H: {direction}" in txt) or (f"4 ساعات: {direction}" in txt)
+        if frame == "1d":
+            return (f"Daily: {direction}" in txt) or (f"1D: {direction}" in txt) or (f"يومي: {direction}" in txt)
+    except Exception:
+        pass
+    return False
 
 def entry_zone_from_trade(entry, atr):
     width = max(float(atr or 0) * ENTRY_ZONE_ATR_FACTOR, float(entry) * 0.0005)
@@ -462,6 +524,10 @@ def max_distance_for_setup_grade(res, default_pct=MAX_DISTANCE_FROM_ZONE_PCT):
 
 
 def is_price_too_far_from_entry_zone(price, entry_low, entry_high, max_pct=MAX_DISTANCE_FROM_ZONE_PCT):
+    """True when price is farther than max_pct from nearest zone edge.
+    This uses absolute percentage distance from price/edge, not entry-zone width,
+    so entry_low == entry_high remains safe.
+    """
     return distance_from_entry_zone_pct(price, entry_low, entry_high) > max_pct
 
 
@@ -1930,8 +1996,7 @@ def cap_override_decision_metrics(res, original_res=None, uid=0):
         r = int(m.get("regret", 100) or 100)
 
         # Check actual support/opposition from qualified frames.
-        fls = res.get("frame_lines", [])
-        buy_f, sell_f = count_qualified_frame_lines(fls)
+        buy_f, sell_f = count_qualified_frames(res)
         final_dir = res.get("final")
         support = buy_f if final_dir == "BUY" else sell_f
         oppose = sell_f if final_dir == "BUY" else buy_f
@@ -2976,15 +3041,39 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
 
     final, majority, frames_conf, conf_key, buy_c, sel_c, buy_w, sell_w = weighted_frame_decision(results, relaxed=relaxed)
     conf_txt = t(uid, conf_key)
+    asian_fast_scalp_candidate = False
 
     if session == "ASIAN" and max(buy_c, sel_c) < 2:
-        # ✅ FIX: this silent None masqueraded as "data unavailable" in manual
-        # handlers and killed ALL auto signals (incl. fast scalps) through the
-        # entire Asian session. Manual requests (uid != 0) now bypass it — the
-        # user explicitly asked. Auto keeps the filter, but logged.
+        # Asian hours often create fake moves. Keep elite 3-target setups strict,
+        # but allow a separate fast-scalp lane with explicit higher risk when
+        # one qualified timeframe is pointing clearly and price timing is close.
         if uid == 0:
-            logger.info(f"asian session filter: frames not aligned (buy={buy_c}, sell={sel_c})")
-            return None
+            if ASIAN_FAST_SCALP_ENABLED and FAST_SCALP_ALLOW_SINGLE_FRAME and max(buy_c, sel_c) == 1:
+                scalp_dir = "BUY" if buy_c > sel_c else "SELL"
+                scalp_conf = 0
+                for _label, _r in results.items():
+                    if _r.get("direction") == scalp_dir and _r.get("conf", 0) >= frame_threshold(_label):
+                        scalp_conf = max(scalp_conf, int(_r.get("conf", 0)))
+                if scalp_conf >= FAST_SCALP_MIN_SINGLE_CONF:
+                    final = scalp_dir
+                    majority = scalp_dir
+                    frames_conf = max(FAST_SCALP_MIN_SINGLE_CONF, scalp_conf)
+                    conf_key = "partial_confluence"
+                    conf_txt = t(uid, conf_key)
+                    asian_fast_scalp_candidate = True
+                    logger.info(
+                        f"asian session fast-scalp lane: dir={scalp_dir}, conf={scalp_conf}, "
+                        f"buy={buy_c}, sell={sel_c}, min_single_conf={FAST_SCALP_MIN_SINGLE_CONF}"
+                    )
+                else:
+                    logger.info(
+                        f"asian session filter: single frame too weak (dir={scalp_dir}, conf={scalp_conf}, "
+                        f"min_single_conf={FAST_SCALP_MIN_SINGLE_CONF})"
+                    )
+                    return None
+            else:
+                logger.info(f"asian session filter: frames not aligned (buy={buy_c}, sell={sel_c})")
+                return None
 
     # Two-frame: return NEUTRAL with majority so button_handler shows override button
     if final == "NEUTRAL" and majority:
@@ -2992,6 +3081,7 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
         fib_l2, fib_e2, sh2, sl2 = calculate_fibonacci(df_1h)
         nf2, fk2, _ = find_nearest_fib(main2["price"], fib_l2, "NEUTRAL") if fib_l2 else (main2["price"],"50.0",0)
         kf2 = ["Fib "+k+"%  $"+"{:,.2f}".format(v) for k,v in sorted(fib_l2.items(), key=lambda x:float(x[0]))][:5]
+        fl2_state = build_frame_state(results)
         fl2 = []
         icons2 = {"1h":t(uid,"frame_1h"),"4h":t(uid,"frame_4h"),"1d":t(uid,"frame_1d")}
         for k,r in results.items():
@@ -3003,7 +3093,7 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
                 "confluence_txt":conf_txt,"base_conf":frames_conf,
                 "price":main2["price"],"tp1":0,"tp2":0,"tp3":0,"sl":0,"rr":0,"atr":main2["atr"],
                 "risk_pct":50,"risk_label":"","risk_msg":"",
-                "frame_lines":fl2,"rsi":main2["rsi"],"support":main2["support"],"resistance":main2["resistance"],
+                "frame_lines":fl2,"frame_state":fl2_state,"rsi":main2["rsi"],"support":main2["support"],"resistance":main2["resistance"],
                 "macd_bull":main2["macd_bull"],"ema_bull":main2["ema_bull"],
                 "ema_bear":main2["ema_bear"],"bb_zone":main2["bb_zone"],
                 "fib_levels":fib_l2,"fib_ext":fib_e2,"key_fibs":kf2,
@@ -3018,6 +3108,7 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
         fib_l2, fib_e2, sh2, sl2 = calculate_fibonacci(df_1h)
         nf2, fk2, _ = find_nearest_fib(main2["price"], fib_l2, "NEUTRAL") if fib_l2 else (main2["price"],"50.0",0)
         kf2 = ["Fib "+k+"%  $"+"{:,.2f}".format(v) for k,v in sorted(fib_l2.items(), key=lambda x:float(x[0]))][:5]
+        fl2_state = build_frame_state(results)
         fl2 = []
         icons2 = {"1h":t(uid,"frame_1h"),"4h":t(uid,"frame_4h"),"1d":t(uid,"frame_1d")}
         for k,r in results.items():
@@ -3028,7 +3119,7 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
         return {"final":"NEUTRAL","asset":asset,"confluence_txt":t(uid,"no_confluence"),"base_conf":0,"majority":majority,
                 "price":main2["price"],"tp1":0,"tp2":0,"tp3":0,"sl":0,"rr":0,"atr":main2["atr"],
                 "risk_pct":50,"risk_label":t(uid,"risk_med"),"risk_msg":t(uid,"risk_med_msg"),
-                "frame_lines":fl2,"rsi":main2["rsi"],"support":main2["support"],"resistance":main2["resistance"],
+                "frame_lines":fl2,"frame_state":fl2_state,"rsi":main2["rsi"],"support":main2["support"],"resistance":main2["resistance"],
                 "macd_bull":main2["macd_bull"],"ema_bull":main2["ema_bull"],
                 "ema_bear":main2["ema_bear"],"bb_zone":main2["bb_zone"],
                 "fib_levels":fib_l2,"fib_ext":fib_e2,"key_fibs":kf2,
@@ -3092,6 +3183,7 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
     elif risk < 55: rl=t(uid,"risk_med");  rm=t(uid,"risk_med_msg")
     else:           rl=t(uid,"risk_high"); rm=t(uid,"risk_high_msg")
 
+    frame_state = build_frame_state(results)
     frame_lines = []
     icons = {"1h":t(uid,"frame_1h"),"4h":t(uid,"frame_4h"),"1d":t(uid,"frame_1d")}
     for k, r in results.items():
@@ -3182,7 +3274,7 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
         return {"final":"NEUTRAL","asset":asset,"confluence_txt":t(uid,"no_confluence"),"base_conf":0,"majority":None,
                 "price":price,"tp1":0,"tp2":0,"tp3":0,"sl":0,"rr":0,"atr":atr,
                 "risk_pct":60,"risk_label":t(uid,"risk_med"),"risk_msg":t(uid,"risk_med_msg"),
-                "frame_lines":frame_lines,"rsi":main["rsi"],"support":main["support"],"resistance":main["resistance"],
+                "frame_lines":frame_lines,"frame_state":frame_state,"rsi":main["rsi"],"support":main["support"],"resistance":main["resistance"],
                 "macd_bull":main["macd_bull"],"ema_bull":main["ema_bull"],"ema_bear":main["ema_bear"],"bb_zone":main["bb_zone"],
                 "fib_levels":fib_levels,"fib_ext":fib_ext,"key_fibs":key_fibs[:5],"nearest_fib":nearest_fib,"fib_key":fib_key,
                 "swing_h":swing_h,"swing_l":swing_l,"weekly_trend":weekly_trend,"regime":regime,"regime_strength":regime_strength,
@@ -3239,6 +3331,7 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
 
     result = {
         "final": final, "asset": asset,
+        "asian_fast_scalp": asian_fast_scalp_candidate,
         "risk_warnings": risk_warnings, "overall_risk": overall_risk,
         "weekly_trend": weekly_trend, "regime": regime, "regime_strength": regime_strength,
         "monthly_bias": monthly_bias, "divergence": divergence,
@@ -3253,7 +3346,7 @@ def full_analysis(asset="BTC", uid=0, relaxed=False):
         "price": price, "entry_price": entry_price, "entry_low": entry_low, "entry_high": entry_high, "entry_reason": entry_reason, "tp1": tp1, "tp2": tp2, "tp3": tp3,
         "sl": sl, "rr": rr, "atr": atr,
         "risk_pct": risk, "risk_label": rl, "risk_msg": rm,
-        "frame_lines": frame_lines, "rsi": main["rsi"],
+        "frame_lines": frame_lines, "frame_state": frame_state, "rsi": main["rsi"],
         "support": main["support"], "resistance": main["resistance"],
         "macd_bull": main["macd_bull"], "ema_bull": main["ema_bull"],
         "ema_bear": main["ema_bear"], "bb_zone": main["bb_zone"],
@@ -5154,17 +5247,22 @@ def is_fast_scalp_candidate(res, timing_rescue=False):
             return False
         quality = float(m.get("quality", 0) or 0)
         regret = float(m.get("regret", 100) or 100)
-        if quality < FAST_SCALP_MIN_QUALITY or regret > FAST_SCALP_MAX_REGRET:
+        min_q = ASIAN_FAST_SCALP_MIN_QUALITY if res.get("asian_fast_scalp") else FAST_SCALP_MIN_QUALITY
+        if quality < min_q or regret > FAST_SCALP_MAX_REGRET:
             return False
 
         # Needs a real directional story, not random C noise.
-        fls = res.get("frame_lines", [])
-        buy_f, sell_f = count_qualified_frame_lines(fls)
+        buy_f, sell_f = count_qualified_frames(res)
         final_dir = res.get("final")
         support = buy_f if final_dir == "BUY" else sell_f
         oppose = sell_f if final_dir == "BUY" else buy_f
 
         if support >= 2 and oppose <= 1:
+            return True
+        # Asian single-frame scalps are intentionally separated from elite
+        # 3-target trades. They require no qualified opposition and are labelled
+        # higher risk in the message.
+        if res.get("asian_fast_scalp") and support >= 1 and oppose == 0:
             return True
         if timing_rescue:
             return True
@@ -5179,6 +5277,12 @@ def build_fast_scalp_msg(res, uid=0):
     lang = user_languages.get(uid, "ar")
     m = res.get("decision_metrics") or saz_decision_intelligence(res, uid, persist=False, refresh=False)
     quality = int(m.get("quality", 0) or 0)
+    regret = int(m.get("regret", 100) or 100)
+    risk_label = "🔴 عالية" if lang == "ar" else "🔴 High"
+    risk_note = "استخدم حجم أصغر واعتبرها مضاربة قصيرة فقط." if lang == "ar" else "Use smaller size and treat it as a short scalp only."
+    if quality >= 65 and regret <= 58:
+        risk_label = "🟡 متوسطة" if lang == "ar" else "🟡 Medium"
+        risk_note = "مقبولة كمضاربة، لكن ليست صفقة توافق كامل." if lang == "ar" else "Acceptable as a scalp, but not a full-confluence trade."
     direction = res.get("final", "")
     price = float(res.get("price", 0) or 0)
     entry = float(res.get("entry_price", price) or price)
@@ -5195,8 +5299,9 @@ def build_fast_scalp_msg(res, uid=0):
             "₿ BTC/USD",
             "",
             f"الاتجاه: {dir_txt}",
-            f"التصنيف: 🟠 C+ Setup",
+            f"التصنيف: 🟠 Scalp C Setup",
             f"جودة السوق: {quality}/100",
+            f"درجة المخاطرة: {risk_label}",
             "",
             f"السعر الحالي: ${price:,.2f}",
             f"منطقة الدخول: ${entry_low:,.2f} — ${entry_high:,.2f}",
@@ -5206,7 +5311,8 @@ def build_fast_scalp_msg(res, uid=0):
             f"TP2: ${tp2:,.2f}",
             f"SL: ${sl:,.2f}",
             "",
-            "⚠️ هذه ليست من أفضل الفرص؛ هي مضاربة سريعة فقط. استخدم حجم أصغر ولا تطارد السعر إذا ابتعد عن منطقة الدخول.",
+            "🎯 هذه مضاربة سريعة: التركيز على TP1 وTP2 فقط. صفقات TP3 تبقى للفرص القوية كاملة التوافق.",
+            f"⚠️ {risk_note} لا تطارد السعر إذا ابتعد عن منطقة الدخول.",
             "",
             f"🕐 {t(uid,'updated_gmt')}: {gmt_now()}",
             t(uid,"educational_footer"),
@@ -5218,8 +5324,9 @@ def build_fast_scalp_msg(res, uid=0):
             "₿ BTC/USD",
             "",
             f"Direction: {dir_txt}",
-            f"Grade: 🟠 C+ Setup",
+            f"Grade: 🟠 Scalp C Setup",
             f"Market Quality: {quality}/100",
+            f"Risk Degree: {risk_label}",
             "",
             f"Current Price: ${price:,.2f}",
             f"Entry Zone: ${entry_low:,.2f} — ${entry_high:,.2f}",
@@ -5229,7 +5336,8 @@ def build_fast_scalp_msg(res, uid=0):
             f"TP2: ${tp2:,.2f}",
             f"SL: ${sl:,.2f}",
             "",
-            "⚠️ This is not an elite setup; it is a fast scalp only. Use smaller size and do not chase price outside the entry zone.",
+            "🎯 Fast scalp: focus on TP1 and TP2 only. TP3 trades remain reserved for strong full-confluence setups.",
+            f"⚠️ {risk_note} Do not chase price outside the entry zone.",
             "",
             f"🕐 {t(uid,'updated_gmt')}: {gmt_now()}",
             t(uid,"educational_footer"),
@@ -5444,12 +5552,10 @@ async def _check_auto_signal(context):
         )
 
         # Timing rescue: 1H + Daily alignment can be a valid BTC scalp/swing even when 4H is lagging.
-        frame_txt = " ".join(res.get("frame_lines", []))
+        # Use logical frame_state instead of matching translated display strings.
         timing_rescue = (
-            (res["final"] == "SELL" and "1H: SELL" in frame_txt and "Daily: SELL" in frame_txt) or
-            (res["final"] == "BUY" and "1H: BUY" in frame_txt and "Daily: BUY" in frame_txt) or
-            (res["final"] == "SELL" and "ساعة: SELL" in frame_txt and "يومي: SELL" in frame_txt) or
-            (res["final"] == "BUY" and "ساعة: BUY" in frame_txt and "يومي: BUY" in frame_txt)
+            (res["final"] == "SELL" and frame_has_direction(res, "1h", "SELL") and frame_has_direction(res, "1d", "SELL")) or
+            (res["final"] == "BUY" and frame_has_direction(res, "1h", "BUY") and frame_has_direction(res, "1d", "BUY"))
         )
 
         fast_scalp = is_fast_scalp_candidate(res, timing_rescue=timing_rescue)
@@ -5472,7 +5578,7 @@ async def _check_auto_signal(context):
             logger.info("auto-signal blocked: similar recent/active setup | " + summarize_auto_block(res, "similar_signal_gate"))
             return
 
-        signal_type = "fast_scalp" if fast_scalp else ("timing_rescue" if timing_rescue else ("strong_partial" if strong_partial else "full_confluence"))
+        signal_type = "asian_fast_scalp" if (fast_scalp and res.get("asian_fast_scalp")) else ("fast_scalp" if fast_scalp else ("timing_rescue" if timing_rescue else ("strong_partial" if strong_partial else "full_confluence")))
         res["signal_type"] = signal_type
         res["entry_reason"] = signal_type
         res["fast_scalp"] = bool(fast_scalp)
@@ -5518,7 +5624,7 @@ async def _check_auto_signal(context):
 
         ev = await run_blocking(get_upcoming_event, 2)
         pending_signals[trade_counter] = {
-            "res": res, "entry_p": ep, "timestamp": n,
+            "id": trade_counter, "res": res, "entry_p": ep, "timestamp": n,
             "entry_low": res.get("entry_low", ep),
             "entry_high": res.get("entry_high", ep),
             "price": res["price"], "chat_ids": [],
@@ -5547,25 +5653,41 @@ async def _check_auto_signal(context):
 
 
 
-def pending_signal_still_supported(sig,fresh):
+def pending_signal_still_supported(sig, fresh):
+    """Validate pending signal support without relying on translated frame text.
+    Missing legacy direction should not trigger accidental immediate expiry.
+    """
     try:
-        sig_dir=sig.get("direction") or (sig.get("res",{}) or {}).get("final")
-        st=sig.get("signal_type") or (sig.get("res",{}) or {}).get("signal_type","full_confluence")
-        if fresh.get("final")!=sig_dir: return False
-        fl=fresh.get("frame_lines",[])
-        b,s=count_qualified_frame_lines(fl)
-        txt=" ".join(fl)
-        if st=="full_confluence":
-            return (b==3 and s==0) if sig_dir=="BUY" else (s==3 and b==0)
-        if st=="strong_partial":
-            return (b>=2 and s<=1) if sig_dir=="BUY" else (s>=2 and b<=1)
-        if st=="timing_rescue":
-            return (("1H: BUY" in txt or "ساعة: BUY" in txt) and ("Daily: BUY" in txt or "يومي: BUY" in txt)) if sig_dir=="BUY" else (("1H: SELL" in txt or "ساعة: SELL" in txt) and ("Daily: SELL" in txt or "يومي: SELL" in txt))
-        if st=="fast_scalp":
-            return (("1H: BUY" in txt or "ساعة: BUY" in txt)) if sig_dir=="BUY" else (("1H: SELL" in txt or "ساعة: SELL" in txt))
+        sig_res = sig.get("res", {}) or {}
+        sig_dir = sig.get("direction") or sig_res.get("final")
+        if sig_dir not in ("BUY", "SELL"):
+            logger.warning(f"pending_signal_still_supported: missing direction for legacy signal id={sig.get('id','?')}; keeping until price/time expiry")
+            return True
+
+        fresh_final = fresh.get("final")
+        if fresh_final in ("BUY", "SELL") and fresh_final != sig_dir:
+            return False
+
+        st = sig.get("signal_type") or sig_res.get("signal_type", "full_confluence")
+        b, s = count_qualified_frames(fresh)
+
+        if st == "full_confluence":
+            return (b == 3 and s == 0) if sig_dir == "BUY" else (s == 3 and b == 0)
+        if st == "strong_partial":
+            return (b >= 2 and s <= 1) if sig_dir == "BUY" else (s >= 2 and b <= 1)
+        if st == "timing_rescue":
+            return frame_has_direction(fresh, "1h", sig_dir) and frame_has_direction(fresh, "1d", sig_dir)
+        if st in ("fast_scalp", "asian_fast_scalp"):
+            # Fast Scalp is intentionally a one-frame lane, unlike full_confluence
+            # which targets all 3 TPs and requires stronger multi-frame agreement.
+            return frame_has_direction(fresh, "1h", sig_dir) or ((b >= 1) if sig_dir == "BUY" else (s >= 1))
         return True
-    except Exception:
-        return False
+    except Exception as e:
+        logger.warning("pending_signal_still_supported failed: " + str(e))
+        return True
+
+_expire_support_cache = {"ts": 0, "fresh": None}
+
 async def _expire_pending_signals(context):
     """Expire pending signals only after a short grace period, using Smart Entry Zone distance and timeframe validation."""
     if not pending_signals:
@@ -5575,7 +5697,14 @@ async def _expire_pending_signals(context):
         cur = await run_blocking(get_btc_price)
         fresh = None
         try:
-            fresh = await run_blocking(full_analysis, "BTC", 0)
+            # full_analysis is relatively expensive; cache it for expiry checks so
+            # a 1-minute monitor loop does not create unnecessary API pressure.
+            if n - float(_expire_support_cache.get("ts", 0) or 0) <= PENDING_SUPPORT_ANALYSIS_TTL:
+                fresh = _expire_support_cache.get("fresh")
+            else:
+                fresh = await run_blocking(full_analysis, "BTC", 0)
+                _expire_support_cache["ts"] = n
+                _expire_support_cache["fresh"] = fresh
         except Exception:
             fresh = None
 
@@ -5589,8 +5718,8 @@ async def _expire_pending_signals(context):
             if age < PENDING_SIGNAL_MIN_AGE_BEFORE_EXPIRY:
                 continue
 
-            sig_res = sig.get("res", {})
-            sig_dir = sig_res.get("final")
+            sig_res = sig.get("res", {}) or {}
+            sig_dir = sig.get("direction") or sig_res.get("final")
             sig_entry = float(sig.get("entry_p", sig_res.get("entry_price", 0)) or 0)
             sig_atr = float(sig_res.get("atr", sig_entry * 0.015) or sig_entry * 0.015)
             entry_low = float(sig.get("entry_low", sig_res.get("entry_low", sig_entry)) or sig_entry)
@@ -6461,6 +6590,8 @@ def main():
     logger.info(
         f"🟡 SazBot - Ready! auto_mode={AUTO_SIGNAL_MODE}, profile={AUTO_PROFILE}, "
         f"min_conf={MIN_CONFIDENCE}, min_frames={MIN_ALIGNMENT_FRAMES}, "
+        f"fast_scalp={FAST_SCALP_ENABLED}, asian_fast_scalp={ASIAN_FAST_SCALP_ENABLED}, single_frame={FAST_SCALP_ALLOW_SINGLE_FRAME}, "
+        f"single_conf={FAST_SCALP_MIN_SINGLE_CONF}, asian_scalp_min_q={ASIAN_FAST_SCALP_MIN_QUALITY}, "
         f"min_decision={MIN_DECISION_SCORE}, max_entry_dist={MAX_DISTANCE_FROM_ZONE_PCT}, "
         f"similar_cooldown_min={SIMILAR_SIGNAL_COOLDOWN_MINUTES}, early_bias={EARLY_BIAS_ALERTS}"
     )
