@@ -1325,15 +1325,10 @@ def crowd_positioning_engine(res, frames=None):
         # crowd stacked AGAINST us = we fade the crowd (tailwind, relieve).
         real_crowd_side = "BUY" if glsr > 1.6 else "SELL" if glsr < 0.65 else None
         if real_crowd_side:
-            # Real crowd data overrides the displayed crowd side. Recalculate the
-            # shown consensus from the real long/short ratio so the message does
-            # not display e.g. "SELL 78%" where 78% came from frame-side BUY
-            # confluence. Decision punishment was already direction-aware; this
-            # fixes the user-facing interpretation.
             # Preserve original frame-based consensus before any real crowd overrides.
-# Reserved for future debugging/logging and crowd-engine diagnostics.
-# Intentionally kept even though it is currently unused.
-frame_consensus = consensus
+            # Reserved for future debugging/logging and crowd-engine diagnostics.
+            # Intentionally kept even though it is currently unused.
+            frame_consensus = consensus
             crowd_side = real_crowd_side
             crowd_source = "real"
             if real_crowd_side == "BUY":
