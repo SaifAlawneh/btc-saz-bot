@@ -3607,15 +3607,24 @@ def build_trade_msg(res, uid=0, auto=False):
     return "\n".join(lines)
 
 def build_update_msg(trade, current_price, update_type, uid=0):
-    dir_txt = t(uid,"buy") if trade["direction"] == "BUY" else t(uid,"sell")
+    dir_txt = _plain_direction(trade["direction"], uid)
+    trade_label = _trade_type_label(trade, uid)
+    label_key = "نوع الصفقة" if user_languages.get(uid, "ar") == "ar" else "Trade type"
     entry_lines = [f"🎯 {t(uid,'entry_zone')}: {format_entry_zone(trade['entry'], trade.get('atr', 0))}"]
     if trade.get("status") == "active" and trade.get("actual_entry"):
         entry_lines.insert(0, f"📍 {t(uid,'actual_entry')}: ${float(trade.get('actual_entry')):,.2f}")
     else:
         entry_lines.append(f"📌 {t(uid,'entry')}: ${trade['entry']:,.2f}")
+    if _is_one_target_trade(trade):
+        target_lines = [f"TP1: ${trade['tp1']:,.2f}"]
+    else:
+        target_lines = [f"TP1: ${trade['tp1']:,.2f}", f"TP2: ${trade['tp2']:,.2f}"]
+        if not _is_two_target_trade(trade):
+            target_lines.append(f"TP3: ${trade['tp3']:,.2f}")
     lines = [
         f"🟡 {t(uid,'update_header')}",
         "₿ BTC/USD",
+        f"🏷️ {label_key}: {trade_label}",
         "",
         f"📊 {t(uid,'direction')}: {dir_txt}",
         *entry_lines,
@@ -3624,9 +3633,7 @@ def build_update_msg(trade, current_price, update_type, uid=0):
         update_type,
         "",
         f"🎯 {t(uid,'targets_section')}",
-        f"TP1: ${trade['tp1']:,.2f}",
-        f"TP2: ${trade['tp2']:,.2f}",
-        f"TP3: ${trade['tp3']:,.2f}",
+        *target_lines,
         f"🛑 SL: ${trade['sl']:,.2f}",
         "",
         f"🕐 {t(uid,'updated_gmt')}: {gmt_now()}",
@@ -4576,15 +4583,17 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             current_price = await run_blocking(get_btc_price)
             for tr in active_trades:
                 tid     = tr.get("id","?")
-                de      = "🔴 SELL" if tr["direction"]=="SELL" else "🟢 BUY"
+                de      = _plain_direction(tr["direction"], uid)
                 ai2     = "₿" if tr["asset"]=="BTC" else "🥇"
                 tp1_hit = "✅" if tr.get("tp1_hit") else "⏳"
                 tp2_hit = "✅" if tr.get("tp2_hit") else "⏳"
                 st      = "⏳ " + t(uid,"status_pending") if tr.get("status")=="pending" else "🟢 " + t(uid,"status_active")
+                trade_label = _trade_type_label(tr, uid)
                 rows = [
                     f"🟡 SazBot | {t(uid,'active_trade')} #{tid}",
                     st,
                     "",
+                    f"🏷️ {'نوع الصفقة' if user_languages.get(uid, 'ar') == 'ar' else 'Trade type'}: {trade_label}",
                     f"📊 {t(uid,'direction')}: {de}",
                 ]
                 if tr.get("status") == "active" and tr.get("actual_entry"):
@@ -4594,12 +4603,15 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                     rows.append(f"🎯 {t(uid,'entry_zone')}: "+format_entry_zone(tr["entry"], tr.get("atr", 0)))
                 if current_price and tr["asset"] == "BTC":
                     rows.append("💵 "+t(uid,"current_price")+": $"+"{:,.2f}".format(current_price))
+                target_rows = [tp1_hit+" TP1: $"+"{:,.2f}".format(tr["tp1"])]
+                if not _is_one_target_trade(tr):
+                    target_rows.append(tp2_hit+" TP2: $"+"{:,.2f}".format(tr["tp2"]))
+                if not _is_scalp_trade(tr):
+                    target_rows.append("⏳ TP3: $"+"{:,.2f}".format(tr["tp3"]))
                 rows += [
                     "",
                     f"🎯 {t(uid,'targets')}",
-                    tp1_hit+" TP1: $"+"{:,.2f}".format(tr["tp1"]),
-                    tp2_hit+" TP2: $"+"{:,.2f}".format(tr["tp2"]),
-                    "⏳ TP3: $"+"{:,.2f}".format(tr["tp3"]),
+                    *target_rows,
                     "🛑 SL: $"+"{:,.2f}".format(tr["sl"]),
                     "",
                     "🕐 "+t(uid,"opened")+": "+tr.get("open_time",""),
@@ -4635,7 +4647,8 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             lines += ["", f"📋 {t(uid,'existing_trades')}"]
             for tr in active_trades:
                 ai2  = "₿" if tr.get("asset") == "BTC" else "🥇"
-                dire = "🔴 SELL" if tr.get("direction") == "SELL" else "🟢 BUY"
+                dire = _plain_direction(tr.get("direction"), uid)
+                trade_label = _trade_type_label(tr, uid)
                 if tr.get("status") == "pending":
                     status = "⏳ " + t(uid,"waiting_entry") + ": " + format_entry_zone(tr["entry"], tr.get("atr", 0))
                 elif tr.get("tp2_hit"):
@@ -4644,13 +4657,20 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                     status = "✅ " + t(uid,"tp1_done")
                 else:
                     status = "🟢 " + t(uid,"active_no_target")
+                target_summary = f"TP1: ${tr['tp1']:,.2f}"
+                if not _is_one_target_trade(tr):
+                    target_summary += f" | TP2: ${tr['tp2']:,.2f}"
+                sl_summary = f"SL: ${tr['sl']:,.2f}"
+                if not _is_scalp_trade(tr):
+                    sl_summary = f"TP3: ${tr['tp3']:,.2f} | " + sl_summary
                 lines += [
                     "",
                     f"{ai2} #{tr.get('id','?')} | {dire}",
+                    f"🏷️ {'نوع الصفقة' if user_languages.get(uid, 'ar') == 'ar' else 'Trade type'}: {trade_label}",
                     f"🎯 {t(uid,'entry_zone')}: {format_entry_zone(tr['entry'], tr.get('atr', 0))}",
                     status,
-                    f"TP1: ${tr['tp1']:,.2f} | TP2: ${tr['tp2']:,.2f}",
-                    f"TP3: ${tr['tp3']:,.2f} | SL: ${tr['sl']:,.2f}",
+                    target_summary,
+                    sl_summary,
                 ]
         else:
             lines += ["", "📭 " + t(uid,"no_existing_trades")]
@@ -4978,6 +4998,186 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
 # 
 #  PENDING TRADE HEALTH REPORT
 # 
+
+
+def _trade_signal_type(trade: dict) -> str:
+    """Return the normalized trade lane/type used by follow-up messages and TP logic."""
+    st = (trade.get("signal_type") or trade.get("entry_reason") or "full_confluence")
+    return str(st).lower()
+
+
+def _is_micro_trade(trade: dict) -> bool:
+    return _trade_signal_type(trade) == "micro_scalp"
+
+
+def _is_fast_trade(trade: dict) -> bool:
+    return _trade_signal_type(trade) in ("fast_scalp", "asian_fast_scalp")
+
+
+def _is_one_target_trade(trade: dict) -> bool:
+    """Micro Scalp is managed with TP1 only. It is a momentum burst, not a multi-target setup."""
+    return _is_micro_trade(trade)
+
+
+def _is_two_target_trade(trade: dict) -> bool:
+    """Fast Scalp lanes are managed with TP1/TP2 only; TP3 remains for Full Signal lanes."""
+    return _is_fast_trade(trade)
+
+
+def _is_scalp_trade(trade: dict) -> bool:
+    """Any scalp lane that must not be reviewed with Full Signal / multi-timeframe follow-up wording."""
+    return _is_one_target_trade(trade) or _is_two_target_trade(trade)
+
+
+def _trade_type_label(trade: dict, uid=0) -> str:
+    lang = user_languages.get(uid, "ar")
+    st = _trade_signal_type(trade)
+    if st == "micro_scalp":
+        return "مضاربة فائقة السرعة" if lang == "ar" else "Micro Scalp"
+    if st in ("fast_scalp", "asian_fast_scalp"):
+        return "مضاربة سريعة" if lang == "ar" else "Fast Scalp"
+    if st == "contrarian_trap":
+        return "صفقة عكس الازدحام" if lang == "ar" else "Contrarian Trap"
+    if st == "timing_rescue":
+        return "فرصة توقيت سريع" if lang == "ar" else "Timing Rescue"
+    if st == "strong_partial":
+        return "توافق جزئي قوي" if lang == "ar" else "Strong Partial"
+    return "إشارة كاملة" if lang == "ar" else "Full Signal"
+
+
+def _targets_line_for_trade(trade: dict) -> str:
+    """Format targets consistently by trade type: Micro=TP1, Fast=TP1/TP2, Full=TP1/TP2/TP3."""
+    if _is_one_target_trade(trade):
+        return f"🎯 TP1: ${trade['tp1']:,.2f}"
+    if _is_two_target_trade(trade):
+        return f"🎯 TP1: ${trade['tp1']:,.2f} | TP2: ${trade['tp2']:,.2f}"
+    return f"🎯 TP1: ${trade['tp1']:,.2f} | TP2: ${trade['tp2']:,.2f} | TP3: ${trade['tp3']:,.2f}"
+
+
+def _plain_direction(direction: str, uid=0) -> str:
+    """Avoid mixed Arabic/English direction strings in RTL messages."""
+    lang = user_languages.get(uid, "ar")
+    if direction == "BUY":
+        return "🟢 شراء ⬆️" if lang == "ar" else "🟢 BUY ⬆️"
+    return "🔴 بيع ⬇️" if lang == "ar" else "🔴 SELL ⬇️"
+
+
+def _build_scalp_health_report(trade: dict, current: float):
+    """Scalp follow-up that does not reuse Full Signal/DNA wording.
+
+    Micro/Fast scalp trades are intentionally faster and riskier. Their follow-up
+    should not say "Stay Out" because the trade is already being tracked; it should
+    report momentum/position health and remind the user to manage the scalp targets only.
+    """
+    uid = trade.get("chat_id", 0)
+    lang = user_languages.get(uid, "ar")
+    tid = trade.get("id", "?")
+    status = trade.get("status", "active")
+    direction = trade.get("direction", "")
+    entry = float(trade.get("entry", 0) or 0)
+    actual_entry = trade.get("actual_entry")
+    sl = float(trade.get("sl", 0) or 0)
+    tp1 = float(trade.get("tp1", 0) or 0)
+    tp2 = float(trade.get("tp2", 0) or 0)
+    trade_label = _trade_type_label(trade, uid)
+    dir_txt = _plain_direction(direction, uid)
+    base_entry = float(actual_entry or entry or current)
+    move_pct = ((current - base_entry) / base_entry * 100) if direction == "BUY" else ((base_entry - current) / base_entry * 100)
+    risk_pct = abs(base_entry - sl) / base_entry * 100 if base_entry and sl else 0.0
+    rr_now = round(move_pct / max(risk_pct, 0.01), 2)
+    activated_ts = float(trade.get("activated_ts") or trade.get("created_ts") or 0)
+    max_hold = int(trade.get("max_hold_min") or MICRO_SCALP_MAX_HOLD_MIN) if _is_micro_trade(trade) else None
+    time_line = None
+    if max_hold and activated_ts:
+        elapsed = max(0, int((now_ts() - activated_ts) / 60))
+        left = max(0, max_hold - elapsed)
+        time_line = (f"⏱️ الوقت المتبقي التقريبي: {left} دقيقة" if lang == "ar" else f"⏱️ Approx time left: {left} min")
+
+    if move_pct >= 0.15:
+        health = "🟢 الزخم ما زال لصالح الصفقة" if lang == "ar" else "🟢 Momentum still supports the trade"
+        note = "ركّز على حماية الربح تدريجياً، ولا تطارد TP2 إذا ضعف السعر." if lang == "ar" else "Protect profit gradually; do not chase TP2 if momentum fades."
+        nc = 0
+    elif move_pct <= -0.15:
+        health = "🟠 الزخم يضعف مؤقتاً" if lang == "ar" else "🟠 Momentum is weakening"
+        note = "هذه صفقة سريعة وعالية الحساسية؛ راقب SL ولا توسّع المخاطرة." if lang == "ar" else "This is a sensitive scalp; respect SL and do not expand risk."
+        nc = 1
+    else:
+        health = "🟡 الصفقة ما زالت ضمن منطقة تقييم" if lang == "ar" else "🟡 Trade is still in evaluation zone"
+        note = "لا يوجد سبب لإلغاء الصفقة تلقائياً الآن؛ التركيز على TP1 أولاً." if lang == "ar" else "No automatic cancel reason now; focus on TP1 first."
+        nc = 0
+
+    if lang == "ar":
+        title = f"🟡 SazBot | متابعة {trade_label} #{tid}"
+        lines = [
+            title,
+            "🟢 نشطة" if status == "active" else "⏳ معلّقة",
+            "",
+            f"🏷️ نوع الصفقة: {trade_label}",
+            f"📊 الاتجاه: {dir_txt}",
+        ]
+        if actual_entry:
+            lines.append(f"📍 سعر الدخول الفعلي: ${float(actual_entry):,.2f}")
+        else:
+            lines.append(f"🎯 منطقة الدخول: {format_entry_zone(entry, trade.get('atr', 0))}")
+        lines += [
+            f"💵 السعر الحالي: ${current:,.2f}",
+            f"📈 الحركة منذ الدخول: {move_pct:+.2f}%",
+            f"⚖️ العائد مقابل المخاطرة الحالي تقريباً: {rr_now:+.2f}R",
+        ]
+        if time_line:
+            lines.append(time_line)
+        target_lines = [f"TP1: ${tp1:,.2f}"] if _is_one_target_trade(trade) else [f"TP1: ${tp1:,.2f}", f"TP2: ${tp2:,.2f}"]
+        lines += [
+            "",
+            "🧠 حالة الصفقة السريعة",
+            health,
+            note,
+            "",
+            "🎯 الأهداف السريعة",
+            *target_lines,
+            f"🛑 SL: ${sl:,.2f}",
+            "",
+            "⚠️ هذه صفقة مضاربة سريعة؛ لا تُقيّمها بمنطق الصفقات الكاملة طويلة النفس.",
+            f"🕐 {gmt_now()}",
+            t(uid,"footer"),
+        ]
+    else:
+        title = f"🟡 SazBot | {trade_label} Follow-up #{tid}"
+        lines = [
+            title,
+            "🟢 Active" if status == "active" else "⏳ Pending",
+            "",
+            f"🏷️ Trade type: {trade_label}",
+            f"📊 Direction: {dir_txt}",
+        ]
+        if actual_entry:
+            lines.append(f"📍 Actual entry: ${float(actual_entry):,.2f}")
+        else:
+            lines.append(f"🎯 Entry zone: {format_entry_zone(entry, trade.get('atr', 0))}")
+        lines += [
+            f"💵 Current price: ${current:,.2f}",
+            f"📈 Move since entry: {move_pct:+.2f}%",
+            f"⚖️ Approx current R: {rr_now:+.2f}R",
+        ]
+        if time_line:
+            lines.append(time_line)
+        target_lines = [f"TP1: ${tp1:,.2f}"] if _is_one_target_trade(trade) else [f"TP1: ${tp1:,.2f}", f"TP2: ${tp2:,.2f}"]
+        lines += [
+            "",
+            "🧠 Scalp Trade Health",
+            health,
+            note,
+            "",
+            "🎯 Scalp targets",
+            *target_lines,
+            f"🛑 SL: ${sl:,.2f}",
+            "",
+            "⚠️ This is a fast scalp; do not assess it like a full confluence swing trade.",
+            f"🕐 {gmt_now()}",
+            t(uid,"footer"),
+        ]
+    return "\n".join(lines), nc
+
 def _build_health_report(trade: dict, res: dict, current: float):
     """
     Returns (msg_text, n_cancel_reasons).
@@ -4989,6 +5189,8 @@ def _build_health_report(trade: dict, res: dict, current: float):
     entry = trade.get("entry", 0)  # Smart/reference entry used for original SL/TP plan
     status = trade.get("status", "active")
     actual_entry = trade.get("actual_entry")
+    if _is_scalp_trade(trade):
+        return _build_scalp_health_report(trade, current)
     # Pending trades are measured versus the reference zone. Active trades show actual entry separately.
     dist_ref = entry
     dist = abs(current - dist_ref) / dist_ref * 100 if dist_ref else 0
@@ -5061,11 +5263,14 @@ def _build_health_report(trade: dict, res: dict, current: float):
         verdict = t(uid,"recommend_monitor")
 
     st = ("⏳ " + t(uid,"pending")) if status == "pending" else ("🟢 " + t(uid,"active"))
-    dir_line = t(uid,"buy") if dire == "BUY" else t(uid,"sell")
+    dir_line = _plain_direction(dire, uid)
 
+    trade_label = _trade_type_label(trade, uid)
+    label_key = "نوع الصفقة" if user_languages.get(uid, "ar") == "ar" else "Trade type"
     lines = [
         f"🟡 SazBot | {t(uid,'trade_health')} #{tid}",
         st,
+        f"🏷️ {label_key}: {trade_label}",
         "",
         dir_line,
     ]
@@ -5100,7 +5305,7 @@ def _build_health_report(trade: dict, res: dict, current: float):
         verdict,
         "",
         f"🛑 SL: ${trade['sl']:,.2f}",
-        f"🎯 TP1: ${trade['tp1']:,.2f} | TP2: ${trade['tp2']:,.2f} | TP3: ${trade['tp3']:,.2f}",
+        _targets_line_for_trade(trade),
         "",
         f"🕐 {gmt_now()}",
         t(uid,"footer"),
@@ -5120,13 +5325,17 @@ async def check_pending_trades(context):
 
     cur = await run_blocking(get_btc_price)
     res = None
-    try:
-        res = await run_blocking(full_analysis, "BTC", 0)
-    except Exception as e:
-        logger.error(f"check_pending_trades analysis: {e}")
+    has_non_scalp = any(not _is_scalp_trade(tr) for tr in active_trades)
+    if has_non_scalp:
+        try:
+            res = await run_blocking(full_analysis, "BTC", 0)
+        except Exception as e:
+            logger.error(f"check_pending_trades analysis: {e}")
 
-    if not res or not cur:
+    if not cur:
         return
+    if not res:
+        res = {"frame_lines": []}
 
     frame_lines = res.get("frame_lines", [])
     buy_f, sell_f = count_qualified_frame_lines(frame_lines)
@@ -5168,8 +5377,27 @@ async def check_pending_trades(context):
                 except Exception as e:
                     logger.warning("silent exception: " + str(e))
 
+            # Scalp lanes are intentionally independent from Full Signal frame/DNA follow-up.
+            # Micro uses TP1-only momentum logic; Fast uses TP1/TP2 short-term management.
+            # Still send the dedicated scalp health report periodically; only skip the
+            # Full Signal reversal/partial-frame sections below.
+            if _is_scalp_trade(trade):
+                try:
+                    # Active scalp trades should not be silent between entry and TP/SL/time-exit.
+                    # Throttle to avoid spam if this job interval is changed in the future.
+                    if status == "active" and (n - float(trade.get("last_scalp_health_ts") or 0)) >= 900:
+                        trade["last_scalp_health_ts"] = n
+                        msg, _nc = _build_scalp_health_report(trade, cur)
+                        async with get_trades_lock():
+                            save_trades()
+                            save_runtime_state()
+                        await context.bot.send_message(chat_id=chat_id, text=msg)
+                except Exception as e:
+                    logger.error(f"scalp health report trade #{tid}: {e}")
+                continue
+
             # ── 2. Full reversal: all frames flipped ──
-            if total_f > 0 and opposite == total_f:
+            if total_f > 0 and opposite == total_f and not _is_micro_trade(trade):
                 alert_key = f"flip_{buy_f}_{sell_f}"
                 if trade.get("last_frame_alert") != alert_key:
                     trade["last_frame_alert"] = alert_key
@@ -5334,7 +5562,6 @@ def build_fast_scalp_msg(res, uid=0):
     entry_high = float(res.get("entry_high", entry) or entry)
     sl = float(res.get("sl", 0) or 0)
     tp1 = float(res.get("tp1", 0) or 0)
-    tp2 = float(res.get("tp2", 0) or 0)
 
     if lang == "ar":
         dir_txt = "🔴 SELL ⬇️" if direction == "SELL" else "🟢 BUY ⬆️"
@@ -5352,7 +5579,6 @@ def build_fast_scalp_msg(res, uid=0):
             f"الدخول المرجعي: ${entry:,.2f}",
             "",
             f"TP1: ${tp1:,.2f}",
-            f"TP2: ${tp2:,.2f}",
             f"SL: ${sl:,.2f}",
             "",
             "🎯 هذه مضاربة سريعة: التركيز على TP1 وTP2 فقط. صفقات TP3 تبقى للفرص القوية كاملة التوافق.",
@@ -5377,7 +5603,6 @@ def build_fast_scalp_msg(res, uid=0):
             f"Reference Entry: ${entry:,.2f}",
             "",
             f"TP1: ${tp1:,.2f}",
-            f"TP2: ${tp2:,.2f}",
             f"SL: ${sl:,.2f}",
             "",
             "🎯 Fast scalp: focus on TP1 and TP2 only. TP3 trades remain reserved for strong full-confluence setups.",
@@ -5530,7 +5755,8 @@ def detect_micro_scalp_setup(df_1h, uid=0):
             sl = round(entry - sl_dist, 2); tp1 = round(entry + tp1_dist, 2); tp2 = round(entry + tp2_dist, 2); tp3 = round(entry + tp3_dist, 2)
         else:
             sl = round(entry + sl_dist, 2); tp1 = round(entry - tp1_dist, 2); tp2 = round(entry - tp2_dist, 2); tp3 = round(entry - tp3_dist, 2)
-        rr = round(abs(tp2-entry)/abs(entry-sl), 2) if abs(entry-sl) > 0 else 0
+        # Micro Scalp is a one-target setup; RR is measured to TP1 only.
+        rr = round(abs(tp1-entry)/abs(entry-sl), 2) if abs(entry-sl) > 0 else 0
         risk_pct = int(max(45, min(95, 100 - quality + 25 + max(0, MICRO_SCALP_MIN_VOLUME_SPIKE - vol_ratio) * 4)))
         if risk_pct >= 82:
             risk_label_ar, risk_label_en = "🔴 مرتفعة جداً", "🔴 Very High"
@@ -5585,7 +5811,6 @@ def build_micro_scalp_msg(res, uid=0):
     entry_high = float(res.get("entry_high", entry) or entry)
     sl = float(res.get("sl", 0) or 0)
     tp1 = float(res.get("tp1", 0) or 0)
-    tp2 = float(res.get("tp2", 0) or 0)
     conf = int(res.get("base_conf", 0) or 0)
     m = res.get("decision_metrics", {}) or {}
     quality = int(m.get("quality", res.get("regime_strength", 0)) or 0)
@@ -5594,7 +5819,7 @@ def build_micro_scalp_msg(res, uid=0):
     reasons = res.get("bull_obs") or res.get("bear_obs") or []
     reasons_txt = "\n".join([f"• {x}" for x in reasons[:4]])
     if lang == "ar":
-        dir_txt = "🟢 BUY ⬆️" if direction == "BUY" else "🔴 SELL ⬇️"
+        dir_txt = _plain_direction(direction, uid)
         return "\n".join([
             "🚀 SazBot | Micro Scalp",
             "₿ BTC/USD",
@@ -5610,17 +5835,16 @@ def build_micro_scalp_msg(res, uid=0):
             f"الدخول المرجعي: ${entry:,.2f}",
             "",
             f"TP1: ${tp1:,.2f}",
-            f"TP2: ${tp2:,.2f}",
             f"SL: ${sl:,.2f}",
             "",
             "🧠 لماذا ظهرت؟",
             reasons_txt or "• زخم قصير المدى مع حركة قابلة للمراقبة",
             "",
-            "⚠️ Micro Scalp أعلى مخاطرة من Fast Scalp و Full Signal. التركيز على TP1، ولا تطارد السعر خارج منطقة الدخول.",
+            "⚠️ Micro Scalp صفقة زخم سريعة بهدف واحد فقط. التركيز على TP1، ولا تطارد السعر خارج منطقة الدخول.",
             f"🕐 {t(uid,'updated_gmt')}: {gmt_now()}",
             t(uid,"educational_footer"),
         ])
-    dir_txt = "🟢 BUY ⬆️" if direction == "BUY" else "🔴 SELL ⬇️"
+    dir_txt = _plain_direction(direction, uid)
     return "\n".join([
         "🚀 SazBot | Micro Scalp",
         "₿ BTC/USD",
@@ -5636,13 +5860,12 @@ def build_micro_scalp_msg(res, uid=0):
         f"Reference Entry: ${entry:,.2f}",
         "",
         f"TP1: ${tp1:,.2f}",
-        f"TP2: ${tp2:,.2f}",
         f"SL: ${sl:,.2f}",
         "",
         "🧠 Why it appeared:",
         reasons_txt or "• Short-term momentum with a tradable move forming",
         "",
-        "⚠️ Micro Scalp is higher risk than Fast Scalp and Full Signal. Focus on TP1 and do not chase outside the entry zone.",
+        "⚠️ Micro Scalp is a one-target momentum trade. Focus on TP1 and do not chase outside the entry zone.",
         f"🕐 {t(uid,'updated_gmt')}: {gmt_now()}",
         t(uid,"educational_footer"),
     ])
@@ -6214,12 +6437,12 @@ async def _monitor_active_trades(context):
                 arrived = low_z <= cur <= high_z
                 if arrived:
                     try:
-                        if trade.get("entry_reason") == "micro_scalp" or trade.get("signal_type") == "micro_scalp":
+                        if _is_scalp_trade(trade):
                             trade["status"] = "active"
                             trade["actual_entry"] = cur
                             trade["activated_ts"] = now_ts()
                             await send_user_message(context.bot, chat_id,
-                                text=f"🚀 SazBot | Micro Scalp {t(chat_id,'setup_activated')} #{trade_id}\n\n{t(chat_id,'price_reached_entry')}\n\n🛑 SL: ${trade['sl']:,.2f}\n🎯 TP1: ${trade['tp1']:,.2f} | TP2: ${trade['tp2']:,.2f}")
+                                text=f"🚀 SazBot | {_trade_type_label(trade, chat_id)} {t(chat_id,'setup_activated')} #{trade_id}\n\n{t(chat_id,'price_reached_entry')}\n\n🛑 SL: ${trade['sl']:,.2f}\n{_targets_line_for_trade(trade)}")
                             async with get_trades_lock():
                                 save_trades()
                                 save_runtime_state()
@@ -6286,7 +6509,7 @@ async def _monitor_active_trades(context):
                         except Exception: pass
                         # Entry-passed update
                         ep_passed = (direction=="SELL" and cur < entry*0.99) or                                     (direction=="BUY"  and cur > entry*1.01)
-                        if ep_passed and not trade.get("entry_update_sent"):
+                        if ep_passed and not trade.get("entry_update_sent") and not _is_scalp_trade(trade):
                             try:
                                 fe = await run_blocking(full_analysis, trade["asset"], chat_id)
                                 if fe and fe["final"] == direction:
@@ -6311,7 +6534,7 @@ async def _monitor_active_trades(context):
                                 logger.warning(f"Entry update: {e}")
                         # Counter-move cancel
                         ctr = (direction=="SELL" and cur > entry*1.02) or                               (direction=="BUY"  and cur < entry*0.98)
-                        if ctr:
+                        if ctr and not _is_scalp_trade(trade):
                             try:
                                 fc = await run_blocking(full_analysis, trade["asset"], chat_id)
                                 if fc and fc["final"] != direction:
@@ -6365,6 +6588,82 @@ async def _monitor_active_trades(context):
             if closed:
                 if update_msg:
                     await send_user_message(context.bot, chat_id, text=update_msg)
+                continue
+
+            # Micro Scalp is one-target only. It closes at TP1, SL, or time exit.
+            # It must not be converted into a Fast/Full multi-target trade during follow-up.
+            if _is_one_target_trade(trade) and trade.get("status") == "active":
+                if direction == "BUY":
+                    if cur >= tp1:
+                        update_msg = f"✅ SazBot | {_trade_type_label(trade, chat_id)} TP1 #{trade_id}\n${tp1:,.2f}"
+                        rp = round(abs(tp1-entry)/abs(entry-trade.get("orig_sl",sl)),2) if abs(entry-trade.get("orig_sl",sl))>0 else 1.0
+                        record_trade_result(trade_id, "win", rp, direction, _session, setup_grade=trade.get("setup_grade",""), entry_reason=trade.get("entry_reason","micro_scalp"))
+                        closed=True
+                    elif cur <= trade["sl"]:
+                        update_msg = f"🛑 SazBot | {t(chat_id,'sl_hit')} #{trade_id}"
+                        record_trade_result(trade_id, "loss", 0, direction, _session, setup_grade=trade.get("setup_grade",""), entry_reason=trade.get("entry_reason","micro_scalp"))
+                        closed=True
+                else:
+                    if cur <= tp1:
+                        update_msg = f"✅ SazBot | {_trade_type_label(trade, chat_id)} TP1 #{trade_id}\n${tp1:,.2f}"
+                        rp = round(abs(tp1-entry)/abs(entry-trade.get("orig_sl",sl)),2) if abs(entry-trade.get("orig_sl",sl))>0 else 1.0
+                        record_trade_result(trade_id, "win", rp, direction, _session, setup_grade=trade.get("setup_grade",""), entry_reason=trade.get("entry_reason","micro_scalp"))
+                        closed=True
+                    elif cur >= trade["sl"]:
+                        update_msg = f"🛑 SazBot | {t(chat_id,'sl_hit')} #{trade_id}"
+                        record_trade_result(trade_id, "loss", 0, direction, _session, setup_grade=trade.get("setup_grade",""), entry_reason=trade.get("entry_reason","micro_scalp"))
+                        closed=True
+                if update_msg:
+                    await send_user_message(context.bot, chat_id, build_update_msg(trade, cur, update_msg, chat_id))
+                    async with get_trades_lock():
+                        save_trades()
+                        save_runtime_state()
+                if closed:
+                    to_remove.append(trade)
+                continue
+
+            # Fast Scalp lanes use TP1/TP2 only. TP3 is intentionally ignored
+            # in monitoring so follow-ups do not convert them into full-signal trades.
+            if _is_two_target_trade(trade) and trade.get("status") == "active":
+                if direction == "BUY":
+                    if not trade["tp1_hit"] and cur >= tp1:
+                        trade["tp1_hit"] = True; trade["sl"] = entry
+                        update_msg = f"✅ SazBot | {t(chat_id,'tp1_hit')} #{trade_id}\n${entry:,.2f}"
+                    elif cur >= tp2:
+                        update_msg = f"✅✅ SazBot | {_trade_type_label(trade, chat_id)} TP2 #{trade_id}\n${tp2:,.2f}"
+                        rp = round(abs(tp2-entry)/abs(entry-trade.get("orig_sl",sl)),2) if abs(entry-trade.get("orig_sl",sl))>0 else 1.0
+                        record_trade_result(trade_id, "win", rp, direction, _session, setup_grade=trade.get("setup_grade",""), entry_reason=trade.get("entry_reason","scalp")); closed=True
+                    elif cur <= trade["sl"]:
+                        if trade.get("tp1_hit"):
+                            update_msg = f"🟡 SazBot | {t(chat_id,'breakeven')} #{trade_id}"
+                            record_trade_result(trade_id, "breakeven", 0, direction, _session, setup_grade=trade.get("setup_grade",""), entry_reason=trade.get("entry_reason","scalp"))
+                        else:
+                            update_msg = f"🛑 SazBot | {t(chat_id,'sl_hit')} #{trade_id}"
+                            record_trade_result(trade_id, "loss", 0, direction, _session, setup_grade=trade.get("setup_grade",""), entry_reason=trade.get("entry_reason","scalp"))
+                        closed=True
+                else:
+                    if not trade["tp1_hit"] and cur <= tp1:
+                        trade["tp1_hit"] = True; trade["sl"] = entry
+                        update_msg = f"✅ SazBot | {t(chat_id,'tp1_hit')} #{trade_id}\n${entry:,.2f}"
+                    elif cur <= tp2:
+                        update_msg = f"✅✅ SazBot | {_trade_type_label(trade, chat_id)} TP2 #{trade_id}\n${tp2:,.2f}"
+                        rp = round(abs(tp2-entry)/abs(entry-trade.get("orig_sl",sl)),2) if abs(entry-trade.get("orig_sl",sl))>0 else 1.0
+                        record_trade_result(trade_id, "win", rp, direction, _session, setup_grade=trade.get("setup_grade",""), entry_reason=trade.get("entry_reason","scalp")); closed=True
+                    elif cur >= trade["sl"]:
+                        if trade.get("tp1_hit"):
+                            update_msg = f"🟡 SazBot | {t(chat_id,'breakeven')} #{trade_id}"
+                            record_trade_result(trade_id, "breakeven", 0, direction, _session, setup_grade=trade.get("setup_grade",""), entry_reason=trade.get("entry_reason","scalp"))
+                        else:
+                            update_msg = f"🛑 SazBot | {t(chat_id,'sl_hit')} #{trade_id}"
+                            record_trade_result(trade_id, "loss", 0, direction, _session, setup_grade=trade.get("setup_grade",""), entry_reason=trade.get("entry_reason","scalp"))
+                        closed=True
+                if update_msg:
+                    await send_user_message(context.bot, chat_id, build_update_msg(trade, cur, update_msg, chat_id))
+                    async with get_trades_lock():
+                        save_trades()
+                        save_runtime_state()
+                if closed:
+                    to_remove.append(trade)
                 continue
 
             if direction == "BUY":
