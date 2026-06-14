@@ -68,6 +68,18 @@ ASIAN_FAST_SCALP_ENABLED = env_bool("ASIAN_FAST_SCALP_ENABLED", True)
 FAST_SCALP_ALLOW_SINGLE_FRAME = env_bool("FAST_SCALP_ALLOW_SINGLE_FRAME", True)
 FAST_SCALP_MIN_SINGLE_CONF = env_int("FAST_SCALP_MIN_SINGLE_CONF", 55, 45, 90)
 ASIAN_FAST_SCALP_MIN_QUALITY = env_int("ASIAN_FAST_SCALP_MIN_QUALITY", 45, 40, 75)
+
+# Micro Scalper: independent, high-risk, 1H-only momentum/volatility lane.
+# It does NOT replace Full Confluence or Fast Scalp. It is meant to capture
+# short BTC moves that do not yet have 4H/1D alignment.
+MICRO_SCALP_ENABLED = env_bool("MICRO_SCALP_ENABLED", True)
+MICRO_SCALP_MIN_CONF = env_int("MICRO_SCALP_MIN_CONF", 60, 50, 85)
+MICRO_SCALP_MIN_QUALITY = env_int("MICRO_SCALP_MIN_QUALITY", 45, 35, 75)
+MICRO_SCALP_MIN_VOLUME_SPIKE = env_float("MICRO_SCALP_MIN_VOLUME_SPIKE", 1.5, 1.0, 5.0)
+MICRO_SCALP_COOLDOWN = env_int("MICRO_SCALP_COOLDOWN_SECONDS", 1800, 300, 86400)
+MICRO_SCALP_MAX_HOLD_MIN = env_int("MICRO_SCALP_MAX_HOLD_MIN", 90, 15, 240)
+MICRO_SCALP_MAX_ENTRY_DISTANCE = env_float("MICRO_SCALP_MAX_ENTRY_DISTANCE", 1.2, 0.3, 3.0)
+
 MIN_ALIGNMENT_FRAMES = env_int("MIN_ALIGNMENT_FRAMES", 2, 1, 3)
 MIN_DECISION_SCORE = env_int("MIN_DECISION_SCORE", 55, 40, 85)
 FRAME_MIN_CONFIDENCE = env_int("FRAME_MIN_CONFIDENCE", 60, 40, 90)  # Minimum confidence required for a timeframe to be counted in confluence
@@ -380,6 +392,7 @@ def save_runtime_state():
             "trade_counter": trade_counter,
             "_news_notified": _news_notified,
             "last_bias_alert_state": last_bias_alert_state,
+            "_trap_signal_day_counts": _trap_signal_day_counts,
         }
         with open(STATE_FILE, "w") as f:
             json.dump(state, f, ensure_ascii=False)
@@ -389,7 +402,7 @@ def save_runtime_state():
 def load_runtime_state():
     """Load persisted runtime state on startup."""
     global active_trades, active_btc_trade, pending_trade_replace, last_signal_time
-    global pending_signals, trade_counter, _news_notified, last_bias_alert_state
+    global pending_signals, trade_counter, _news_notified, last_bias_alert_state, _trap_signal_day_counts
     try:
         with open(STATE_FILE) as f:
             state = json.load(f)
@@ -401,6 +414,12 @@ def load_runtime_state():
         trade_counter = int(state.get("trade_counter", trade_counter) or 0)
         _news_notified = state.get("_news_notified", _news_notified) or {}
         last_bias_alert_state = state.get("last_bias_alert_state", last_bias_alert_state) or {}
+        _trap_signal_day_counts = state.get("_trap_signal_day_counts", _trap_signal_day_counts) or {}
+        # keep only simple date-string keys and integer counts
+        try:
+            _trap_signal_day_counts = {str(k): int(v or 0) for k, v in dict(_trap_signal_day_counts).items()}
+        except Exception:
+            _trap_signal_day_counts = {}
         logger.info("Runtime state loaded successfully.")
     except FileNotFoundError:
         logger.info("No runtime state file found; starting clean.")
@@ -1274,6 +1293,7 @@ def crowd_positioning_engine(res, frames=None):
         else:
             crowd_side, consensus = "SELL", int(max(0, min(100, sell_score / total * 100)))
 
+        crowd_source = "frames"
         saturation = "HIGH" if consensus >= 78 else "MEDIUM" if consensus >= 65 else "LOW"
         # ✅ REBALANCED: consensus here is derived from our OWN frames, so high
         # consensus is a precondition of every valid confluence signal — it must
@@ -1305,8 +1325,22 @@ def crowd_positioning_engine(res, frames=None):
         # crowd stacked AGAINST us = we fade the crowd (tailwind, relieve).
         real_crowd_side = "BUY" if glsr > 1.6 else "SELL" if glsr < 0.65 else None
         if real_crowd_side:
+            # Real crowd data overrides the displayed crowd side. Recalculate the
+            # shown consensus from the real long/short ratio so the message does
+            # not display e.g. "SELL 78%" where 78% came from frame-side BUY
+            # confluence. Decision punishment was already direction-aware; this
+            # fixes the user-facing interpretation.
+            # Preserve original frame-based consensus before any real crowd overrides.
+# Reserved for future debugging/logging and crowd-engine diagnostics.
+# Intentionally kept even though it is currently unused.
+frame_consensus = consensus
             crowd_side = real_crowd_side
-            consensus = min(100, consensus + 8)
+            crowd_source = "real"
+            if real_crowd_side == "BUY":
+                consensus = int(max(55, min(95, 60 + (glsr - 1.6) * 25)))
+            else:
+                consensus = int(max(55, min(95, 60 + (0.65 - glsr) * 60)))
+            saturation = "HIGH" if consensus >= 78 else "MEDIUM" if consensus >= 65 else "LOW"
             if real_crowd_side == final:
                 punishment += 12
             elif final in ("BUY", "SELL"):
@@ -1327,7 +1361,7 @@ def crowd_positioning_engine(res, frames=None):
         punishment = int(max(0, min(100, punishment)))
 
         return {"crowd_side": crowd_side, "crowd_consensus": consensus, "crowd_saturation": saturation, "punishment_risk": punishment,
-                "global_long_short_ratio": glsr, "top_trader_ratio": top, "funding_rate": funding, "oi_change_pct": oi}
+                "crowd_source": crowd_source, "global_long_short_ratio": glsr, "top_trader_ratio": top, "funding_rate": funding, "oi_change_pct": oi}
     except Exception as e:
         logger.warning("crowd_positioning_engine failed: " + str(e))
         return {"crowd_side": "NEUTRAL", "crowd_consensus": 0, "crowd_saturation": "LOW", "punishment_risk": 0}
@@ -3859,34 +3893,38 @@ def confirm_keyboard(uid=0):
 
 
 def welcome_message(uid=0):
-    """Short bilingual welcome. Keyboard labels stay English; content follows user language."""
+    """First user message: explains SazBot trade types clearly in Arabic/English."""
     lang = user_languages.get(uid, "ar")
     if lang == "ar":
         return (
-            "🟡 SazBot 2.1 | ذكاء القرار\n\n"
-            "اقرأ السوق.\n"
-            "قيّم المخاطر.\n"
-            "وتداول فقط عندما تكون الاحتمالات في صالحك.\n\n"
-            "⚡ تنبيهات المضاربة السريعة\n"
-            "🎯 فرص تداول عالية الجودة\n"
-            "📊 قراءة وتحليل السوق\n"
-            "🛡️ قرارات مبنية على إدارة المخاطر\n\n"
-            "⚠️ لأغراض تعليمية فقط.\n"
-            "إدارة المخاطر مسؤوليتك الشخصية.\n\n"
-            "استخدم الأزرار بالأسفل للبدء."
+            "🟡 SazBot 2.3 | أنواع صفقات البوت\n\n"
+            "مرحباً بك. SazBot لا يرسل كل حركة في السوق كصفقة؛ بل يصنّف الفرص حسب القوة والمخاطرة.\n\n"
+            "🏆 Full Signal\n"
+            "صفقة توافق كامل بين الفريمات الأساسية. هي الأقوى، وتستهدف TP1 / TP2 / TP3.\n"
+            "المخاطرة: منخفضة إلى متوسطة حسب ظروف السوق.\n\n"
+            "⚡ Fast Scalp\n"
+            "مضاربة سريعة عندما تكون الفرصة جيدة لكن لا تصل لقوة Full Signal. التركيز غالباً على TP1 وTP2.\n"
+            "المخاطرة: متوسطة إلى مرتفعة.\n\n"
+            "🚀 Micro Scalp\n"
+            "مضاربة أسرع تعتمد على زخم 1H، الحجم، التذبذب، وEMA. لا تحتاج توافق 4H/1D، لذلك فرصها أكثر ومخاطرتها أعلى.\n"
+            "التركيز: حركة قصيرة وTP1 بشكل أساسي.\n\n"
+            "⚠️ التنبيهات المبكرة ليست دخولاً. الدخول فقط عندما يرسل البوت صفقة واضحة بمنطقة دخول وSL وTP.\n"
+            "تحليل تعليمي فقط — ليست توصية مالية. إدارة المخاطر مسؤوليتك."
         )
     return (
-        "🟡 SazBot 2.1 | Decision Intelligence\n\n"
-        "Read the market.\n"
-        "Assess the risk.\n"
-        "Trade only when the odds justify it.\n\n"
-        "⚡ Fast Scalp Alerts\n"
-        "🎯 High-Quality Trade Setups\n"
-        "📊 Market Intelligence\n"
-        "🛡️ Risk-First Decision Making\n\n"
-        "⚠️ Educational purposes only.\n"
-        "Risk management is your responsibility.\n\n"
-        "Use the keyboard below to begin."
+        "🟡 SazBot 2.3 | Bot Trade Types\n\n"
+        "Welcome. SazBot does not turn every market move into a trade; it classifies setups by strength and risk.\n\n"
+        "🏆 Full Signal\n"
+        "Full multi-timeframe confluence. This is the strongest setup type and targets TP1 / TP2 / TP3.\n"
+        "Risk: Low to Medium depending on market conditions.\n\n"
+        "⚡ Fast Scalp\n"
+        "A quick scalp when the setup is useful but not strong enough to be a Full Signal. Focus is usually TP1 and TP2.\n"
+        "Risk: Medium to High.\n\n"
+        "🚀 Micro Scalp\n"
+        "A faster 1H-based scalp using momentum, volume, volatility expansion, and EMA structure. It does not require 4H/1D alignment, so it can find more opportunities with higher risk.\n"
+        "Focus: short move and mainly TP1.\n\n"
+        "⚠️ Early alerts are not entries. Entry is only when SazBot sends a clear setup with Entry Zone, SL, and TP.\n"
+        "Educational analysis only — not financial advice. Risk management is your responsibility."
     )
 
 
@@ -3894,22 +3932,24 @@ def welcome_message(uid=0):
 
 
 # ==================== Persistent Reply Keyboard ====================
-BTN_DECISION_CENTER = "🧠 Decision Center"
+BTN_DECISION_CENTER = "🏆 Full Signal"
 BTN_MARKET_READ     = "📖 Market Read"
 BTN_PRICES          = "💰 Prices"
 BTN_FAST_SCALPS     = "⚡ Fast Scalps"
 BTN_ACTIVE_TRADES   = "📈 Active Trades"
 BTN_STATS           = "📊 Statistics"
-BTN_NEWS            = "📰 News"
+BTN_MICRO_SCALPS     = "🚀 Micro Scalps"
 BTN_SETTINGS        = "⚙️ Settings"
 
 def persistent_keyboard():
     """English-only fixed keyboard shown under the message box."""
     rows = [
-        [BTN_DECISION_CENTER, BTN_MARKET_READ],
-        [BTN_PRICES, BTN_FAST_SCALPS],
-        [BTN_ACTIVE_TRADES, BTN_STATS],
-        [BTN_NEWS, BTN_SETTINGS],
+        [BTN_DECISION_CENTER],
+        [BTN_MARKET_READ],
+        [BTN_FAST_SCALPS],
+        [BTN_MICRO_SCALPS],
+        [BTN_PRICES, BTN_ACTIVE_TRADES],
+        [BTN_STATS, BTN_SETTINGS],
     ]
     try:
         # Correct PTB kwarg is is_persistent (Bot API 6.3+, PTB v20+).
@@ -4179,8 +4219,13 @@ async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
     if msg_text == BTN_STATS:
         await show_stats_from_reply(update, uid)
         return
-    if msg_text == BTN_NEWS:
-        await show_news_from_reply(update, uid)
+    if msg_text == BTN_MICRO_SCALPS:
+        msg = (
+            "🚀 Micro Scalp يعمل تلقائياً. هذا المسار يلتقط فرصاً أسرع وأعلى مخاطرة اعتماداً على زخم 1H والحجم والتذبذب. سأرسل صفقة كاملة عند ظهور فرصة مناسبة."
+            if user_languages.get(uid, "ar") == "ar"
+            else "🚀 Micro Scalp is automatic. It captures faster, higher-risk 1H momentum/volume/volatility setups. I will send a full tracked setup when conditions appear."
+        )
+        await update.message.reply_text(msg, reply_markup=persistent_keyboard())
         return
     if msg_text == BTN_SETTINGS:
         await show_settings_from_reply(update, uid)
@@ -4670,6 +4715,10 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
                 "entry_update_sent": False,
                 "setup_grade": (res_sig.get("decision_metrics", {}) or {}).get("setup_grade", ""),
                 "entry_reason": res_sig.get("entry_reason", "auto"),
+                "signal_type": res_sig.get("signal_type", res_sig.get("entry_reason", "auto")),
+                "created_ts": now_ts(),
+                "activated_ts": now_ts() if not is_pending else None,
+                "max_hold_min": MICRO_SCALP_MAX_HOLD_MIN if res_sig.get("micro_scalp") or res_sig.get("entry_reason") == "micro_scalp" else None,
             }
             async with get_trades_lock():
                 active_trades.append(new_trade)
@@ -5346,6 +5395,264 @@ def build_fast_scalp_msg(res, uid=0):
 
 
 
+def detect_micro_scalp_setup(df_1h, uid=0):
+    """High-risk 1H-only BTC micro-scalp detector.
+
+    Strategy:
+    - Uses only 1H because micro scalps are meant to capture short moves before
+      full 4H/1D confluence exists.
+    - Requires at least two independent triggers from momentum, EMA structure,
+      volume spike, Bollinger expansion, or short price acceleration.
+    - Builds a normal SazBot setup object so tracking, activation, TP/SL and
+      cancellation workflows continue to work like other trades.
+    """
+    try:
+        if not MICRO_SCALP_ENABLED or df_1h is None or len(df_1h) < 60:
+            return None
+
+        # Micro scalp must not depend on long-horizon columns such as EMA200 or
+        # Ichimoku SpanB. calc_indicators() creates those columns, but with only
+        # 72-120 hourly candles they are NaN by design. A global dropna() would
+        # therefore wipe the whole dataframe and make this lane dead code.
+        # Keep only the indicator columns actually used by the 1H micro-scalp logic.
+        raw_len = len(df_1h)
+        df = calc_indicators(df_1h.tail(160).copy())
+        micro_cols = [
+            "Close", "High", "Low", "Volume",
+            "EMA9", "EMA21", "EMA50",
+            "RSI", "MACD", "MACD_S", "MACD_H",
+            "BB_U", "BB_L", "ATR", "Vol_MA",
+        ]
+        micro_cols = [c for c in micro_cols if c in df.columns]
+        df = df.dropna(subset=micro_cols)
+        if len(df) < 40:
+            logger.info(f"micro-scalp idle: not enough usable 1H rows after indicator warmup raw={raw_len}, usable={len(df)}")
+            return None
+        last = df.iloc[-1]
+        prev = df.iloc[-2]
+        prev3 = df.iloc[-4] if len(df) >= 4 else prev
+        price = float(last["Close"])
+        atr = safe(last.get("ATR"), price * 0.006)
+        if atr <= 0:
+            atr = price * 0.006
+        atr_pct = atr / price * 100
+        rsi = safe(last.get("RSI"), 50)
+        rsi_prev = safe(prev.get("RSI"), rsi)
+        ema9 = safe(last.get("EMA9"), price)
+        ema21 = safe(last.get("EMA21"), price)
+        ema50 = safe(last.get("EMA50"), price)
+        macd = safe(last.get("MACD"), 0)
+        macds = safe(last.get("MACD_S"), 0)
+        macdh = safe(last.get("MACD_H"), 0)
+        prev_macdh = safe(prev.get("MACD_H"), macdh)
+        bb_u = safe(last.get("BB_U"), price * 1.01)
+        bb_l = safe(last.get("BB_L"), price * 0.99)
+        bb_width = (bb_u - bb_l) / price * 100 if price > 0 else 0
+        prev_bb_u = safe(prev.get("BB_U"), bb_u)
+        prev_bb_l = safe(prev.get("BB_L"), bb_l)
+        prev_bb_width = (prev_bb_u - prev_bb_l) / price * 100 if price > 0 else bb_width
+        vol = float(last.get("Volume", 0) or 0)
+        vol_ma = float(last.get("Vol_MA", 0) or 0)
+        vol_ratio = (vol / vol_ma) if vol_ma > 0 else 1.0
+        accel_3 = (price - float(prev3["Close"])) / float(prev3["Close"]) * 100 if float(prev3["Close"]) else 0
+
+        buy_score = sell_score = 0
+        reasons_ar = []
+        reasons_en = []
+
+        # Momentum shift
+        if rsi >= 52 and rsi > rsi_prev:
+            buy_score += 14; reasons_ar.append("RSI يتحسن"); reasons_en.append("RSI improving")
+        if rsi <= 48 and rsi < rsi_prev:
+            sell_score += 14; reasons_ar.append("RSI يضعف"); reasons_en.append("RSI weakening")
+
+        # EMA micro structure
+        if price > ema9 > ema21:
+            buy_score += 18; reasons_ar.append("السعر فوق EMA9/EMA21"); reasons_en.append("Price above EMA9/EMA21")
+        if price < ema9 < ema21:
+            sell_score += 18; reasons_ar.append("السعر تحت EMA9/EMA21"); reasons_en.append("Price below EMA9/EMA21")
+        if ema9 > ema21 > ema50:
+            buy_score += 10; reasons_ar.append("ترتيب EMA صاعد"); reasons_en.append("Bullish EMA stack")
+        if ema9 < ema21 < ema50:
+            sell_score += 10; reasons_ar.append("ترتيب EMA هابط"); reasons_en.append("Bearish EMA stack")
+
+        # MACD impulse
+        if macd > macds and macdh > prev_macdh:
+            buy_score += 12; reasons_ar.append("MACD يدعم الزخم"); reasons_en.append("MACD supports momentum")
+        if macd < macds and macdh < prev_macdh:
+            sell_score += 12; reasons_ar.append("MACD يدعم الهبوط"); reasons_en.append("MACD supports downside momentum")
+
+        # Volatility expansion and volume confirmation are weighted for the leading side.
+        vol_ok = vol_ratio >= MICRO_SCALP_MIN_VOLUME_SPIKE
+        expansion_ok = bb_width > max(prev_bb_width * 1.03, 0.45) or atr_pct >= 0.45
+        if vol_ok:
+            if buy_score >= sell_score:
+                buy_score += 14
+            else:
+                sell_score += 14
+            reasons_ar.append(f"حجم تداول أعلى من المتوسط x{vol_ratio:.1f}")
+            reasons_en.append(f"Volume above average x{vol_ratio:.1f}")
+        if expansion_ok:
+            if buy_score >= sell_score:
+                buy_score += 12
+            else:
+                sell_score += 12
+            reasons_ar.append("بداية توسع في الحركة"); reasons_en.append("Volatility expansion starting")
+
+        # Short acceleration
+        if accel_3 >= 0.25:
+            buy_score += 10; reasons_ar.append(f"تسارع سعري +{accel_3:.2f}%"); reasons_en.append(f"Price acceleration +{accel_3:.2f}%")
+        if accel_3 <= -0.25:
+            sell_score += 10; reasons_ar.append(f"تسارع سعري {accel_3:.2f}%"); reasons_en.append(f"Price acceleration {accel_3:.2f}%")
+
+        direction = "BUY" if buy_score > sell_score else "SELL" if sell_score > buy_score else None
+        if not direction:
+            return None
+        score = max(buy_score, sell_score)
+        oppose = min(buy_score, sell_score)
+        confidence = int(max(50, min(88, 50 + score - oppose * 0.35)))
+
+        # Quality is intentionally separate from confidence. Micro scalps can be
+        # directional but still lower quality if volume/expansion is missing.
+        quality = int(max(35, min(85, confidence + (8 if vol_ok else -8) + (6 if expansion_ok else -6) - max(0, 0.35 - atr_pct) * 10)))
+        if confidence < MICRO_SCALP_MIN_CONF or quality < MICRO_SCALP_MIN_QUALITY:
+            return None
+        if not (vol_ok or expansion_ok):
+            # Avoid spam in dead ranges. At least one participation/volatility trigger is mandatory.
+            return None
+
+        # Entry is near current price, with a small entry zone. This is a micro
+        # scalp, not a limit trade waiting far away.
+        entry = round(price, 2)
+        zone = max(0.18 * atr, price * 0.0012)
+        entry_low = round(entry - zone, 2)
+        entry_high = round(entry + zone, 2)
+        sl_dist = max(0.55 * atr, price * 0.0035)
+        tp1_dist = max(0.70 * atr, price * 0.0045)
+        tp2_dist = max(1.15 * atr, price * 0.0080)
+        tp3_dist = max(1.45 * atr, price * 0.0100)
+        if direction == "BUY":
+            sl = round(entry - sl_dist, 2); tp1 = round(entry + tp1_dist, 2); tp2 = round(entry + tp2_dist, 2); tp3 = round(entry + tp3_dist, 2)
+        else:
+            sl = round(entry + sl_dist, 2); tp1 = round(entry - tp1_dist, 2); tp2 = round(entry - tp2_dist, 2); tp3 = round(entry - tp3_dist, 2)
+        rr = round(abs(tp2-entry)/abs(entry-sl), 2) if abs(entry-sl) > 0 else 0
+        risk_pct = int(max(45, min(95, 100 - quality + 25 + max(0, MICRO_SCALP_MIN_VOLUME_SPIKE - vol_ratio) * 4)))
+        if risk_pct >= 82:
+            risk_label_ar, risk_label_en = "🔴 مرتفعة جداً", "🔴 Very High"
+        elif risk_pct >= 68:
+            risk_label_ar, risk_label_en = "🟠 عالية", "🟠 High"
+        else:
+            risk_label_ar, risk_label_en = "🟡 متوسطة إلى عالية", "🟡 Medium-High"
+        risk_label = risk_label_ar if user_languages.get(uid, "ar") == "ar" else risk_label_en
+        risk_msg = "مضاربة قصيرة عالية المخاطرة — حجم أصغر وانضباط صارم." if user_languages.get(uid, "ar") == "ar" else "High-risk short scalp — smaller size and strict discipline."
+
+        reasons = reasons_ar if user_languages.get(uid, "ar") == "ar" else reasons_en
+        frame_state = {"1h": {"direction": direction, "conf": confidence, "qualified": True}}
+        frame_line = ("🟢 ساعة: BUY" if direction == "BUY" else "🔴 ساعة: SELL") + f" ({confidence}%) ✅ Micro"
+        decision_metrics = {
+            "quality": quality,
+            "regret": int(max(45, min(85, 100 - quality + 15))),
+            "opportunity_cost": int(max(40, min(80, quality - 5))),
+            "decision": "MICRO_SCALP",
+            "decision_text": "Micro Scalp",
+            "setup_grade": "C",
+        }
+        return {
+            "final": direction, "asset": "BTC", "micro_scalp": True, "signal_type": "micro_scalp",
+            "price": round(price, 2), "entry_price": entry, "entry_low": entry_low, "entry_high": entry_high,
+            "tp1": tp1, "tp2": tp2, "tp3": tp3, "sl": sl, "rr": rr, "atr": round(atr, 2),
+            "base_conf": confidence, "confluence_txt": "Micro Scalp", "risk_pct": risk_pct,
+            "risk_label": risk_label, "risk_msg": risk_msg, "overall_risk": risk_label,
+            "frame_lines": [frame_line], "frame_state": frame_state,
+            "rsi": round(rsi, 1), "support": round(price - atr, 2), "resistance": round(price + atr, 2),
+            "macd_bull": macd > macds, "ema_bull": price > ema9 > ema21, "ema_bear": price < ema9 < ema21,
+            "bb_zone": "EXPANDING" if expansion_ok else "NORMAL", "fib_levels": {}, "fib_ext": {}, "key_fibs": [],
+            "nearest_fib": entry, "fib_key": "micro", "swing_h": float(df["High"].tail(20).max()), "swing_l": float(df["Low"].tail(20).min()),
+            "weekly_trend": "N/A", "regime": "MICRO", "regime_strength": quality, "monthly_bias": "N/A",
+            "divergence": "N/A", "session": get_current_session()[0], "session_score": get_current_session()[1],
+            "bull_obs": reasons if direction == "BUY" else [], "bear_obs": reasons if direction == "SELL" else [],
+            "buy_liq": [], "sell_liq": [], "entry_reason": "micro_scalp",
+            "decision_metrics": decision_metrics,
+            "tf_ar": "1 ساعة", "tf_en": "1 Hour", "hold_ar": f"15 — {MICRO_SCALP_MAX_HOLD_MIN} دقيقة", "hold_en": f"15 — {MICRO_SCALP_MAX_HOLD_MIN} min",
+        }
+    except Exception as e:
+        logger.warning("detect_micro_scalp_setup failed: " + str(e))
+        return None
+
+
+def build_micro_scalp_msg(res, uid=0):
+    """Tracked high-risk micro-scalp message, bilingual."""
+    lang = user_languages.get(uid, "ar")
+    direction = res.get("final", "")
+    price = float(res.get("price", 0) or 0)
+    entry = float(res.get("entry_price", price) or price)
+    entry_low = float(res.get("entry_low", entry) or entry)
+    entry_high = float(res.get("entry_high", entry) or entry)
+    sl = float(res.get("sl", 0) or 0)
+    tp1 = float(res.get("tp1", 0) or 0)
+    tp2 = float(res.get("tp2", 0) or 0)
+    conf = int(res.get("base_conf", 0) or 0)
+    m = res.get("decision_metrics", {}) or {}
+    quality = int(m.get("quality", res.get("regime_strength", 0)) or 0)
+    hold = res.get("hold_ar") if lang == "ar" else res.get("hold_en")
+    risk_label = res.get("risk_label") or ("🔴 عالية" if lang == "ar" else "🔴 High")
+    reasons = res.get("bull_obs") or res.get("bear_obs") or []
+    reasons_txt = "\n".join([f"• {x}" for x in reasons[:4]])
+    if lang == "ar":
+        dir_txt = "🟢 BUY ⬆️" if direction == "BUY" else "🔴 SELL ⬇️"
+        return "\n".join([
+            "🚀 SazBot | Micro Scalp",
+            "₿ BTC/USD",
+            "",
+            f"الاتجاه: {dir_txt}",
+            "النوع: مضاربة سريعة جداً — 1H فقط",
+            f"درجة المخاطرة: {risk_label}",
+            f"الثقة: {conf}% | جودة الحركة: {quality}/100",
+            f"مدة الاحتفاظ المتوقعة: {hold}",
+            "",
+            f"السعر الحالي: ${price:,.2f}",
+            f"منطقة الدخول: ${entry_low:,.2f} — ${entry_high:,.2f}",
+            f"الدخول المرجعي: ${entry:,.2f}",
+            "",
+            f"TP1: ${tp1:,.2f}",
+            f"TP2: ${tp2:,.2f}",
+            f"SL: ${sl:,.2f}",
+            "",
+            "🧠 لماذا ظهرت؟",
+            reasons_txt or "• زخم قصير المدى مع حركة قابلة للمراقبة",
+            "",
+            "⚠️ Micro Scalp أعلى مخاطرة من Fast Scalp و Full Signal. التركيز على TP1، ولا تطارد السعر خارج منطقة الدخول.",
+            f"🕐 {t(uid,'updated_gmt')}: {gmt_now()}",
+            t(uid,"educational_footer"),
+        ])
+    dir_txt = "🟢 BUY ⬆️" if direction == "BUY" else "🔴 SELL ⬇️"
+    return "\n".join([
+        "🚀 SazBot | Micro Scalp",
+        "₿ BTC/USD",
+        "",
+        f"Direction: {dir_txt}",
+        "Type: very fast 1H-only scalp",
+        f"Risk Degree: {risk_label}",
+        f"Confidence: {conf}% | Move Quality: {quality}/100",
+        f"Expected Hold: {hold}",
+        "",
+        f"Current Price: ${price:,.2f}",
+        f"Entry Zone: ${entry_low:,.2f} — ${entry_high:,.2f}",
+        f"Reference Entry: ${entry:,.2f}",
+        "",
+        f"TP1: ${tp1:,.2f}",
+        f"TP2: ${tp2:,.2f}",
+        f"SL: ${sl:,.2f}",
+        "",
+        "🧠 Why it appeared:",
+        reasons_txt or "• Short-term momentum with a tradable move forming",
+        "",
+        "⚠️ Micro Scalp is higher risk than Fast Scalp and Full Signal. Focus on TP1 and do not chase outside the entry zone.",
+        f"🕐 {t(uid,'updated_gmt')}: {gmt_now()}",
+        t(uid,"educational_footer"),
+    ])
+
+
 def is_actionable_trade_decision(res):
     """True only when SazBot decision supports sending an entry setup, not a wait/stay-out message."""
     try:
@@ -5494,6 +5801,17 @@ async def _check_auto_signal(context):
         if df_q is None or len(df_q) < 20:
             logger.info("auto-signal idle: not enough BTC 1h data for quick pre-check")
             return
+        # Separate 1H dataset for Micro Scalp. The quick pre-check intentionally
+        # uses only ~72 candles, but micro indicators need enough warmup for EMA50,
+        # Bollinger, ATR and volume MA without relying on EMA200/SpanB.
+        df_micro = df_q
+        try:
+            if MICRO_SCALP_ENABLED:
+                df_micro_long = await run_blocking(get_data, "BTC", days=10, interval="hourly")
+                if df_micro_long is not None and len(df_micro_long) >= 80:
+                    df_micro = df_micro_long
+        except Exception as e:
+            logger.warning("micro-scalp data fallback to df_q: " + str(e))
         dq     = calc_indicators(df_q.tail(50).copy())
         lq     = dq.iloc[-1]
         price_q= float(lq["Close"])
@@ -5531,12 +5849,32 @@ async def _check_auto_signal(context):
         res = await run_blocking(full_analysis, "BTC", 0)
         if not res or res.get("final") == "NEUTRAL":
             logger.info("auto-signal blocked after full_analysis | " + summarize_auto_block(res, "full_analysis"))
-            return
+            micro_res = await run_blocking(detect_micro_scalp_setup, df_micro, 0)
+            if not micro_res:
+                return
+            logger.info(
+                "micro-scalp lane activated after full_analysis block | "
+                f"dir={micro_res.get('final')}, conf={micro_res.get('base_conf')}, "
+                f"quality={(micro_res.get('decision_metrics') or {}).get('quality')}"
+            )
+            res = micro_res
+
         # Auto-signals must pass the strictest SazBot 2.1 DNA gate before being sent.
-        res = apply_saz_dna_gate(res, 0, mode="auto")
-        if not res or res.get("final") == "NEUTRAL" or res.get("blocked_by_saz_dna"):
-            logger.info("auto-signal blocked by DNA gate | " + summarize_auto_block(res, "dna_gate"))
-            return
+        # Micro Scalp is a separate 1H-only high-risk lane with its own quality,
+        # volume and volatility gate; it intentionally does not require swing-level DNA.
+        if not res.get("micro_scalp"):
+            res = apply_saz_dna_gate(res, 0, mode="auto")
+            if not res or res.get("final") == "NEUTRAL" or res.get("blocked_by_saz_dna"):
+                logger.info("auto-signal blocked by DNA gate | " + summarize_auto_block(res, "dna_gate"))
+                micro_res = await run_blocking(detect_micro_scalp_setup, df_micro, 0)
+                if not micro_res:
+                    return
+                logger.info(
+                    "micro-scalp lane activated after DNA block | "
+                    f"dir={micro_res.get('final')}, conf={micro_res.get('base_conf')}, "
+                    f"quality={(micro_res.get('decision_metrics') or {}).get('quality')}"
+                )
+                res = micro_res
 
         fl = res.get("frame_lines", [])
         buy_f, sell_f = count_qualified_frame_lines(fl)
@@ -5558,32 +5896,49 @@ async def _check_auto_signal(context):
             (res["final"] == "BUY" and frame_has_direction(res, "1h", "BUY") and frame_has_direction(res, "1d", "BUY"))
         )
 
-        fast_scalp = is_fast_scalp_candidate(res, timing_rescue=timing_rescue)
+        micro_scalp = bool(res.get("micro_scalp"))
+        fast_scalp = False if micro_scalp else is_fast_scalp_candidate(res, timing_rescue=timing_rescue)
 
         # Do not send a trade signal when SazBot's own decision is WAIT/STAY OUT.
         # Early Bias Alerts can explain waiting; trade signals must be actionable.
-        # Exception: the Fast Scalp lane is the designed ranging-market valve —
-        # it has its own quality/regret gate plus the DNA auto gate, so it stays
-        # alive even when the swing-level decision says WAIT. This prevents the
-        # bot from going completely silent in ranging conditions.
-        if not fast_scalp and not is_actionable_trade_decision(res):
+        # Exception: Fast Scalp and Micro Scalp have their own dedicated gates.
+        if not (fast_scalp or micro_scalp) and not is_actionable_trade_decision(res):
             logger.info("auto-signal blocked by WAIT/STAY_OUT decision gate | " + summarize_auto_block(res, "decision_gate"))
-            return
+            micro_res = await run_blocking(detect_micro_scalp_setup, df_micro, 0)
+            if not micro_res:
+                return
+            logger.info(
+                "micro-scalp lane activated after decision gate | "
+                f"dir={micro_res.get('final')}, conf={micro_res.get('base_conf')}, "
+                f"quality={(micro_res.get('decision_metrics') or {}).get('quality')}"
+            )
+            res = micro_res
+            micro_scalp = True
 
-        if not (three or strong_partial or timing_rescue or fast_scalp):
+        if not (three or strong_partial or timing_rescue or fast_scalp or micro_scalp):
             logger.info("auto-signal blocked: alignment fail | " + summarize_auto_block(res, "alignment_gate"))
-            return
+            micro_res = await run_blocking(detect_micro_scalp_setup, df_micro, 0)
+            if not micro_res:
+                return
+            logger.info(
+                "micro-scalp lane activated after alignment fail | "
+                f"dir={micro_res.get('final')}, conf={micro_res.get('base_conf')}, "
+                f"quality={(micro_res.get('decision_metrics') or {}).get('quality')}"
+            )
+            res = micro_res
+            micro_scalp = True
 
         if is_recent_similar_signal(res):
             logger.info("auto-signal blocked: similar recent/active setup | " + summarize_auto_block(res, "similar_signal_gate"))
             return
 
-        signal_type = "asian_fast_scalp" if (fast_scalp and res.get("asian_fast_scalp")) else ("fast_scalp" if fast_scalp else ("timing_rescue" if timing_rescue else ("strong_partial" if strong_partial else "full_confluence")))
+        signal_type = "micro_scalp" if res.get("micro_scalp") else ("asian_fast_scalp" if (fast_scalp and res.get("asian_fast_scalp")) else ("fast_scalp" if fast_scalp else ("timing_rescue" if timing_rescue else ("strong_partial" if strong_partial else "full_confluence"))))
         res["signal_type"] = signal_type
         res["entry_reason"] = signal_type
         res["fast_scalp"] = bool(fast_scalp)
+        res["micro_scalp"] = bool(res.get("micro_scalp"))
 
-        cooldown = FAST_SCALP_COOLDOWN if fast_scalp else SPAM_COOLDOWN
+        cooldown = MICRO_SCALP_COOLDOWN if res.get("micro_scalp") else (FAST_SCALP_COOLDOWN if fast_scalp else SPAM_COOLDOWN)
         if (n - last_signal_time.get("BTC", 0)) < cooldown:
             logger.info(f"auto-signal blocked: final cooldown active ({int(cooldown - (n - last_signal_time.get('BTC', 0)))}s remaining), type={signal_type}")
             return
@@ -5595,11 +5950,12 @@ async def _check_auto_signal(context):
         entry_high = float(res.get("entry_high", ep))
 
         # Do not send a new signal if price is already too far away from the Smart Entry Zone.
-        if is_price_too_far_from_entry_zone(res.get("price", price_q), entry_low, entry_high, max_distance_for_setup_grade(res)):
+        max_entry_distance = MICRO_SCALP_MAX_ENTRY_DISTANCE if res.get("micro_scalp") else max_distance_for_setup_grade(res)
+        if is_price_too_far_from_entry_zone(res.get("price", price_q), entry_low, entry_high, max_entry_distance):
             logger.info(
                 "auto-signal blocked: price too far from entry zone | "
                 f"price={res.get('price', price_q)}, entry_low={entry_low}, entry_high={entry_high}, "
-                f"max_allowed={max_distance_for_setup_grade(res)} | " + summarize_auto_block(res, "entry_distance_gate")
+                f"max_allowed={max_entry_distance} | " + summarize_auto_block(res, "entry_distance_gate")
             )
             return
 
@@ -5636,7 +5992,7 @@ async def _check_auto_signal(context):
             register_contrarian_trap_signal()
         for uid in ALLOWED_USERS:
             try:
-                sig_msg = build_fast_scalp_msg(res, uid) if res.get("fast_scalp") else build_trade_msg(res, uid, auto=True)
+                sig_msg = build_micro_scalp_msg(res, uid) if res.get("micro_scalp") else (build_fast_scalp_msg(res, uid) if res.get("fast_scalp") else build_trade_msg(res, uid, auto=True))
                 if ev:
                     sig_msg += f"\n\n⚠️ {t(uid,'high_impact_event')}: {ev.get('event','')} {t(uid,'event_in')} {_mins_txt(ev['mins_left'])}"
                 kb = InlineKeyboardMarkup([[
@@ -5653,7 +6009,7 @@ async def _check_auto_signal(context):
 
 
 
-def pending_signal_still_supported(sig, fresh):
+def pending_signal_still_supported(sig, fresh, micro_setup=None):
     """Validate pending signal support without relying on translated frame text.
     Missing legacy direction should not trigger accidental immediate expiry.
     """
@@ -5664,11 +6020,15 @@ def pending_signal_still_supported(sig, fresh):
             logger.warning(f"pending_signal_still_supported: missing direction for legacy signal id={sig.get('id','?')}; keeping until price/time expiry")
             return True
 
+        st = sig.get("signal_type") or sig_res.get("signal_type", "full_confluence")
+
+        # Micro Scalp is intentionally independent from the broader full_analysis
+        # direction/alignment. Do not expire it because full_analysis.final briefly
+        # disagrees; the dedicated micro branch below is the source of truth.
         fresh_final = fresh.get("final")
-        if fresh_final in ("BUY", "SELL") and fresh_final != sig_dir:
+        if st != "micro_scalp" and fresh_final in ("BUY", "SELL") and fresh_final != sig_dir:
             return False
 
-        st = sig.get("signal_type") or sig_res.get("signal_type", "full_confluence")
         b, s = count_qualified_frames(fresh)
 
         if st == "full_confluence":
@@ -5681,6 +6041,13 @@ def pending_signal_still_supported(sig, fresh):
             # Fast Scalp is intentionally a one-frame lane, unlike full_confluence
             # which targets all 3 TPs and requires stronger multi-frame agreement.
             return frame_has_direction(fresh, "1h", sig_dir) or ((b >= 1) if sig_dir == "BUY" else (s >= 1))
+        if st == "micro_scalp":
+            # Micro Scalp is validated against a fresh 1H micro setup, not full-analysis
+            # frame confluence. The expensive data fetch is done asynchronously once
+            # in _expire_pending_signals and passed here to avoid blocking the event loop.
+            if micro_setup is None:
+                return True
+            return bool(micro_setup and micro_setup.get("final") == sig_dir)
         return True
     except Exception as e:
         logger.warning("pending_signal_still_supported failed: " + str(e))
@@ -5708,6 +6075,16 @@ async def _expire_pending_signals(context):
         except Exception:
             fresh = None
 
+        micro_setup = None
+        try:
+            has_micro_pending = any(((v.get("signal_type") or (v.get("res", {}) or {}).get("signal_type")) == "micro_scalp") for v in pending_signals.values())
+            if has_micro_pending:
+                df_ms = await run_blocking(get_data, "BTC", 10, "hourly")
+                micro_setup = await run_blocking(detect_micro_scalp_setup, df_ms, 0)
+        except Exception as e:
+            logger.warning("micro pending async support check failed: " + str(e))
+            micro_setup = None
+
         to_exp = []
         for sid, sig in list(pending_signals.items()):
             expired = False
@@ -5731,7 +6108,7 @@ async def _expire_pending_signals(context):
             elif cur and is_price_too_far_from_entry_zone(cur, entry_low, entry_high, MAX_DISTANCE_FROM_ZONE_PCT):
                 expired = True
                 reason_key = "signal_expired_price"
-            elif fresh and not pending_signal_still_supported(sig, fresh):
+            elif fresh and not pending_signal_still_supported(sig, fresh, micro_setup=micro_setup):
                 expired = True
                 reason_key = "signal_expired_timeframes"
 
@@ -5842,6 +6219,16 @@ async def _monitor_active_trades(context):
                 arrived = low_z <= cur <= high_z
                 if arrived:
                     try:
+                        if trade.get("entry_reason") == "micro_scalp" or trade.get("signal_type") == "micro_scalp":
+                            trade["status"] = "active"
+                            trade["actual_entry"] = cur
+                            trade["activated_ts"] = now_ts()
+                            await send_user_message(context.bot, chat_id,
+                                text=f"🚀 SazBot | Micro Scalp {t(chat_id,'setup_activated')} #{trade_id}\n\n{t(chat_id,'price_reached_entry')}\n\n🛑 SL: ${trade['sl']:,.2f}\n🎯 TP1: ${trade['tp1']:,.2f} | TP2: ${trade['tp2']:,.2f}")
+                            async with get_trades_lock():
+                                save_trades()
+                                save_runtime_state()
+                            continue
                         fresh = await run_blocking(full_analysis, trade["asset"], 0)
                         if fresh is None:
                             trade["status"] = "active"
@@ -5945,6 +6332,46 @@ async def _monitor_active_trades(context):
                 continue  # done with pending
 
             # ── Active: TP / SL logic ──
+            if (trade.get("entry_reason") == "micro_scalp" or trade.get("signal_type") == "micro_scalp") and trade.get("status") == "active":
+                activated_ts = float(trade.get("activated_ts") or trade.get("created_ts") or 0)
+                max_hold = int(trade.get("max_hold_min") or MICRO_SCALP_MAX_HOLD_MIN)
+                if activated_ts and (now_ts() - activated_ts) > max_hold * 60:
+                    to_remove.append(trade)
+                    pnl_pct = ((cur - entry) / entry * 100) if direction == "BUY" else ((entry - cur) / entry * 100)
+                    risk_pct = abs(entry - sl) / entry * 100 if entry and sl else 0.0
+                    if pnl_pct > 0.05:
+                        time_result = "win"
+                        time_rr = round(pnl_pct / max(risk_pct, 0.01), 2)
+                    elif pnl_pct < -0.05:
+                        time_result = "loss"
+                        time_rr = 0
+                    else:
+                        time_result = "breakeven"
+                        time_rr = 0
+                    try:
+                        record_trade_result(trade_id, time_result, time_rr, direction, _session, setup_grade=trade.get("setup_grade", ""), entry_reason=trade.get("entry_reason", "micro_scalp"))
+                    except Exception as e:
+                        logger.warning(f"Micro scalp time-exit stats failed: {e}")
+                    lang = user_languages.get(chat_id, "ar")
+                    if lang == "ar":
+                        update_msg = (f"⏱️ SazBot | انتهاء مدة Micro Scalp #{trade_id}\n\n"
+                                      f"انتهت مدة الاحتفاظ القصوى ({max_hold} دقيقة).\n"
+                                      f"السعر الحالي: ${cur:,.2f}\n"
+                                      f"النتيجة التقريبية: {pnl_pct:+.2f}%\n\n"
+                                      "إغلاق/إلغاء المضاربة السريعة لتجنب بقاء صفقة عالية المخاطرة مفتوحة.")
+                    else:
+                        update_msg = (f"⏱️ SazBot | Micro Scalp Time Exit #{trade_id}\n\n"
+                                      f"Maximum hold time reached ({max_hold} min).\n"
+                                      f"Current price: ${cur:,.2f}\n"
+                                      f"Approx result: {pnl_pct:+.2f}%\n\n"
+                                      "Closing/cancelling the high-risk scalp to avoid overstaying the setup.")
+                    closed = True
+
+            if closed:
+                if update_msg:
+                    await send_user_message(context.bot, chat_id, text=update_msg)
+                continue
+
             if direction == "BUY":
                 if cur >= tp3:
                     update_msg = f"🏆 SazBot | {t(chat_id,'tp3_hit')} #{trade_id}"
@@ -6717,6 +7144,8 @@ def main():
         f"fast_scalp={FAST_SCALP_ENABLED}, asian_fast_scalp={ASIAN_FAST_SCALP_ENABLED}, single_frame={FAST_SCALP_ALLOW_SINGLE_FRAME}, "
         f"single_conf={FAST_SCALP_MIN_SINGLE_CONF}, asian_scalp_min_q={ASIAN_FAST_SCALP_MIN_QUALITY}, "
         f"min_decision={MIN_DECISION_SCORE}, max_entry_dist={MAX_DISTANCE_FROM_ZONE_PCT}, "
+        f"micro_scalp={MICRO_SCALP_ENABLED}, micro_conf={MICRO_SCALP_MIN_CONF}, "
+        f"micro_quality={MICRO_SCALP_MIN_QUALITY}, micro_vol={MICRO_SCALP_MIN_VOLUME_SPIKE}, "
         f"similar_cooldown_min={SIMILAR_SIGNAL_COOLDOWN_MINUTES}, early_bias={EARLY_BIAS_ALERTS}"
     )
     print("SazBot polling started")
