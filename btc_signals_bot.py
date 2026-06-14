@@ -6135,28 +6135,122 @@ def saz_directional_bias(res):
         logger.warning("saz_directional_bias failed: " + str(e))
         return {"bias": "NEUTRAL", "confidence": 0, "quality": 0, "risk": 100}
 
+
+def classify_early_bias_stage(res, bias_data):
+    """Classify early alerts into user-friendly stages so repeated alerts do not look identical.
+
+    This is intentionally separate from the trade engine:
+    - Pressure Building = directional pressure exists, but no setup yet.
+    - Setup Forming = stronger bias/quality, still waiting for entry trigger.
+    - Entry Conditions Met = reserved for when the decision engine becomes actionable.
+    - Stay Out = market read exists but action is not justified.
+    """
+    try:
+        metrics = res.get("decision_metrics") or saz_decision_intelligence(res, 0, persist=False, refresh=False)
+        bias = (bias_data or {}).get("bias", "NEUTRAL")
+        conf = int((bias_data or {}).get("confidence", 0) or 0)
+        quality = int(metrics.get("quality", 0) or 0)
+        decision_raw = str(metrics.get("decision", "") or metrics.get("decision_text", "")).upper()
+        final = str(res.get("final", "NEUTRAL") or "NEUTRAL").upper()
+
+        if final in ("BUY", "SELL") and bias == final and conf >= MIN_SIGNAL_CONFIDENCE and quality >= MIN_DECISION_SCORE:
+            return "entry_ready"
+        if "ENTER" in decision_raw and bias in ("BUY", "SELL") and conf >= MIN_SIGNAL_CONFIDENCE and quality >= MIN_DECISION_SCORE:
+            return "entry_ready"
+        if bias in ("BUY", "SELL") and conf >= 76 and quality >= 75:
+            return "setup_forming"
+        if bias in ("BUY", "SELL") and conf >= 60 and quality >= 60:
+            return "pressure_building"
+        return "stay_out"
+    except Exception as e:
+        logger.warning("classify_early_bias_stage failed: " + str(e))
+        return "stay_out"
+
+def early_bias_stage_copy(lang, stage, bias):
+    """Return stage title, reading line, decision hint, and status line."""
+    is_buy = bias == "BUY"
+    is_sell = bias == "SELL"
+    direction_ar = "للصعود" if is_buy else "للهبوط" if is_sell else "محايد"
+    direction_en = "bullish" if is_buy else "bearish" if is_sell else "neutral"
+
+    if lang == "ar":
+        if stage == "entry_ready":
+            return (
+                "🟢 شروط الدخول تقترب",
+                f"الضغط الفني يميل {direction_ar}، وشروط الدخول أصبحت قريبة من الاكتمال.",
+                "راقب رسالة الإشارة الرسمية فقط؛ لا تعتبر هذا التنبيه دخولاً بحد ذاته.",
+                "🟢 الحالة: قرب اكتمال شروط الدخول"
+            )
+        if stage == "setup_forming":
+            return (
+                "🟠 سيناريو قيد التكوين",
+                f"قراءة SazBot تميل {direction_ar} بوضوح، لكن ما زال ينقصها تأكيد الدخول.",
+                "انتظار الزون/التأكيد أفضل من الدخول المبكر.",
+                "🟠 الحالة: Setup Forming"
+            )
+        if stage == "pressure_building":
+            return (
+                "🔴 ضغط اتجاهي يتكوّن" if is_sell else "🟢 ضغط اتجاهي يتكوّن" if is_buy else "⚪ مراقبة السوق",
+                f"هناك ضغط فني يميل {direction_ar}، لكن الصفقة لم تتحول إلى Setup مكتمل بعد.",
+                "ابقَ في وضع المراقبة حتى يظهر Trigger أو تتغير القراءة.",
+                "🔎 الحالة: Pressure Building"
+            )
+        return (
+            "⚪ مراقبة بدون دخول",
+            "السوق يتحرك لكن شروط الدخول غير مكتملة حالياً.",
+            "الأفضل البقاء خارج السوق إلى حين ظهور أفضلية أوضح.",
+            "🚫 الحالة: Stay Out"
+        )
+
+    if stage == "entry_ready":
+        return (
+            "🟢 Entry Conditions Nearly Met",
+            f"Technical pressure is leaning {direction_en}, and entry conditions are getting close.",
+            "Wait for the official signal message; this alert alone is not an entry.",
+            "🟢 Status: Entry Conditions Nearly Met"
+        )
+    if stage == "setup_forming":
+        return (
+            "🟠 Setup Forming",
+            f"SazBot clearly leans {direction_en}, but entry confirmation is still missing.",
+            "Waiting for the entry zone/trigger is better than entering early.",
+            "🟠 Status: Setup Forming"
+        )
+    if stage == "pressure_building":
+        return (
+            "🔴 Bearish Pressure Building" if is_sell else "🟢 Bullish Pressure Building" if is_buy else "⚪ Market Watch",
+            f"Directional pressure is leaning {direction_en}, but it has not become a confirmed setup yet.",
+            "Stay in watch mode until a trigger appears or the read changes.",
+            "🔎 Status: Pressure Building"
+        )
+    return (
+        "⚪ Watch Only",
+        "The market is moving, but entry conditions are not complete yet.",
+        "Staying out is preferred until a clearer edge appears.",
+        "🚫 Status: Stay Out"
+    )
+
 def build_early_bias_alert(uid, res, trigger_label, price, bias_data=None):
     lang = user_languages.get(uid, "ar")
     b = bias_data or saz_directional_bias(res)
-    bias = b["bias"]
-    conf = int(b["confidence"])
+    bias = b.get("bias", "NEUTRAL")
+    conf = int(b.get("confidence", 0) or 0)
     metrics = res.get("decision_metrics") or saz_decision_intelligence(res, uid, persist=False, refresh=False)
     decision = metrics.get("decision_text", "")
-    quality = int(metrics.get("quality", 0))
+    quality = int(metrics.get("quality", 0) or 0)
+    stage = classify_early_bias_stage(res, b)
+    title, read, action_hint, status_line = early_bias_stage_copy(lang, stage, bias)
 
     if lang == "ar":
         if bias == "BUY":
             bias_line = f"📈 أفضلية الاتجاه: BUY ({conf}%)"
-            read = "قراءة SazBot تميل للصعود، لكن الصفقة لم تكتمل بعد."
         elif bias == "SELL":
             bias_line = f"📉 أفضلية الاتجاه: SELL ({conf}%)"
-            read = "قراءة SazBot تميل للهبوط، لكن الصفقة لم تكتمل بعد."
         else:
             bias_line = "↔️ أفضلية الاتجاه: محايد"
-            read = "لا توجد أفضلية واضحة للشراء أو البيع حالياً."
 
         return "\n".join([
-            "⚡ SazBot 2.2 | تنبيه مبكر",
+            f"⚡ SazBot 2.2 | {title}",
             "",
             f"💵 السعر الحالي: ${price:,.2f}",
             "",
@@ -6167,10 +6261,11 @@ def build_early_bias_alert(uid, res, trigger_label, price, bias_data=None):
             read,
             bias_line,
             f"📊 جودة السوق: {quality}/100",
+            status_line,
             "",
             "🎯 القرار:",
             decision,
-            "⏳ بانتظار اكتمال شروط الصفقة قبل إصدار إشارة دخول.",
+            f"⏳ {action_hint}",
             "",
             f"🕐 {t(uid,'updated_gmt')}: {gmt_now()}",
             t(uid,"educational_footer"),
@@ -6179,16 +6274,13 @@ def build_early_bias_alert(uid, res, trigger_label, price, bias_data=None):
     else:
         if bias == "BUY":
             bias_line = f"📈 Directional Bias: BUY ({conf}%)"
-            read = "SazBot currently leans bullish, but a trade setup is not confirmed yet."
         elif bias == "SELL":
             bias_line = f"📉 Directional Bias: SELL ({conf}%)"
-            read = "SazBot currently leans bearish, but a trade setup is not confirmed yet."
         else:
             bias_line = "↔️ Directional Bias: Neutral"
-            read = "There is no clear edge for BUY or SELL at the moment."
 
         return "\n".join([
-            "⚡ SazBot 2.2 | Early Bias Alert",
+            f"⚡ SazBot 2.2 | {title}",
             "",
             f"💵 Current Price: ${price:,.2f}",
             "",
@@ -6199,26 +6291,55 @@ def build_early_bias_alert(uid, res, trigger_label, price, bias_data=None):
             read,
             bias_line,
             f"📊 Market Quality: {quality}/100",
+            status_line,
             "",
             "🎯 Decision:",
             decision,
-            "⏳ Waiting for full trade conditions before issuing an entry signal.",
+            f"⏳ {action_hint}",
             "",
             f"🕐 {t(uid,'updated_gmt')}: {gmt_now()}",
             t(uid,"educational_footer"),
         ])
 
-def should_send_bias_alert(uid, bias, confidence, trigger_key):
-    """Avoid spamming the same early-bias alert."""
-    if bias == "NEUTRAL" and confidence < 60:
+def should_send_bias_alert(uid, bias, confidence, trigger_key, stage="pressure_building"):
+    """Avoid repeating identical early-bias alerts.
+
+    Re-send sooner only when the stage changes, direction changes, trigger changes,
+    or confidence moves materially. This keeps useful market context without spam.
+    """
+    if bias == "NEUTRAL" and confidence < 60 and stage != "stay_out":
         return False
     now = now_ts()
     key = str(uid)
     old = last_bias_alert_state.get(key, {})
-    same = old.get("bias") == bias and old.get("trigger") == trigger_key
-    if same and now - float(old.get("ts", 0)) < 45 * 60:
+    old_conf = int(old.get("confidence", 0) or 0)
+    materially_changed = abs(int(confidence or 0) - old_conf) >= 8
+    same = (
+        old.get("bias") == bias
+        and old.get("trigger") == trigger_key
+        and old.get("stage") == stage
+        and not materially_changed
+    )
+    # Entry-ready/setup-forming changes are more important than generic pressure alerts.
+    cooldown = 45 * 60
+    if stage == "pressure_building":
+        cooldown = 90 * 60
+    elif stage == "stay_out":
+        cooldown = 120 * 60
+    elif stage == "setup_forming":
+        cooldown = 60 * 60
+    elif stage == "entry_ready":
+        cooldown = 30 * 60
+
+    if same and now - float(old.get("ts", 0)) < cooldown:
         return False
-    last_bias_alert_state[key] = {"bias": bias, "confidence": confidence, "trigger": trigger_key, "ts": now}
+    last_bias_alert_state[key] = {
+        "bias": bias,
+        "confidence": confidence,
+        "trigger": trigger_key,
+        "stage": stage,
+        "ts": now,
+    }
     save_bias_alert_state()
     return True
 
@@ -6317,9 +6438,12 @@ async def send_smart_alerts(context):
             has_pending_same_bias = any((sig.get("direction") or (sig.get("res", {}) or {}).get("final")) == b.get("bias") for sig in pending_signals.values())
             if has_active_same_bias or has_pending_same_bias:
                 continue
-            if not should_send_bias_alert(user_id, b["bias"], b["confidence"], trigger_key):
+            stage = classify_early_bias_stage(res, b)
+            trigger_key_stage = f"{trigger_key}:{stage}"
+            if not should_send_bias_alert(user_id, b["bias"], b["confidence"], trigger_key, stage=stage):
                 continue
 
+            logger.info(f"early-bias alert: uid={user_id}, trigger={trigger_key_stage}, bias={b.get('bias')}, conf={b.get('confidence')}")
             msg = build_early_bias_alert(user_id, res, label, price, bias_data=b)
             try:
                 await send_user_message(context.bot, user_id, msg)
