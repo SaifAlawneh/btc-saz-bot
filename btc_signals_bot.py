@@ -78,6 +78,10 @@ MICRO_SCALP_MIN_QUALITY = env_int("MICRO_SCALP_MIN_QUALITY", 45, 35, 75)
 MICRO_SCALP_MIN_VOLUME_SPIKE = env_float("MICRO_SCALP_MIN_VOLUME_SPIKE", 1.5, 1.0, 5.0)
 MICRO_SCALP_COOLDOWN = env_int("MICRO_SCALP_COOLDOWN_SECONDS", 1800, 300, 86400)
 MICRO_SCALP_MAX_HOLD_MIN = env_int("MICRO_SCALP_MAX_HOLD_MIN", 90, 15, 240)
+MICRO_SCALP_REPEAT_COOLDOWN_SECONDS = int(os.getenv("MICRO_SCALP_REPEAT_COOLDOWN_SECONDS", "7200"))
+MICRO_SCALP_TIME_EXIT_MIN_R = float(os.getenv("MICRO_SCALP_TIME_EXIT_MIN_R", "0.50"))
+MICRO_SCALP_TIME_EXIT_MIN_PROGRESS_PCT = float(os.getenv("MICRO_SCALP_TIME_EXIT_MIN_PROGRESS_PCT", "0.30"))
+MICRO_SCALP_NO_BLIND_TIME_EXIT = os.getenv("MICRO_SCALP_NO_BLIND_TIME_EXIT", "true").lower() == "true"
 MICRO_SCALP_MAX_ENTRY_DISTANCE = env_float("MICRO_SCALP_MAX_ENTRY_DISTANCE", 1.2, 0.3, 3.0)
 MICRO_SCALP_BREAKOUT_ENABLED = os.getenv("MICRO_SCALP_BREAKOUT_ENABLED", "true").lower() == "true"
 MICRO_SCALP_MIN_BREAKOUT_MOVE_PCT = float(os.getenv("MICRO_SCALP_MIN_BREAKOUT_MOVE_PCT", "0.35"))
@@ -396,6 +400,7 @@ def save_runtime_state():
     try:
         state = {
             "active_trades": active_trades,
+            "recent_micro_contexts": globals().get("_recent_micro_contexts", []),
             "active_btc_trade": active_btc_trade,
             "pending_trade_replace": _json_safe_key_dict(pending_trade_replace),
             "last_signal_time": last_signal_time,
@@ -417,7 +422,8 @@ def load_runtime_state():
     try:
         with open(STATE_FILE) as f:
             state = json.load(f)
-        active_trades = state.get("active_trades", active_trades) or []
+        active_trades = state.get("active_trades", active_trades) 
+        globals()["_recent_micro_contexts"] = state.get("recent_micro_contexts", []) or []
         active_btc_trade = state.get("active_btc_trade", active_btc_trade) or {}
         pending_trade_replace = _int_key_dict(state.get("pending_trade_replace", {}))
         last_signal_time = state.get("last_signal_time", last_signal_time) or {}
@@ -5409,6 +5415,104 @@ def _build_health_report(trade: dict, res: dict, current: float):
     ]
     return "\n".join(lines), nc
 
+
+def _directional_pnl_pct(direction, entry, price):
+    try:
+        direction = str(direction or "").upper()
+        entry = float(entry)
+        price = float(price)
+        if not entry:
+            return 0.0
+        return (price - entry) / entry * 100.0 if direction == "BUY" else (entry - price) / entry * 100.0 if direction == "SELL" else 0.0
+    except Exception:
+        return 0.0
+
+
+def _directional_r_value(trade, price):
+    try:
+        direction = str((trade or {}).get("direction") or (trade or {}).get("final") or "").upper()
+        entry = float((trade or {}).get("actual_entry") or (trade or {}).get("entry_price") or (trade or {}).get("entry") or 0)
+        sl = float((trade or {}).get("sl") or 0)
+        price = float(price)
+        risk = abs(entry - sl)
+        if not risk:
+            return 0.0
+        return (price - entry) / risk if direction == "BUY" else (entry - price) / risk if direction == "SELL" else 0.0
+    except Exception:
+        return 0.0
+
+
+def _recent_same_micro_block(new_trade=None, direction=None, price=None):
+    try:
+        now = now_ts()
+        cooldown = int(globals().get("MICRO_SCALP_REPEAT_COOLDOWN_SECONDS", 7200))
+        direction = str(direction or (new_trade or {}).get("direction") or (new_trade or {}).get("final") or "").upper()
+        if not direction:
+            return False, ""
+
+        for t in list(active_trades.values()) if isinstance(active_trades, dict) else []:
+            if _is_micro_trade(t) and str(t.get("direction") or t.get("final") or "").upper() == direction:
+                return True, "active_micro_same_direction"
+
+        for s in list(pending_signals.values()) if isinstance(pending_signals, dict) else []:
+            if _is_micro_trade(s) and str(s.get("direction") or s.get("final") or "").upper() == direction:
+                return True, "pending_micro_same_direction"
+
+        recent = globals().setdefault("_recent_micro_contexts", [])
+        clean = []
+        for item in recent:
+            try:
+                if now - float(item.get("ts", 0)) <= cooldown:
+                    clean.append(item)
+            except Exception:
+                pass
+        globals()["_recent_micro_contexts"] = clean
+
+        p = float(price or (new_trade or {}).get("entry") or (new_trade or {}).get("entry_price") or 0)
+        max_dist = float(globals().get("MICRO_SCALP_MAX_ENTRY_DISTANCE", 1.2))
+        for item in clean:
+            if str(item.get("direction", "")).upper() != direction:
+                continue
+            ip = float(item.get("price") or 0)
+            if not p or not ip or abs(p - ip) / max(ip, 1) * 100.0 <= max_dist:
+                return True, "recent_micro_cooldown"
+        return False, ""
+    except Exception as e:
+        try:
+            logger.debug(f"recent micro block skipped: {e}")
+        except Exception:
+            pass
+        return False, ""
+
+
+def _remember_micro_context(trade, price=None, reason="closed"):
+    try:
+        if not _is_micro_trade(trade):
+            return
+        recent = globals().setdefault("_recent_micro_contexts", [])
+        recent.append({
+            "direction": str(trade.get("direction") or trade.get("final") or "").upper(),
+            "price": float(price or trade.get("actual_entry") or trade.get("entry_price") or trade.get("entry") or 0),
+            "reason": reason,
+            "ts": now_ts(),
+        })
+        globals()["_recent_micro_contexts"] = recent[-30:]
+    except Exception:
+        pass
+
+
+def _micro_time_exit_decision(trade, price):
+    try:
+        r_now = _directional_r_value(trade, price)
+        pnl_pct = _directional_pnl_pct(trade.get("direction") or trade.get("final"), trade.get("actual_entry") or trade.get("entry_price") or trade.get("entry"), price)
+        min_r = float(globals().get("MICRO_SCALP_TIME_EXIT_MIN_R", 0.50))
+        min_progress = float(globals().get("MICRO_SCALP_TIME_EXIT_MIN_PROGRESS_PCT", 0.30))
+        if r_now >= min_r or pnl_pct >= min_progress:
+            return "hold", {"r": r_now, "pnl_pct": pnl_pct, "reason_ar": "الصفقة حققت تقدماً واضحاً؛ لا يتم إغلاقها لمجرد انتهاء الوقت."}
+        return "close_stagnant", {"r": r_now, "pnl_pct": pnl_pct, "reason_ar": "انتهى وقت المضاربة دون تقدم كافٍ نحو الهدف."}
+    except Exception:
+        return "close_stagnant", {"r": 0, "pnl_pct": 0, "reason_ar": "انتهى وقت المضاربة ولم تتوفر قراءة كافية لتمديدها."}
+
 async def check_pending_trades(context):
     """
     Single full_analysis call per cycle.
@@ -6952,8 +7056,24 @@ async def _monitor_active_trades(context):
                 activated_ts = float(trade.get("activated_ts") or trade.get("created_ts") or 0)
                 max_hold = int(trade.get("max_hold_min") or MICRO_SCALP_MAX_HOLD_MIN)
                 if activated_ts and (now_ts() - activated_ts) > max_hold * 60:
+                    exit_action, exit_info = _micro_time_exit_decision(trade, cur)
+
+                    # No blind time-exit: if the trade has meaningful progress, keep it alive.
+                    if MICRO_SCALP_NO_BLIND_TIME_EXIT and exit_action == "hold":
+                        trade["micro_extended_after_time"] = True
+                        trade["max_hold_min"] = max_hold + 30
+                        trade["last_time_extension_reason"] = exit_info.get("reason_ar")
+                        try:
+                            logger.info(
+                                f"micro time-exit deferred: trade={trade_id} "
+                                f"r={exit_info.get('r'):.2f} pnl={exit_info.get('pnl_pct'):.2f}%"
+                            )
+                        except Exception:
+                            pass
+                        continue
+
                     to_remove.append(trade)
-                    pnl_pct = ((cur - entry) / entry * 100) if direction == "BUY" else ((entry - cur) / entry * 100)
+                    pnl_pct = exit_info.get("pnl_pct", ((cur - entry) / entry * 100) if direction == "BUY" else ((entry - cur) / entry * 100))
                     risk_pct = abs(entry - sl) / entry * 100 if entry and sl else 0.0
                     if pnl_pct > 0.05:
                         time_result = "win"
@@ -6967,20 +7087,22 @@ async def _monitor_active_trades(context):
                     try:
                         record_trade_result(trade_id, time_result, time_rr, direction, _session, setup_grade=trade.get("setup_grade", ""), entry_reason=trade.get("entry_reason", "micro_scalp"))
                     except Exception as e:
-                        logger.warning(f"Micro scalp time-exit stats failed: {e}")
+                        logger.warning(f"Micro scalp reasoned-exit stats failed: {e}")
                     lang = user_languages.get(chat_id, "ar")
                     if lang == "ar":
-                        update_msg = (f"⏱️ SazBot | انتهاء مدة Micro Scalp #{trade_id}\n\n"
-                                      f"انتهت مدة الاحتفاظ القصوى ({max_hold} دقيقة).\n"
+                        update_msg = (f"⏱️ SazBot | إغلاق Micro Scalp بسبب واضح #{trade_id}\n\n"
+                                      f"السبب: {exit_info.get('reason_ar')}\n"
                                       f"السعر الحالي: ${cur:,.2f}\n"
-                                      f"النتيجة التقريبية: {pnl_pct:+.2f}%\n\n"
-                                      "إغلاق/إلغاء المضاربة السريعة لتجنب بقاء صفقة عالية المخاطرة مفتوحة.")
+                                      f"النتيجة التقريبية: {pnl_pct:+.2f}%\n"
+                                      f"R التقريبي: {exit_info.get('r', 0):+.2f}R\n\n"
+                                      "لم يتم الإغلاق لمجرد انتهاء الوقت؛ تم الإغلاق لأن شروط استمرار المضاربة لم تعد كافية.")
                     else:
-                        update_msg = (f"⏱️ SazBot | Micro Scalp Time Exit #{trade_id}\n\n"
-                                      f"Maximum hold time reached ({max_hold} min).\n"
+                        update_msg = (f"⏱️ SazBot | Reasoned Micro Scalp Exit #{trade_id}\n\n"
+                                      f"Reason: {exit_info.get('reason_en', exit_info.get('reason_ar'))}\n"
                                       f"Current price: ${cur:,.2f}\n"
-                                      f"Approx result: {pnl_pct:+.2f}%\n\n"
-                                      "Closing/cancelling the high-risk scalp to avoid overstaying the setup.")
+                                      f"Approx result: {pnl_pct:+.2f}%\n"
+                                      f"Approx R: {exit_info.get('r', 0):+.2f}R\n\n"
+                                      "This was not a blind time exit; continuation conditions were not strong enough.")
                     closed = True
 
             if closed:
@@ -7135,6 +7257,10 @@ async def _monitor_active_trades(context):
     if to_remove:
         async with get_trades_lock():
             for tr in to_remove:
+                try:
+                    _remember_micro_context(tr, cur, reason="closed")
+                except Exception:
+                    pass
                 if tr in active_trades: active_trades.remove(tr)
             save_trades()
             save_runtime_state()
@@ -8139,6 +8265,43 @@ def detect_micro_scalp_setup(df_1h, *args, **kwargs):
             pass
     return None
 
+
+
+# ---- Final Micro repeat-suppression wrapper ----
+try:
+    _detect_micro_scalp_setup_before_repeat_guard = detect_micro_scalp_setup
+except Exception:
+    _detect_micro_scalp_setup_before_repeat_guard = None
+
+def detect_micro_scalp_setup(df_1h, *args, **kwargs):
+    res = None
+    try:
+        if _detect_micro_scalp_setup_before_repeat_guard:
+            res = _detect_micro_scalp_setup_before_repeat_guard(df_1h, *args, **kwargs)
+        if not res:
+            return None
+        # Normalize if helper exists.
+        try:
+            if "_normalize_micro_scalp_result" in globals():
+                res = _normalize_micro_scalp_result(res, df_1h)
+        except Exception:
+            pass
+        if not res:
+            return None
+        blocked, why = _recent_same_micro_block(res, direction=res.get("direction") or res.get("final"), price=res.get("entry") or res.get("entry_price"))
+        if blocked:
+            try:
+                logger.info(f"micro scalp suppressed: {why}")
+            except Exception:
+                pass
+            return None
+        return res
+    except Exception as e:
+        try:
+            logger.warning(f"micro repeat guard failed: {e}")
+        except Exception:
+            pass
+        return res
 
 if __name__ == "__main__":
     main()
