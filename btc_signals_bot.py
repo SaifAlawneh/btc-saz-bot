@@ -6143,15 +6143,18 @@ def _detect_micro_scalp_setup_original(df_1h, uid=0):
         zone = max(0.18 * atr, price * 0.0012)
         entry_low = round(entry - zone, 2)
         entry_high = round(entry + zone, 2)
-        sl_dist = max(0.55 * atr, price * 0.0035)
-        tp1_dist = max(0.70 * atr, price * 0.0045)
-        tp2_dist = max(1.15 * atr, price * 0.0080)
-        tp3_dist = max(1.45 * atr, price * 0.0100)
-        if direction == "BUY":
-            sl = round(entry - sl_dist, 2); tp1 = round(entry + tp1_dist, 2); tp2 = round(entry + tp2_dist, 2); tp3 = round(entry + tp3_dist, 2)
-        else:
-            sl = round(entry + sl_dist, 2); tp1 = round(entry - tp1_dist, 2); tp2 = round(entry - tp2_dist, 2); tp3 = round(entry - tp3_dist, 2)
-        rr = round(abs(tp2-entry)/abs(entry-sl), 2) if abs(entry-sl) > 0 else 0
+
+        # SL/TP sizing is shared with the breakout-fallback path so both Micro
+        # Scalp detectors are governed by the same MICRO_SCALP_*_PCT settings
+        # (single source of truth). accel_3 feeds the momentum widening in
+        # _smart_micro_target; swing_h/swing_l give both functions structure
+        # awareness (recent 20-candle high/low).
+        swing_h = float(df["High"].tail(20).max())
+        swing_l = float(df["Low"].tail(20).min())
+        sl = round(_smart_micro_stop(entry, direction, atr, swing_h, swing_l), 2)
+        tp1 = round(_smart_micro_target(entry, direction, atr, swing_h, swing_l, momentum_pct=accel_3), 2)
+        tp1 = round(_enforce_micro_rr(entry, direction, sl, tp1), 2)
+        rr = round(abs(tp1-entry)/abs(entry-sl), 2) if abs(entry-sl) > 0 else 0
         risk_pct = int(max(45, min(95, 100 - quality + 25 + max(0, MICRO_SCALP_MIN_VOLUME_SPIKE - vol_ratio) * 4)))
         if risk_pct >= 82:
             risk_label_ar, risk_label_en = "🔴 مرتفعة جداً", "🔴 Very High"
@@ -6176,14 +6179,14 @@ def _detect_micro_scalp_setup_original(df_1h, uid=0):
         return {
             "final": direction, "asset": "BTC", "micro_scalp": True, "signal_type": "micro_scalp",
             "price": round(price, 2), "entry_price": entry, "entry_low": entry_low, "entry_high": entry_high,
-            "tp1": tp1, "tp2": tp2, "tp3": tp3, "sl": sl, "rr": rr, "atr": round(atr, 2),
+            "tp1": tp1, "tp2": None, "tp3": None, "sl": sl, "rr": rr, "atr": round(atr, 2),
             "base_conf": confidence, "confluence_txt": "Micro Scalp", "risk_pct": risk_pct,
             "risk_label": risk_label, "risk_msg": risk_msg, "overall_risk": risk_label,
             "frame_lines": [frame_line], "frame_state": frame_state,
             "rsi": round(rsi, 1), "support": round(price - atr, 2), "resistance": round(price + atr, 2),
             "macd_bull": macd > macds, "ema_bull": price > ema9 > ema21, "ema_bear": price < ema9 < ema21,
             "bb_zone": "EXPANDING" if expansion_ok else "NORMAL", "fib_levels": {}, "fib_ext": {}, "key_fibs": [],
-            "nearest_fib": entry, "fib_key": "micro", "swing_h": float(df["High"].tail(20).max()), "swing_l": float(df["Low"].tail(20).min()),
+            "nearest_fib": entry, "fib_key": "micro", "swing_h": swing_h, "swing_l": swing_l,
             "weekly_trend": "N/A", "regime": "MICRO", "regime_strength": quality, "monthly_bias": "N/A",
             "divergence": "N/A", "session": get_current_session()[0], "session_score": get_current_session()[1],
             "bull_obs": reasons if direction == "BUY" else [], "bear_obs": reasons if direction == "SELL" else [],
